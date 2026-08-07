@@ -128,6 +128,11 @@ public final class LauncherStore: LauncherStoring {
     public func diagnosticCatalogAppCount() -> Int {
         catalogSnapshot.apps.count
     }
+
+    /// 应用图标内容版本(图标缓存身份信号源)。
+    public func iconContentVersion(for appID: AppID) -> IconContentVersion {
+        catalogSnapshot.app(with: appID)?.iconContentVersion ?? .empty
+    }
 }
 
 private extension String {

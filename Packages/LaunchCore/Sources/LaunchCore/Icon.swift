@@ -39,6 +39,40 @@ public struct IconContentVersion: Codable, Sendable, Hashable {
             || infoPlistModificationNanoseconds != nil
             || bundleVersion != nil
     }
+
+    /// 规范文本表示(确定性,用于磁盘缓存文件名等)。
+    /// 长度前缀编码消除歧义: 缺失字段与字段值本身不会碰撞。
+    public var canonicalString: String {
+        [
+            Self.encode(iconResourceModificationNanoseconds?.description),
+            Self.encode(iconResourceSizeBytes?.description),
+            Self.encode(infoPlistModificationNanoseconds?.description),
+            Self.encode(bundleVersion),
+        ].joined(separator: "|")
+    }
+
+    private static func encode(_ value: String?) -> String {
+        guard let value else { return "0:" }
+        return "\(value.count):\(value)"
+    }
+
+    /// 稳定内容哈希(FNV-1a 64bit 十六进制)。
+    /// 相同信号 → 相同哈希;不同信号 → 不同哈希;跨进程稳定。
+    public var stableContentHash: String {
+        StableHash.fnv1a64(canonicalString)
+    }
+}
+
+/// 稳定确定性哈希工具(FNV-1a 64bit)。
+public enum StableHash {
+    public static func fnv1a64(_ text: String) -> String {
+        var digest: UInt64 = 0xcbf29ce484222325
+        let prime: UInt64 = 0x100000001b3
+        for byte in text.utf8 {
+            digest = (digest ^ UInt64(byte)) &* prime
+        }
+        return String(format: "%016llx", digest)
+    }
 }
 
 /// 图标缓存身份: AppID + 点尺寸 + 缩放 + 内容版本。

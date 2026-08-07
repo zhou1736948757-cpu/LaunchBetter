@@ -1,6 +1,20 @@
 import AppKit
 import LaunchCore
 
+/// 图标图像提供协议(MainActor)。
+///
+/// 由应用层适配器实现(内部调用 LaunchPlatform.IconRepository)。
+/// LaunchUI 不依赖 LaunchPlatform(架构约束),只依赖本协议。
+@MainActor
+public protocol IconImageProviding: AnyObject {
+    /// 返回应用图标(按 IconKey 变体: 尺寸/缩放/内容版本)。
+    /// nil = 暂无可用图标(单元格保留占位)。
+    func icon(for appID: AppID, pointSize: Int, scale: Int) async -> CGImage?
+
+    /// 启动器隐藏时裁剪低优先级图标(保留最近使用)。
+    func trimMemoryForHidden()
+}
+
 /// 启动器数据存储协议(MainActor)。
 ///
 /// 由应用层 LauncherStore 实现: 持有 Catalog/Layout/Config 组合出的显示状态。

@@ -7,6 +7,7 @@ import LaunchUI
 @MainActor
 public final class DependencyContainer {
     public let store: LauncherStore
+    public let iconAdapter: IconImageAdapter
     public let windowController: LauncherWindowController
 
     public init() {
@@ -30,7 +31,27 @@ public final class DependencyContainer {
             initialSnapshot: initialSnapshot,
             settingsStore: settingsStore
         )
+
+        // 图标管道: 磁盘缓存(可再生) + 内存 LRU + 实时提取
+        let cachesDir = FileManager.default.urls(
+            for: .cachesDirectory, in: .userDomainMask
+        )[0].appendingPathComponent(bundleID, isDirectory: true)
+        let iconDiskCache = IconDiskCache(
+            rootURL: cachesDir.appendingPathComponent("Icons", isDirectory: true)
+        )
+        let iconMemoryCache = IconMemoryCache(
+            costLimitBytes: 128 * 1024 * 1024, // 128MB 图标内存上限
+            countLimit: 2_000
+        )
+        let iconRepository = IconRepository(
+            memoryCache: iconMemoryCache,
+            diskCache: iconDiskCache,
+            provider: AppIconProvider()
+        )
+        let iconAdapter = IconImageAdapter(repository: iconRepository, store: store)
+
         self.store = store
-        self.windowController = LauncherWindowController(store: store)
+        self.iconAdapter = iconAdapter
+        self.windowController = LauncherWindowController(store: store, iconProvider: iconAdapter)
     }
 }

@@ -1,16 +1,23 @@
 ---
-description: 独立代码与架构评审代理 (GLM-5.2),只读。Phase Gate/架构/并发边界用 Max,常规评审 High。
-mode: subagent
-model: opencode-go/glm-5.2
+description: 独立代码与架构评审代理 (GPT-5.6 Luna, variant: max),只读。Phase Gate/架构/并发边界评审。
+mode: all
+model: opencode-go/gpt-5.6-luna
+variant: max
 permission:
   edit: deny
+  read: allow
   bash:
     "*": deny
     "git diff*": allow
     "git status*": allow
     "git log*": allow
+    "git show*": allow
+    "git branch*": allow
+    "ls *": allow
+    "cat *": allow
     "xcodebuild -project LaunchBetter.xcodeproj -scheme LaunchBetter test*": allow
     "cd Packages/LaunchCore && swift test*": allow
+    "cd Packages/LaunchPlatform && swift test*": allow
 ---
 
 你是 LaunchBetter 的独立 reviewer。规则:
@@ -22,3 +29,4 @@ permission:
 - 重点检查: Swift 并发边界、actor 所有权、生命周期、Catalog/Layout/Config 分离、
   main.sync=0、持久化 schema 版本、图标管道 in-flight 去重、陈旧结果防护、每帧状态不入 Store
 - 不直接补丁生产代码;发现问题返回结构化评审
+- 命令逐条单独执行(不要用 && 或逗号连接多个命令),read 工具读取文件

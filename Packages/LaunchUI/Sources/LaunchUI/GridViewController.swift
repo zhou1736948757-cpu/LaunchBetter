@@ -23,14 +23,16 @@ final class GridViewController: NSViewController {
     typealias Item = DisplayModel.DisplayItem
 
     private let store: any LauncherStoring
+    private let iconProvider: (any IconImageProviding)?
     private var collectionView: NSCollectionView!
     private var dataSource: NSCollectionViewDiffableDataSource<Int, Item>!
     private var currentPage = 0
     private var pageCount = 1
     private var searchMode = false
 
-    init(store: any LauncherStoring) {
+    init(store: any LauncherStoring, iconProvider: (any IconImageProviding)?) {
         self.store = store
+        self.iconProvider = iconProvider
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -81,18 +83,25 @@ final class GridViewController: NSViewController {
 
     private func configure(_ cell: AppCellView?, with item: Item) {
         guard let cell else { return }
+        let pointSize = Int(96)
         switch item {
         case .app(let id):
             cell.configure(
                 displayName: store.displayName(for: id),
                 colorIndex: stableColorIndex(id.rawValue),
-                accessibilityHint: "点击启动 \(store.displayName(for: id))"
+                accessibilityHint: "点击启动 \(store.displayName(for: id))",
+                appID: id,
+                pointSize: pointSize,
+                iconProvider: iconProvider
             )
         case .folder(let id, _):
             cell.configure(
                 displayName: store.folderName(for: id),
                 colorIndex: stableColorIndex("folder:" + id.rawValue),
-                accessibilityHint: "文件夹 \(store.folderName(for: id))"
+                accessibilityHint: "文件夹 \(store.folderName(for: id))",
+                appID: nil,
+                pointSize: pointSize,
+                iconProvider: nil
             )
         }
     }

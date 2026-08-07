@@ -11,13 +11,15 @@ import LaunchCore
 @MainActor
 public final class LauncherWindowController: NSWindowController, NSSearchFieldDelegate {
     private let store: any LauncherStoring
+    private let iconProvider: (any IconImageProviding)?
     private var gridViewController: GridViewController!
     private let searchField = NSSearchField()
 
     private var visible = false
 
-    public init(store: any LauncherStoring) {
+    public init(store: any LauncherStoring, iconProvider: (any IconImageProviding)?) {
         self.store = store
+        self.iconProvider = iconProvider
         let screen = NSScreen.main ?? NSScreen.screens[0]
         let window = LauncherWindow(screen: screen)
         super.init(window: window)
@@ -45,7 +47,7 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
             effectView.bottomAnchor.constraint(equalTo: root.bottomAnchor),
         ])
 
-        let grid = GridViewController(store: store)
+        let grid = GridViewController(store: store, iconProvider: iconProvider)
         gridViewController = grid
         root.addSubview(grid.view)
         grid.view.translatesAutoresizingMaskIntoConstraints = false
@@ -108,6 +110,7 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
     public func hide() {
         guard visible else { return }
         visible = false
+        iconProvider?.trimMemoryForHidden()
         guard let window else { return }
         store.searchQuery = ""
         searchField.stringValue = ""

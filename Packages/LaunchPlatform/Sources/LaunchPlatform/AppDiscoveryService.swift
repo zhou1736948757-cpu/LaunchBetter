@@ -65,15 +65,12 @@ public enum AppDiscoveryService {
         let displayName = (plist["CFBundleDisplayName"] as? String)
             ?? (plist["CFBundleName"] as? String)
             ?? url.deletingPathExtension().lastPathComponent
-        let bundleVersion = plist["CFBundleVersion"] as? String
 
-        let iconVersion = IconContentVersion(
-            iconResourceModificationNanoseconds: nil,
-            iconResourceSizeBytes: nil,
-            infoPlistModificationNanoseconds: plistDate.map {
-                UInt64($0.timeIntervalSince1970 * 1_000_000_000)
-            },
-            bundleVersion: bundleVersion
+        // 图标内容版本: 真实内容信号(图标资源/Assets.car/Info.plist + 版本)
+        let iconVersion = IconContentVersionFactory.make(
+            appURL: url,
+            infoPlist: plist,
+            infoPlistDate: plistDate
         )
 
         return AppRecord(

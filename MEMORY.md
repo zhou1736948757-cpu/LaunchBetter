@@ -21,13 +21,11 @@
 
 ## Current Phase
 
-Phase 3 (Minimal Launcher) — 完成,冒烟验证通过,待提交并进入 Phase 4 (Icon Pipeline)
+Phase 4 (Icon Pipeline) — 完成,140 测试通过,GLM/Luna 评审中,待提交并进入 Phase 5
 
 ## Current Task
 
-Phase 3 收尾: 提交推送;然后 Phase 4 图标管道
-(内存 LRU + 磁盘缓存 + IconKey 变体 + 内容版本信号补齐 + in-flight 去重 +
-消费者取消 + 可见页优先 + 内存压力 + AppIconProvider)
+Phase 4 收尾: 收集 GLM 评审 → 修复 → 提交推送;然后 Phase 5 持久布局/文件夹系统
 
 ## Current Branch
 
@@ -35,7 +33,7 @@ main
 
 ## Last Known Good Commit
 
-29e967e (Phase 2);Phase 3 提交待创建
+8a1675e (Phase 3);Phase 4 提交待创建
 
 ## Completed Milestones
 
@@ -50,8 +48,15 @@ main
 - Phase 2: LaunchPlatform — 发现/对账/持久化/迁移/AppCatalogActor,真实 /Applications 冒烟 40 应用
 - Phase 3: Xcode 工程(xcodegen)+ LaunchUI + LaunchBetterApp —
   冒烟: 87 应用/3 页(42 每页)/搜索 chrome=1/真实启动 Chrome 成功/跨重启快照恢复
+- Phase 4: 图标管道完成 — 140 测试;基准: 冷 87 图标 1.76s,热 5.5ms(0.06ms/图标)
+- **视觉评审链路修复**: visual-reviewer 配置 gpt-5.6-luna + variant: max,
+  经 `opencode run --agent visual-reviewer --file` 调用成功(测试图灰兔正确描述;
+  真实图标截图评审 PASS,2 个 MINOR 记录)
+- **Watchdog 已启动**: Scripts/status-watchdog.sh(600s 周期,后台 pid 见 /tmp),
+  状态 /tmp/launchbetter-watchdog/state.json + log;首轮: 上下文 0.2%、网络 OK
 - 环境怪癖记录: NSScreen 可选值 `??` 推断保留 Optional(必须 if-let);
-  screencapture 无 TCC 屏幕录制权限 → 应用自渲染截图(--screenshot)
+  screencapture 无 TCC 屏幕录制权限 → 应用自渲染截图(--screenshot);
+  `opencode run --session` 是续会话参数,新会话不要传
 
 ## Verified Technical Facts
 
@@ -74,11 +79,14 @@ main
 
 ## Known Issues / Blockers
 
-- 评审模型路由限制: 任务工具只能路由 explore/general 子代理,无法路由到
-  .opencode/agents 配置的 GLM-5.2/Luna/Qwen;已按文档记录偏差
-- **视觉评审阻塞**: 当前模型栈不支持图像输入(read 工具无法接收图片,
-  子代理重试已确认)。截图存档 Docs/Visual/,待支持视觉的模型评审。
-  按 §17 降级链: 确定性布局验证 + 截图保留
+- 任务工具(task)只能路由 explore/general,无法路由项目 agents;
+  **已通过 `opencode run --agent <name>` 独立窗口解决**(GLM/Luna 评审可行;
+  并发窗口上限 4,单一写者规则保持: 评审窗口全部只读)
+- Watchdog: session.compact 无 HTTP 端点,50% 上下文预警采用状态文件 +
+  MEMORY 新鲜性检查(自动压缩由 opencode 在上下文满时执行)
+- in-process Task 子代理不可被外部 watchdog 观察
+- 视觉 MINOR(待 Phase 9): 浅色图标上白标签对比度弱、长名省略号、
+  标签与图标间距小(Phase 3 截图曾出现 1 个空图标块,未复现)
 - 120Hz 性能验证受限于本机 60Hz 显示器
 
 ## Architecture Changes
@@ -109,9 +117,10 @@ main
 
 ## Next Actions
 
-1. 提交并推送 Phase 3 (含 project.yml / LaunchBetter.xcodeproj / LaunchUI / LaunchBetterApp)
-2. Phase 4: 图标管道(见 Current Task)
-3. Phase 5: 持久布局 + 文件夹系统(LayoutStore/LayoutMutation 落地)
+1. 提交并推送 Phase 4 (图标管道 + 评审修复)
+2. Phase 5: 持久布局 + 文件夹系统(LayoutStore 应用 LayoutMutation、
+   LayoutSnapshot 持久化、文件夹创建/重命名/解散、墓碑、重启持久性)
+3. Phase 6: 拖拽引擎
 
 ## Last Updated
 
