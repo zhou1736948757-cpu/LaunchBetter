@@ -21,11 +21,11 @@
 
 ## Current Phase
 
-Phase 4 (Icon Pipeline) — 完成,140 测试通过,GLM/Luna 评审中,待提交并进入 Phase 5
+Phase 4 (Icon Pipeline) — 完成(提交 5ff991d),142 测试通过,评审修复已落实,进入 Phase 5
 
 ## Current Task
 
-Phase 4 收尾: 收集 GLM 评审 → 修复 → 提交推送;然后 Phase 5 持久布局/文件夹系统
+Phase 5 持久布局 + 文件夹系统: LayoutStore 应用 LayoutMutation、LayoutSnapshot 持久化、文件夹创建/重命名/解散、墓碑、重启持久性
 
 ## Current Branch
 
@@ -33,7 +33,7 @@ main
 
 ## Last Known Good Commit
 
-8a1675e (Phase 3);Phase 4 提交待创建
+5ff991d (Phase 4)
 
 ## Completed Milestones
 
@@ -48,10 +48,12 @@ main
 - Phase 2: LaunchPlatform — 发现/对账/持久化/迁移/AppCatalogActor,真实 /Applications 冒烟 40 应用
 - Phase 3: Xcode 工程(xcodegen)+ LaunchUI + LaunchBetterApp —
   冒烟: 87 应用/3 页(42 每页)/搜索 chrome=1/真实启动 Chrome 成功/跨重启快照恢复
-- Phase 4: 图标管道完成 — 140 测试;基准: 冷 87 图标 1.76s,热 5.5ms(0.06ms/图标)
-- **视觉评审链路修复**: visual-reviewer 配置 gpt-5.6-luna + variant: max,
-  经 `opencode run --agent visual-reviewer --file` 调用成功(测试图灰兔正确描述;
-  真实图标截图评审 PASS,2 个 MINOR 记录)
+- Phase 4: 图标管道完成 — 142 测试;基准: 冷 87 图标 1.76s,热 5.5ms(0.06ms/图标)
+- **Luna Max 评审修复**: 0 BLOCKER / 3 MAJOR(M1 取消语义、M2 代际陈旧防护、
+  M3 生命周期 shutdown)全部修复 + 2 个 MINOR(canonicalString 长度前缀、
+  内存压力语义统一);4 个 MINOR/NOTE 记录待办(磁盘缓存上限策略等 Phase 9/10)
+- **模型路由(用户指令,已生效)**: reviewer = gpt-5.6-luna variant:max;
+  visual-reviewer = mimo-v2.5(图像能力验证通过: 灰兔图片正确描述)
 - **Watchdog 已启动**: Scripts/status-watchdog.sh(600s 周期,后台 pid 见 /tmp),
   状态 /tmp/launchbetter-watchdog/state.json + log;首轮: 上下文 0.2%、网络 OK
 - 环境怪癖记录: NSScreen 可选值 `??` 推断保留 Optional(必须 if-let);
