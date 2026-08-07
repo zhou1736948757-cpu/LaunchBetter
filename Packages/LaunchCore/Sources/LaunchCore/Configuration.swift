@@ -19,6 +19,9 @@ public struct AppConfiguration: Codable, Sendable {
     /// 网格列数
     public var gridColumns: Int
 
+    /// 网格行数(与列数共同决定每页容量)
+    public var gridRows: Int
+
     /// 图标点尺寸
     public var iconSize: Int
 
@@ -45,6 +48,7 @@ public struct AppConfiguration: Codable, Sendable {
 
     public init(
         gridColumns: Int = 7,
+        gridRows: Int = 6,
         iconSize: Int = 80,
         showIconLabels: Bool = true,
         customSourceDirectories: [String] = [],
@@ -56,6 +60,7 @@ public struct AppConfiguration: Codable, Sendable {
     ) {
         self.schemaVersion = AppConfiguration.currentSchemaVersion
         self.gridColumns = gridColumns
+        self.gridRows = gridRows
         self.iconSize = iconSize
         self.showIconLabels = showIconLabels
         self.customSourceDirectories = customSourceDirectories
@@ -70,6 +75,7 @@ public struct AppConfiguration: Codable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
         gridColumns = try container.decodeIfPresent(Int.self, forKey: .gridColumns) ?? 7
+        gridRows = try container.decodeIfPresent(Int.self, forKey: .gridRows) ?? 6
         iconSize = try container.decodeIfPresent(Int.self, forKey: .iconSize) ?? 80
         showIconLabels = try container.decodeIfPresent(Bool.self, forKey: .showIconLabels) ?? true
         customSourceDirectories = try container.decodeIfPresent(
@@ -89,6 +95,7 @@ public struct AppConfiguration: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case schemaVersion
         case gridColumns
+        case gridRows
         case iconSize
         case showIconLabels
         case customSourceDirectories
