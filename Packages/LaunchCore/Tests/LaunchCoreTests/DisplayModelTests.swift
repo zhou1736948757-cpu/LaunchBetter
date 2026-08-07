@@ -136,6 +136,22 @@ struct DisplayModelTests {
         #expect(display.pageCapacity == 20)
     }
 
+    @Test("超过容量的布局页按容量重新分块")
+    func reChunksOverCapacityPages() {
+        let ids = apps(30)
+        // 单页塞 30 个,容量 12(4×3)→ 显示为 3 页
+        let display = DisplayModel(
+            catalog: catalog(ids.map(\.rawValue)),
+            layout: layout(pages: [ids.map(LayoutItem.app)]),
+            config: config(columns: 4, rows: 3)
+        )
+        #expect(display.pages.count == 3)
+        #expect(display.pages[0].count == 12)
+        #expect(display.pages[1].count == 12)
+        #expect(display.pages[2].count == 6)
+        #expect(display.flatSlots.count == 30)
+    }
+
     @Test("可见应用 ID 顺序即显示顺序")
     func visibleAppIDsOrder() {
         let ids = apps(4)

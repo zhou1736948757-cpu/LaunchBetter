@@ -1,0 +1,38 @@
+name: LaunchBetter
+options:
+  bundleIdPrefix: dev.launchbetter
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+  xcodeVersion: "26.0"
+packages:
+  LaunchCore:
+    path: Packages/LaunchCore
+  LaunchPlatform:
+    path: Packages/LaunchPlatform
+  LaunchUI:
+    path: Packages/LaunchUI
+targets:
+  LaunchBetter:
+    type: application
+    platform: macOS
+    sources:
+      - LaunchBetterApp
+    dependencies:
+      - package: LaunchCore
+      - package: LaunchPlatform
+      - package: LaunchUI
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.launchbetter.LaunchBetter
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: LaunchBetter
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.productivity
+        INFOPLIST_KEY_NSHumanReadableCopyright: GPL-3.0
+        SWIFT_VERSION: "6.0"
+        MACOSX_DEPLOYMENT_TARGET: "14.0"
+        ENABLE_HARDENED_RUNTIME: YES
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_IDENTITY: "-"
+    scheme:
+      testTargets: []

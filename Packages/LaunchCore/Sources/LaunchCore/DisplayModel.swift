@@ -7,7 +7,7 @@ import Foundation
 /// - 文件夹显示其可见子项;无可见子项的文件夹从显示中隐藏(布局保留,
 ///   是否解散由 LayoutReconciler 决定)
 /// - 过滤后为空的页被丢弃
-/// - 页面结构按布局原样保留(不重新分块);拖拽 drop 会按 pageCapacity 归一化
+/// - 派生结果按 pageCapacity 重新分块(布局页可能超过容量,显示恒不超)
 ///
 /// NSCollectionView 不得假设 Catalog 顺序 == 显示顺序。
 /// DisplayModel 是派生值,不作为持久状态。
@@ -32,34 +32,42 @@ public struct DisplayModel: Sendable, Equatable {
         let hidden = Set(config.hiddenAppIDs)
         let isInvisible: (AppID) -> Bool = { missing.contains($0) || hidden.contains($0) }
 
-        var derived: [[DisplayItem]] = []
+        var derived: [DisplayItem] = []
         for page in layout.pages {
-            var pageItems: [DisplayItem] = []
             for item in page {
                 switch item {
                 case .app(let id):
                     if !isInvisible(id) {
-                        pageItems.append(.app(id))
+                        derived.append(.app(id))
                     }
                 case .folder(let folderID):
                     guard let folder = layout.folders[folderID] else { continue }
                     let visible = folder.children.filter { !isInvisible($0) }
                     if !visible.isEmpty {
-                        pageItems.append(.folder(folderID, visibleChildren: visible))
+                        derived.append(.folder(folderID, visibleChildren: visible))
                     }
                 }
             }
-            if !pageItems.isEmpty {
-                derived.append(pageItems)
-            }
         }
-        pages = derived
+        pages = Self.chunk(derived, capacity: pageCapacity)
     }
 
     /// 直构已分页结构(引擎重分块 / 布局恢复 / 测试用)。
     public init(pages: [[DisplayItem]], pageCapacity: Int) {
         self.pages = pages
         self.pageCapacity = max(1, pageCapacity)
+    }
+
+    private static func chunk(
+        _ slots: [DisplayItem],
+        capacity: Int
+    ) -> [[DisplayItem]] {
+        guard !slots.isEmpty else { return [] }
+        var pages: [[DisplayItem]] = []
+        for start in stride(from: 0, to: slots.count, by: capacity) {
+            pages.append(Array(slots[start..<min(start + capacity, slots.count)]))
+        }
+        return pages
     }
 
     /// 扁平显示槽位。

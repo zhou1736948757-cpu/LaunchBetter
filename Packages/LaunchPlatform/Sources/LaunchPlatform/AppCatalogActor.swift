@@ -47,7 +47,7 @@ public actor AppCatalogActor {
     }
 
     /// 启动: 加载磁盘快照。损坏时备份并继续(空快照),绝不静默清除。
-    public func start() -> StartResult {
+    public func start() async -> StartResult {
         do {
             if let loaded = try store.load() {
                 snapshot = loaded
@@ -74,17 +74,17 @@ public actor AppCatalogActor {
     }
 
     /// 当前快照。
-    public func currentSnapshot() -> CatalogSnapshot {
+    public func currentSnapshot() async -> CatalogSnapshot {
         snapshot
     }
 
     /// 当前代数;消费方缓存此值以检测陈旧结果。
-    public func snapshotGeneration() -> Int {
+    public func snapshotGeneration() async -> Int {
         generation
     }
 
     /// 仅当代数匹配时返回快照,否则 nil(陈旧防护契约)。
-    public func currentSnapshot(ifGeneration expected: Int) -> CatalogSnapshot? {
+    public func currentSnapshot(ifGeneration expected: Int) async -> CatalogSnapshot? {
         generation == expected ? snapshot : nil
     }
 
