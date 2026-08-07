@@ -1,0 +1,23 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "opencode-go/deepseek-v4-flash",
+  "instructions": ["AGENTS.md", "MEMORY.md"],
+  "plugin": [".opencode/plugins/memory-compaction.ts"],
+  "permission": {
+    "edit": "allow",
+    "task": "allow",
+    "bash": {
+      "*": "ask",
+      "git status*": "allow",
+      "git diff*": "allow",
+      "git log*": "allow",
+      "git branch*": "allow",
+      "git remote*": "allow",
+      "swift *": "allow",
+      "swift-testing*": "allow",
+      "xcodebuild*": "allow",
+      "mkdir *": "allow",
+      "ls *": "allow"
+    }
+  }
+}
