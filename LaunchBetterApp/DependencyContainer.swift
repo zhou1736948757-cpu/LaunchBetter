@@ -10,6 +10,7 @@ public final class DependencyContainer {
     public let iconAdapter: IconImageAdapter
     public let windowController: LauncherWindowController
     public let directoryMonitor: DirectoryMonitor
+    public let activationCoordinator: ActivationCoordinator
 
     public init() {
         let bundleID = Bundle.main.bundleIdentifier ?? "dev.launchbetter.LaunchBetter"
@@ -79,6 +80,17 @@ public final class DependencyContainer {
         directoryMonitor.start()
         self.directoryMonitor = directoryMonitor
 
-        self.windowController = LauncherWindowController(store: store, iconProvider: iconAdapter)
+        // 窗口控制器单实例(激活协调器与冒烟共享)
+        let windowController = LauncherWindowController(store: store, iconProvider: iconAdapter)
+        self.windowController = windowController
+
+        // 激活: 四指手势 + 全局热键(§115)
+        let activation = ActivationCoordinator(
+            windowController: windowController,
+            gestureEngine: GestureCaptureEngine(),
+            hotkey: GlobalHotkey()
+        )
+        activation.start()
+        self.activationCoordinator = activation
     }
 }

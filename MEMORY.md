@@ -21,11 +21,12 @@
 
 ## Current Phase
 
-Phase 7 (FSEvents) — 完成,实时端到端验证通过,待提交并进入 Phase 8
+Phase 8 (Multitouch + Activation) — 实现完成(182 测试), 待提交;
+**手势真实验证等待用户授予输入监控权限(TCC)**
 
 ## Current Task
 
-Phase 8 Multitouch + 全局激活(需用户授予输入监控权限 TCC)+ Minimum Usable Release Gate
+Minimum Usable Release Gate 评估 → 用户授权输入监控 → 手势实测 → 预发布审计 → 转公开
 
 ## Current Branch
 
@@ -33,7 +34,7 @@ main
 
 ## Last Known Good Commit
 
-bf33d16 (Phase 6);Phase 7 提交待创建
+40a266e (Phase 7);Phase 8 提交待创建
 
 ## Completed Milestones
 

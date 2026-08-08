@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		0D5A02D46D0122A622298A74 /* ActivationCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C34AB424D5AF0AE055AF24D /* ActivationCoordinator.swift */; };
 		4B4DA07E558E44CB0E148630 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 977BB904E1D1E96A25A079FC /* AppDelegate.swift */; };
 		78FF293876DA8791FD534F60 /* LaunchCore in Frameworks */ = {isa = PBXBuildFile; productRef = 022C22583EB95E8DB7E533DA /* LaunchCore */; };
 		97CAF62410D849C74D1ED8FE /* LaunchUI in Frameworks */ = {isa = PBXBuildFile; productRef = BFBADDC8868444DA8FEB4241 /* LaunchUI */; };
@@ -19,6 +20,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		0C34AB424D5AF0AE055AF24D /* ActivationCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActivationCoordinator.swift; sourceTree = "<group>"; };
 		1C0358A5F6E9CB51041CDA05 /* LaunchBetter.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LaunchBetter.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		235188B815031EAF73866B6E /* LaunchCore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = LaunchCore; path = Packages/LaunchCore; sourceTree = SOURCE_ROOT; };
 		2E5C03AE4C8FD32073D5091C /* LaunchPlatform */ = {isa = PBXFileReference; lastKnownFileType = folder; name = LaunchPlatform; path = Packages/LaunchPlatform; sourceTree = SOURCE_ROOT; };
@@ -48,6 +50,7 @@
 		4EBECC24E607DDDD81C8617B /* LaunchBetterApp */ = {
 			isa = PBXGroup;
 			children = (
+				0C34AB424D5AF0AE055AF24D /* ActivationCoordinator.swift */,
 				977BB904E1D1E96A25A079FC /* AppDelegate.swift */,
 				780898346943FE4934897076 /* DependencyContainer.swift */,
 				5E4FB7BAF0189E406E0361FE /* IconImageAdapter.swift */,
@@ -152,6 +155,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				0D5A02D46D0122A622298A74 /* ActivationCoordinator.swift in Sources */,
 				4B4DA07E558E44CB0E148630 /* AppDelegate.swift in Sources */,
 				F4C47C4D35D85CD8B30FE3FB /* DependencyContainer.swift in Sources */,
 				BB5EC826ACB1AF62EE21847B /* IconImageAdapter.swift in Sources */,
