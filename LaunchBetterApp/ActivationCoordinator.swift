@@ -98,6 +98,7 @@ public final class ActivationCoordinator {
         gestureEngine.start()
         // 初始状态直接读取(首次 setStatus 可能因状态相同被跳过)
         handleStatus(gestureEngine.currentStatus())
+        print("ACTIVATION engineDetail=\(gestureEngine.lastStartDetail)")
 
         hotkey.onTrigger = { [weak self] in
             Task { @MainActor in
@@ -113,6 +114,9 @@ public final class ActivationCoordinator {
     }
 
     private func handleGesture(_ event: GestureEvent) {
+        if CommandLine.arguments.contains("--touchdebug") {
+            print("GESTURE_EVENT \(event == .pinchIn ? "pinchIn" : "pinchOut")")
+        }
         switch event {
         case .pinchIn:
             windowController.show()

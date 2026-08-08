@@ -2,37 +2,59 @@ import CoreGraphics
 import Darwin
 import Foundation
 
-/// MultitouchSupport 私有框架窄包装(§91)。
-///
-/// - 只允许在本类型出现 C 指针/私有 API
-/// - dlopen + dlsym, 优雅不可用(返回 nil, 不崩溃)
-/// - 输入监控(TCC)未授权时回调不会到达 → 由上层检测并提示
-/// MTTouch 私有结构(与私有框架布局对齐, legacy 验证)。
-struct MTTouch {
-    var frame: Int64 = 0
-    var timestamp: Double = 0
-    var identifier: Int32 = 0
-    var state: Int32 = 0
-    var fingerId: Int32 = 0
-    var pathIndex: Int32 = 0
-    var pathIndexRaw: Int32 = 0
-    var normalized: CGPoint = .zero
-    var total: CGPoint = .zero
-    var pressure: Double = 0
-    var radius: Double = 0
-    var angle1: Double = 0
-    var angle2: Double = 0
-    var majorAxis: Double = 0
-    var minorAxis: Double = 0
-    var mm: CGPoint = .zero
+// MARK: - 私有框架数据结构(与 legacy 验证可用布局完全对齐)
+
+/// 触控板上的点(归一化或绝对坐标)
+struct MTPoint {
+    var x: Float
+    var y: Float
 }
 
-/// 全局回调盒 + 非捕获 C 回调。
-/// MTContactCallback 签名无 context 参数(注册时的 context 不会传回回调),
-/// 故用全局单盒承载用户闭包(应用内单一引擎实例)。
+struct MTReadout {
+    var position: MTPoint
+    var velocity: MTPoint
+}
+
+/// 单个手指的原始触控数据(与 MultitouchSupport.framework 的 MTTouch 结构对齐,
+/// 布局经 legacy LaunchHistory 在本机验证可用)
+struct MTTouch {
+    var frame: Int32
+    var timestamp: Double
+    var identifier: Int32
+    var state: Int32        // 0 = 未触摸, 非0 = 活跃
+    var fingerID: Int32
+    var handID: Int32
+    var normalized: MTReadout   // 归一化坐标 (0.0–1.0)
+    var size: Float
+    var zero1: Int32
+    var angle: Float
+    var majorAxis: Float
+    var minorAxis: Float
+    var absolute: MTReadout     // 绝对(像素)坐标
+    var zero2: (Int32, Int32)
+    var density: Float
+}
+
+// MARK: - 私有函数类型(C 调用约定, 与 legacy 一致)
+
+private typealias MTDeviceRef = UnsafeMutableRawPointer
+
+private typealias MTDeviceCreateListFn = @convention(c) () -> Unmanaged<CFArray>?
+private typealias MTRegisterContactFrameCallbackFn = @convention(c) (MTDeviceRef, MTContactCallbackFn) -> Void
+private typealias MTUnregisterContactFrameCallbackFn = @convention(c) (MTDeviceRef, MTContactCallbackFn) -> Void
+private typealias MTDeviceStartFn = @convention(c) (MTDeviceRef, Int32) -> Void
+private typealias MTDeviceStopFn = @convention(c) (MTDeviceRef, Int32) -> Void
+
+/// 接触帧回调签名: (device, touches指针, 数量, 时间戳, 帧号) -> Int32
+private typealias MTContactCallbackFn =
+    @convention(c) (MTDeviceRef, UnsafeMutableRawPointer, Int32, Double, Int32) -> Int32
+
+// MARK: - 全局回调盒 + 非捕获 C 回调
+
+/// 全局单盒承载用户闭包(回调签名无 context 参数, 应用内单一引擎实例)。
 private final class ContactCallbackBox {
-    let closure: @Sendable ([ContactSample]) -> Void
-    init(_ closure: @escaping @Sendable ([ContactSample]) -> Void) {
+    let closure: @Sendable ([ContactSample], Double) -> Void
+    init(_ closure: @escaping @Sendable ([ContactSample], Double) -> Void) {
         self.closure = closure
     }
 }
@@ -40,43 +62,39 @@ private final class ContactCallbackBox {
 private nonisolated(unsafe) var contactCallbackBox: ContactCallbackBox?
 
 /// 非捕获 C 回调(文件级: Swift 6 在类方法内定义带指针绑定的 @convention(c) 闭包会崩溃)
-private let contactCallback: MultitouchSupport.MTContactCallback = { _, touches, numTouches, _, _ in
-    guard let box = contactCallbackBox, let touches, numTouches > 0 else { return }
-    let touchPointer = touches.assumingMemoryBound(to: MTTouch.self)
+private let contactCallback: MTContactCallbackFn = { _, touches, count, timestamp, _ in
+    guard let box = contactCallbackBox, count > 0 else { return 0 }
+    let typed = touches.assumingMemoryBound(to: MTTouch.self)
+    let buffer = UnsafeBufferPointer(start: typed, count: Int(count))
     var samples: [ContactSample] = []
-    for index in 0..<Int(numTouches) {
-        let touch = touchPointer[index]
-        // state: 1 = 接触表面(legacy 验证)
+    samples.reserveCapacity(buffer.count)
+    for touch in buffer {
+        // state != 0 = 活跃(与 legacy 一致)
         samples.append(
-            ContactSample(normalized: touch.normalized, isOnSurface: touch.state == 1)
+            ContactSample(
+                normalized: CGPoint(
+                    x: Double(touch.normalized.position.x),
+                    y: Double(touch.normalized.position.y)
+                ),
+                isOnSurface: touch.state != 0
+            )
         )
     }
-    guard !samples.isEmpty else { return }
-    box.closure(samples)
+    box.closure(samples, timestamp)
+    return 0
 }
 
+// MARK: - 窄 C 包装
+
+/// MultitouchSupport 私有框架窄包装(§91)。
+/// 函数签名与 legacy 本机验证可用实现逐行对齐; dlopen 优雅不可用。
 final class MultitouchSupport: @unchecked Sendable {
-    // MARK: - 私有 API 声明
-
-    private typealias MTDeviceRef = UnsafeMutableRawPointer
-    // Swift 6: 自定义 struct 不可直接出现在 @convention(c) 签名,
-    // 用原始指针 + assumingMemoryBound 读取 MTTouch 布局
-    typealias MTContactCallback = @convention(c) (
-        Int32, UnsafeMutableRawPointer?, Int32, Double, Int32
-    ) -> Void
-
-    private typealias MTDeviceCreateListFn = @convention(c) (
-        UnsafeMutableRawPointer?,
-        UnsafeMutablePointer<Int32>?
-    ) -> Void
-    private typealias MTRegisterContactFrameCallbackFn = @convention(c) (
-        MTDeviceRef, MTContactCallback, UnsafeMutableRawPointer?
-    ) -> Void
-    private typealias MTUnregisterContactFrameCallbackFn = @convention(c) (
-        MTDeviceRef, MTContactCallback, UnsafeMutableRawPointer?
-    ) -> Void
-    private typealias MTDeviceStartFn = @convention(c) (MTDeviceRef) -> Void
-    private typealias MTDeviceStopFn = @convention(c) (MTDeviceRef) -> Void
+    /// 启动结果诊断。
+    enum StartResult {
+        case ok(devices: Int)
+        case dlopenFailed
+        case noDevices
+    }
 
     private let handle: UnsafeMutableRawPointer
     private let deviceCreateList: MTDeviceCreateListFn
@@ -84,6 +102,9 @@ final class MultitouchSupport: @unchecked Sendable {
     private let unregisterCallback: MTUnregisterContactFrameCallbackFn
     private let deviceStart: MTDeviceStartFn
     private let deviceStop: MTDeviceStopFn
+
+    /// 持有设备列表生命周期(legacy 必需)。
+    private var deviceList: CFArray?
 
     init?() {
         guard let handle = dlopen(
@@ -125,41 +146,36 @@ final class MultitouchSupport: @unchecked Sendable {
     }
 
     /// 枚举设备并注册回调(回调在系统线程到达, 非主线程)。
-    /// 返回注册设备数;0 = 无设备或回调未注册。
     @discardableResult
-    func startDevices(callback: @escaping @Sendable ([ContactSample]) -> Void) -> Int {
-        var count: Int32 = 0
-        var listStorage: UnsafeMutablePointer<UnsafeMutableRawPointer?>? = nil
-        withUnsafeMutablePointer(to: &listStorage) { listPointer in
-            deviceCreateList(UnsafeMutableRawPointer(listPointer), &count)
-        }
-        guard let list = listStorage, count > 0 else { return 0 }
+    func startDevices(callback: @escaping @Sendable ([ContactSample], Double) -> Void) -> StartResult {
+        guard let listRef = deviceCreateList() else { return .noDevices }
+        let list = listRef.takeUnretainedValue()
+        deviceList = list  // 持有 CFArray 生命周期
 
-        // 回调包装: C 回调 → Swift 闭包(锁/队列保护)
         contactCallbackBox = ContactCallbackBox(callback)
+        let count = CFArrayGetCount(list)
         var registered = 0
-        for index in 0..<Int(count) {
-            guard let device = list[index] else { continue }
-            registerCallback(device, contactCallback, nil)
-            deviceStart(device)
+        for index in 0..<count {
+            let value = CFArrayGetValueAtIndex(list, index)
+            let device = unsafeBitCast(value, to: MTDeviceRef.self)
+            registerCallback(device, contactCallback)
+            deviceStart(device, 0)
             registered += 1
         }
-        return registered
+        return .ok(devices: registered)
     }
 
     /// 停止并注销全部设备回调。
     func stopDevices() {
-        // 设备列表重新枚举停止(保持与注册对称)
-        var count: Int32 = 0
-        var listStorage: UnsafeMutablePointer<UnsafeMutableRawPointer?>? = nil
-        withUnsafeMutablePointer(to: &listStorage) { listPointer in
-            deviceCreateList(UnsafeMutableRawPointer(listPointer), &count)
+        guard let list = deviceList else { return }
+        let count = CFArrayGetCount(list)
+        for index in 0..<count {
+            let value = CFArrayGetValueAtIndex(list, index)
+            let device = unsafeBitCast(value, to: MTDeviceRef.self)
+            deviceStop(device, 0)
+            unregisterCallback(device, contactCallback)
         }
-        guard let list = listStorage else { return }
-        for index in 0..<Int(count) {
-            guard let device = list[index] else { continue }
-            deviceStop(device)
-        }
+        deviceList = nil
+        contactCallbackBox = nil
     }
-
 }

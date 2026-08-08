@@ -30,6 +30,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
                 self?.captureScreenshot(to: screenshotPath)
             }
+        } else if CommandLine.arguments.contains("--touchdebug") {
+            // 触点调试: 打印引擎状态 + 原始触点帧(GESTURE_DEBUG env), 15s 后退出
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
+                guard let self else { return }
+                print("TOUCHDEBUG status=\(self.container?.activationCoordinator.diagnostics() ?? "?")")
+                print("TOUCHDEBUG 请在触控板上做四指捏合, 观察 GESTURE_DEBUG 输出")
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 15.0) {
+                print("TOUCHDEBUG done")
+                NSApp.terminate(nil)
+            }
+        } else if CommandLine.arguments.contains("--touchwatch") {
+            // 持续触点监听(配合 GESTURE_DEBUG 日志), 手动终止
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
+                guard let self else { return }
+                print("TOUCHWATCH status=\(self.container?.activationCoordinator.diagnostics() ?? "?")")
+                print("TOUCHWATCH 持续监听中, 请做四指捏合; Ctrl+C 或 kill 结束")
+                fflush(stdout)
+            }
         } else if CommandLine.arguments.contains("--smoke") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
                 self?.runSmokeDiagnostics()
@@ -157,13 +176,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func finishSmoke(store: LauncherStore) {
-        // 启动路径验证: 找 Chrome 并真实启动(无害)
-        let chrome = store.displayModel().visibleAppIDs.first { $0.rawValue.contains("Chrome") }
-        if let chrome {
-            store.launch(chrome)
-            print("SMOKE launch=OK \(chrome.rawValue)")
+        // 启动路径验证仅在显式 --launchtest 时真实拉起应用(避免测试副作用)
+        if CommandLine.arguments.contains("--launchtest") {
+            let chrome = store.displayModel().visibleAppIDs.first { $0.rawValue.contains("Chrome") }
+            if let chrome {
+                store.launch(chrome)
+                print("SMOKE launch=OK \(chrome.rawValue)")
+            } else {
+                print("SMOKE launch=SKIPPED no chrome")
+            }
         } else {
-            print("SMOKE launch=SKIPPED no chrome")
+            print("SMOKE launch=SKIPPED (no --launchtest)")
         }
 
         print("SMOKE OK")
