@@ -46,7 +46,9 @@ final class FolderViewController: NSViewController {
         // 子项网格: 单页, 支持点击启动(同样包 NSScrollView, 与主网格一致)
         let collectionView = ClickableCollectionView()
         collectionView.collectionViewLayout = PagingGridLayout(
-            columns: store.gridColumns, rows: store.gridRows, itemSize: 96, spacing: 28
+            columns: store.gridColumns, rows: store.gridRows,
+            cellSize: 96, iconSize: CGFloat(store.iconSize),
+            horizontalSpacing: 28, verticalSpacing: 28
         )
         collectionView.backgroundColors = [.clear]
         collectionView.isSelectable = false
@@ -84,7 +86,7 @@ final class FolderViewController: NSViewController {
                     colorIndex: stableColorIndex(id.rawValue),
                     accessibilityHint: "点击启动 \(store.displayName(for: id))",
                     appID: id,
-                    pointSize: 96,
+                    pointSize: store.iconSize,
                     iconProvider: iconProvider
                 )
             case .folder:

@@ -25,6 +25,19 @@ final class ClickableCollectionView: NSCollectionView {
         }
     }
 
+    /// 设置文档尺寸: 宽度锁定(分页防 NSClipView 收缩), 高度按需(搜索溢出时垂直滚动)。
+    func setDocumentSize(_ size: NSSize) {
+        lockedDocumentWidth = size.width
+        if frame.size != size {
+            frame.size = size
+        }
+    }
+
+    /// 解除文档宽度锁定(模式切换时恢复弹性)。
+    func unlockDocumentWidth() {
+        lockedDocumentWidth = 0
+    }
+
     override func setFrameSize(_ newSize: NSSize) {
         if lockedDocumentWidth > 0 {
             super.setFrameSize(NSSize(width: lockedDocumentWidth, height: newSize.height))

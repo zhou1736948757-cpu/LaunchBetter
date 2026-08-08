@@ -286,6 +286,22 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         return Double(x)
     }
 
+    public func pageTestCurrentPage() -> Int {
+        gridViewController?.currentPageValue ?? -1
+    }
+
+    public func pageTestPageCount() -> Int {
+        gridViewController?.pageCountValue ?? -1
+    }
+
+    public func pageTestPageWidth() -> Double {
+        Double(gridViewController?.geometry.pageWidth ?? -1)
+    }
+
+    public func pageTestDocumentWidth() -> Double {
+        Double(gridViewController?.collectionViewRef.frame.width ?? -1)
+    }
+
     public func pageTestScrollDiagnostics() -> String {
         gridViewController?.scrollDiagnostics() ?? "nil"
     }

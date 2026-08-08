@@ -5,7 +5,10 @@ import LaunchCore
 ///
 /// 两种模式:
 /// - 分页模式: 每页一个 section,横向分页,滚轮/键盘翻页
-/// - 搜索模式: 单 section 平铺结果,禁用分页滚动
+/// - 搜索模式: 单 section 垂直滚动结果网格(结果可超一页容量)
+///
+/// 几何唯一真值: GridGeometry(PagingGridLayout 的 currentGeometry/liveGeometry),
+/// 本控制器不再维护 pageWidth/itemSize/slotStep 等硬编码(Stage 1, P0)。
 ///
 /// 结构变化(目录变化/搜索切换/drop 完成)才应用 snapshot(§83),
 /// 禁止逐帧应用 snapshot(§132)。
@@ -16,11 +19,26 @@ final class GridViewController: NSViewController {
     private let store: any LauncherStoring
     private let iconProvider: (any IconImageProviding)?
     private var collectionView: NSCollectionView!
+    private var scrollView: NSScrollView!
     private var dataSource: NSCollectionViewDiffableDataSource<Int, Item>!
     private var currentPage = 0
     private var pageCount = 1
     /// 当前页(诊断)。
     var currentPageValue: Int { currentPage }
+
+    /// 页数(诊断)。
+    var pageCountValue: Int { pageCount }
+
+    /// 当前几何(拖拽/槽位计算用; 未 prepare 时用实时参数推算)。
+    var geometry: GridGeometry {
+        (collectionView.collectionViewLayout as? PagingGridLayout)?.liveGeometry
+            ?? GridGeometry(
+                columns: store.gridColumns, rows: store.gridRows,
+                cellSize: cellSize, iconSize: iconSize,
+                horizontalSpacing: horizontalSpacing, verticalSpacing: verticalSpacing,
+                pageWidth: collectionView?.bounds.width ?? 0, pageHeight: collectionView?.bounds.height ?? 0
+            )
+    }
 
     /// 滚动诊断(翻页调试)。
     func scrollDiagnostics() -> String {
@@ -28,9 +46,11 @@ final class GridViewController: NSViewController {
         let content = layout?.collectionViewContentSize ?? .zero
         let doc = collectionView.frame
         let clip = collectionView.enclosingScrollView?.contentView.bounds ?? .zero
-        return "content=\(Int(content.width))x\(Int(content.height)) docFrame=\(Int(doc.width))x\(Int(doc.height)) clipX=\(Int(clip.origin.x)) clipW=\(Int(clip.width))"
+        return "content=\(Int(content.width))x\(Int(content.height)) docFrame=\(Int(doc.width))x\(Int(doc.height)) clipX=\(Int(clip.origin.x)) clipW=\(Int(clip.width)) prepare=\(layout?.prepareCount ?? 0)"
     }
     private var searchMode = false
+    /// 退出搜索后恢复的页码。
+    private var pagedPageBeforeSearch = 0
 
     /// 点击文件夹时回调(打开文件夹视图)。
     var onOpenFolder: ((FolderID) -> Void)?
@@ -53,8 +73,14 @@ final class GridViewController: NSViewController {
         return collectionView
     }
 
-    /// 槽位步进(图标 + 间距), 预览变换位移量。
-    var slotStep: CGFloat { 96 + 28 }
+    // 几何参数(唯一来源, 供 GridGeometry 构建; 与 PagingGridLayout 共享语义)
+    private let cellSize: CGFloat = 96
+    private let horizontalSpacing: CGFloat = 28
+    private let verticalSpacing: CGFloat = 28
+    private var iconSize: CGFloat { CGFloat(store.iconSize) }
+
+    /// 上次应用的显示修订(无变化跳过 full snapshot, Stage 1 §30)。
+    private var lastAppliedRevision: UInt64 = .max
 
     init(store: any LauncherStoring, iconProvider: (any IconImageProviding)?) {
         self.store = store
@@ -71,7 +97,9 @@ final class GridViewController: NSViewController {
 
         let collectionView = ClickableCollectionView()
         collectionView.collectionViewLayout = PagingGridLayout(
-            columns: store.gridColumns, rows: store.gridRows, itemSize: 96, spacing: 28
+            columns: store.gridColumns, rows: store.gridRows,
+            cellSize: cellSize, iconSize: iconSize,
+            horizontalSpacing: horizontalSpacing, verticalSpacing: verticalSpacing
         )
         collectionView.backgroundColors = [.clear]
         collectionView.isSelectable = false
@@ -117,6 +145,7 @@ final class GridViewController: NSViewController {
             scrollView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
         ])
         self.collectionView = collectionView
+        self.scrollView = scrollView
 
         configureDataSource()
         view = container
@@ -128,13 +157,12 @@ final class GridViewController: NSViewController {
         updateDocumentFrame()
     }
 
-    /// 同步集合视图 frame 到布局 contentSize(分页滚动的前提)。
+    /// 同步集合视图 frame 到布局 contentSize(分页滚动的前提; 搜索模式高度也跟随)。
     private func updateDocumentFrame() {
         guard let layout = collectionView.collectionViewLayout as? PagingGridLayout else { return }
         let size = layout.collectionViewContentSize
         if let paged = collectionView as? ClickableCollectionView {
-            // 锁定文档宽度(防 NSClipView 滚动约束), 高度灵活
-            paged.lockDocumentWidth(size.width)
+            paged.setDocumentSize(size)
         } else if collectionView.frame.size != size {
             collectionView.frame = NSRect(origin: .zero, size: size)
         }
@@ -156,7 +184,7 @@ final class GridViewController: NSViewController {
 
     private func configure(_ cell: AppCellView?, with item: Item) {
         guard let cell else { return }
-        let pointSize = Int(96)
+        let pointSize = Int(iconSize)
         switch item {
         case .app(let id):
             cell.configure(
@@ -183,15 +211,84 @@ final class GridViewController: NSViewController {
         abs(key.unicodeScalars.reduce(0) { $0 &+ Int($1.value) }) % 12
     }
 
+    // MARK: - 刷新(修订跳过)
+
     /// 应用最新显示模型(或搜索结果)。
+    /// 修订相同(目录/布局/配置/搜索均未变)时跳过 full snapshot(Stage 1 §30)。
     func refresh() {
+        // Settings 结构参数变更 → 重建布局几何并重新分页(Stage 1 §14)
+        let layout = gridLayout
+        if store.gridColumns != layout.columns
+            || store.gridRows != layout.rows
+            || store.iconSize != Int(layout.iconSize) {
+            applyGeometryConfig(
+                columns: store.gridColumns, rows: store.gridRows, iconSize: store.iconSize
+            )
+            return
+        }
+        if store.displayRevision != lastAppliedRevision {
+            lastAppliedRevision = store.displayRevision
+            applyLatestData()
+        }
+    }
+
+    /// 强制刷新(忽略修订; 结构参数已变时由调用方使用)。
+    func forceRefresh() {
+        lastAppliedRevision = .max
+        refresh()
+    }
+
+    private func applyLatestData() {
         if let results = store.searchResults() {
-            searchMode = true
-            applySearch(results)
+            enterSearchMode(with: results)
         } else {
-            searchMode = false
+            if searchMode {
+                exitSearchMode()
+                // 退出搜索恢复搜索前页码(Stage 1 §12)
+                currentPage = min(pagedPageBeforeSearch, max(0, pageCount - 1))
+            }
             applyDisplayModel(store.displayModel())
         }
+    }
+
+    // MARK: - 搜索模式
+
+    private func enterSearchMode(with results: [Item]) {
+        let wasPagedMode = !searchMode
+        searchMode = true
+        if wasPagedMode {
+            pagedPageBeforeSearch = currentPage
+        }
+        gridLayout.mode = .search
+        gridLayout.invalidateLayout()
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = false
+        var snapshot = NSDiffableDataSourceSnapshot<Int, Item>()
+        snapshot.appendSections([0])
+        snapshot.appendItems(results, toSection: 0)
+        pageCount = 1
+        currentPage = 0
+        dataSource.apply(snapshot, animatingDifferences: false)
+        scrollToTop()
+        updatePageDots()
+    }
+
+    private func exitSearchMode() {
+        guard searchMode else { return }
+        searchMode = false
+        gridLayout.mode = .paged
+        gridLayout.invalidateLayout()
+        scrollView.hasVerticalScroller = false
+        scrollView.hasHorizontalScroller = false
+    }
+
+    private var gridLayout: PagingGridLayout {
+        collectionView.collectionViewLayout as! PagingGridLayout
+    }
+
+    private func scrollToTop() {
+        guard let scroll = collectionView.enclosingScrollView else { return }
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: scroll.documentView?.frame.height ?? 0))
     }
 
     private func applyDisplayModel(_ display: DisplayModel) {
@@ -207,15 +304,17 @@ final class GridViewController: NSViewController {
         updatePageDots()
     }
 
-    private func applySearch(_ results: [Item]) {
-        var snapshot = NSDiffableDataSourceSnapshot<Int, Item>()
-        snapshot.appendSections([0])
-        snapshot.appendItems(results, toSection: 0)
-        pageCount = 1
+    /// Settings 结构参数变更: 重建布局几何并重新分页(Stage 1 §14/§15)。
+    func applyGeometryConfig(columns: Int, rows: Int, iconSize: Int) {
+        let gridLayout = gridLayout
+        gridLayout.update(
+            columns: columns, rows: rows, iconSize: CGFloat(iconSize),
+            cellSize: cellSize, horizontalSpacing: horizontalSpacing,
+            verticalSpacing: verticalSpacing
+        )
+        // 参数变化 → 页容量变化 → 重新分页并回第一页
         currentPage = 0
-        dataSource.apply(snapshot, animatingDifferences: false)
-        collectionView.scrollToPage(0, animated: false)
-        updatePageDots()
+        forceRefresh()
     }
 
     // MARK: - 页面导航
@@ -398,19 +497,48 @@ final class GridViewController: NSViewController {
         super.scrollWheel(with: event)
     }
 
+    // MARK: - 双指滑动分页状态机
+
+    /// 手势会话: 一次手势最多一页, momentum 不额外分页, 水平主导才翻页(Stage 1 §8)。
+    private var pagingSession = PagingGestureSession()
+
     /// 滚轮/双指滑动翻页: 横向滑动(deltaX)或纵向滚轮(deltaY)均翻页。
     /// 惯性(momentum)阶段忽略, 避免松手后连翻多页。
     private func handlePageScroll(_ event: NSEvent) -> Bool {
         guard !searchMode else { return false }
-        guard event.momentumPhase == [] || event.momentumPhase == .ended else { return false }
+
+        // momentum: 忽略(不产生翻页, 会话已在上一次 ended 重置)
+        if event.momentumPhase != [] {
+            return false
+        }
+
+        switch event.phase {
+        case .began:
+            pagingSession.reset()
+        case .ended, .cancelled:
+            pagingSession.feed(phase: .ended, deltaX: 0, deltaY: 0)
+            return false
+        default:
+            break
+        }
+
+        // 横向双指滑动(水平主导)→ 分页状态机(一次手势最多一页)
         if abs(event.deltaX) > abs(event.deltaY), abs(event.deltaX) > 0.5 {
-            if event.deltaX < 0 {
-                nextPage()
-            } else {
-                previousPage()
+            let committed = pagingSession.feed(
+                phase: event.phase == .changed ? .changed : .began,
+                deltaX: event.deltaX, deltaY: event.deltaY
+            )
+            if committed {
+                if pagingSession.direction > 0 {
+                    nextPage()
+                } else {
+                    previousPage()
+                }
             }
             return true
         }
+
+        // 纵向滚轮(普通鼠标滚轮): 保留分页行为, 每次滚动稳定一页
         if abs(event.deltaY) > 0.5 {
             if event.deltaY < 0 {
                 nextPage()
@@ -428,14 +556,14 @@ final class GridViewController: NSViewController {
         return "sections=\(snapshot.numberOfSections) items=\(snapshot.itemIdentifiers.count) pageCount=\(pageCount) search=\(searchMode)"
     }
 
-    /// 更新页码指示点。
+    /// 更新页码指示点(搜索模式隐藏)。
     private func updatePageDots() {
         guard let pageDots else { return }
         for dot in pageDotViews {
             dot.removeFromSuperview()
         }
         pageDotViews = []
-        guard pageCount > 1 else { return }
+        guard !searchMode, pageCount > 1 else { return }
         for index in 0..<pageCount {
             let dot = NSView()
             dot.wantsLayer = true
@@ -483,37 +611,33 @@ final class GridViewController: NSViewController {
         return nil
     }
 
+    /// 扁平索引 → 文档坐标 frame(二维拖拽预览用, Stage 1 §20-21)。
+    func frame(atFlatIndex index: Int) -> CGRect {
+        geometry.frame(forFlatIndex: index)
+    }
+
     /// 单元格(可见时)。
     func cellView(at path: IndexPath) -> NSCollectionViewItem? {
         collectionView.item(at: path)
     }
 
-    /// 光标 → 拖拽目的地(显示空间 page/slot)。
-    func dragDestination(from point: NSPoint) -> LayoutTransaction.Destination {
-        let local = collectionView.convert(point, from: nil)
-        let bounds = collectionView.bounds
-        guard bounds.width > 0 else { return LayoutTransaction.Destination(page: 0, slot: 0) }
-        let page = min(max(0, Int(floor(local.x / bounds.width))), max(0, pageCount - 1))
-        return LayoutTransaction.Destination(page: page, slot: slot(at: local))
+    /// 源项当前显示的图标图像(拖拽 overlay 复用, 零磁盘 IO, Stage 1 §23-24)。
+    func visibleIconImage(for item: Item) -> CGImage? {
+        guard let index = flatIndex(of: item), let path = indexPath(atFlatIndex: index) else {
+            return nil
+        }
+        guard let cell = cellView(at: path) as? AppCellView else { return nil }
+        return cell.visibleIconImage
     }
 
-    /// 光标所在槽位(页内)。
-    private func slot(at local: NSPoint) -> Int {
-        let bounds = collectionView.bounds
-        let columns = store.gridColumns
-        let rows = store.gridRows
-        let itemSize: CGFloat = 96
-        let spacing: CGFloat = 28
-        let gridWidth = CGFloat(columns) * itemSize + CGFloat(columns - 1) * spacing
-        let gridHeight = CGFloat(rows) * itemSize + CGFloat(rows - 1) * spacing
-        let startX = (bounds.width - gridWidth) / 2
-        let startY = (bounds.height - gridHeight) / 2
-        let pageOffset = floor(local.x / bounds.width) * bounds.width
-        let col = Int(floor((local.x - pageOffset - startX) / (itemSize + spacing)))
-        let row = Int(floor((local.y - startY) / (itemSize + spacing)))
-        let clampedCol = min(max(0, col), columns - 1)
-        let clampedRow = min(max(0, row), rows - 1)
-        return clampedRow * columns + clampedCol
+    /// 光标 → 拖拽目的地(显示空间 page/slot)。
+    /// 坐标系: 窗口点 → 文档坐标 → GridGeometry(页宽 = clip 可视宽, 非文档宽, Stage 1 §5)。
+    func dragDestination(from point: NSPoint) -> LayoutTransaction.Destination {
+        let local = collectionView.convert(point, from: nil)
+        let g = geometry
+        guard g.pageWidth > 0 else { return LayoutTransaction.Destination(page: 0, slot: 0) }
+        let (page, slot) = g.pageAndSlot(forDocumentPoint: local, pageCount: pageCount)
+        return LayoutTransaction.Destination(page: page, slot: slot)
     }
 
     /// 光标处的显示项(拖拽源/文件夹悬停)。
@@ -538,6 +662,12 @@ final class GridViewController: NSViewController {
             return nil
         }
         return id
+    }
+
+    /// 当前页内可见网格 rect(文档坐标, 边缘翻页判定用, Stage 1 §25)。
+    var currentPageRect: CGRect {
+        let g = geometry
+        return g.pageRect(page: min(max(0, currentPage), max(0, pageCount - 1)))
     }
 
     /// overlay 层级(拖拽图标)。

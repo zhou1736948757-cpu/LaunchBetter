@@ -33,6 +33,12 @@ public protocol LauncherStoring: AnyObject {
     /// 网格行数(布局几何)。
     var gridRows: Int { get }
 
+    /// 图标点尺寸(布局几何; IconKey 请求尺寸真值)。
+    var iconSize: Int { get }
+
+    /// 显示修订号: 目录/布局/配置/搜索任一变化即递增(无变化跳过 full snapshot)。
+    var displayRevision: UInt64 { get }
+
     /// 当前分页显示模型。
     func displayModel() -> DisplayModel
 

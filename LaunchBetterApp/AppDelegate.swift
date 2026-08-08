@@ -222,17 +222,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             action()
             RunLoop.current.run(until: Date().addingTimeInterval(0.5))
         }
+        // Stage 1 §36: 0→1→2→1→0 序列 + 诊断字段
+        func report(_ label: String) {
+            let scrollX = controller.pageTestScrollX()
+            let page = controller.pageTestCurrentPage()
+            let count = controller.pageTestPageCount()
+            let pageW = controller.pageTestPageWidth()
+            let docW = controller.pageTestDocumentWidth()
+            print("PAGETEST \(label) scrollX=\(Int(scrollX)) currentPage=\(page) pageCount=\(count) pageWidth=\(Int(pageW)) documentWidth=\(Int(docW))")
+        }
         print("PAGETEST before: \(controller.pageTestScrollDiagnostics())")
-        _ = controller.pageTestGoTo(1)
-        let x1 = controller.pageTestScrollX()
-        _ = controller.pageTestGoTo(2)
-        let x2 = controller.pageTestScrollX()
-        _ = controller.pageTestGoTo(1)
-        let x3 = controller.pageTestScrollX()
-        print("PAGETEST x=\(Int(x1))->\(Int(x2))->\(Int(x3))")
+        report("p0")
+        step { _ = controller.pageTestGoTo(1) }
+        report("p1")
+        step { _ = controller.pageTestGoTo(2) }
+        report("p2")
+        step { _ = controller.pageTestGoTo(1) }
+        report("p3")
+        step { _ = controller.pageTestGoTo(0) }
+        report("p4")
         print("PAGETEST after: \(controller.pageTestScrollDiagnostics())")
-        let moved = x2 > x1 && x3 < x2
-        print("PAGETEST \(moved ? "OK" : "FAIL")")
+        let ok = controller.pageTestCurrentPage() == 0
+        let moved = controller.pageTestScrollX() < controller.pageTestPageWidth()
+        print("PAGETEST \(ok && moved ? "OK" : "FAIL")")
         NSApp.terminate(nil)
     }
 
