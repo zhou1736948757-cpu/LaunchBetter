@@ -21,12 +21,14 @@
 
 ## Current Phase
 
-Phase 8 (Multitouch + Activation) — 实现完成(182 测试), 待提交;
-**手势真实验证等待用户授予输入监控权限(TCC)**
+Phase 9 (外围功能) — 完成(壁纸/本地化/设置/热角/隐藏/自定义名/卸载, 已提交 282a40b);
+Phase 10 预发布审计通过; 等待用户完成两个关口
 
 ## Current Task
 
-Minimum Usable Release Gate 评估 → 用户授权输入监控 → 手势实测 → 预发布审计 → 转公开
+**关口 A**: 用户授予输入监控权限 + 退出旧版 LaunchHistory → 四指手势实测 → 发布门 → 转公开
+**关口 B**: 用户提供 Apple Developer 签名/公证凭据 → 正式分发签名
+(其余工作已完成)
 
 ## Current Branch
 
@@ -34,7 +36,7 @@ main
 
 ## Last Known Good Commit
 
-40a266e (Phase 7);Phase 8 提交待创建
+282a40b (Phase 9 + Phase 10 prep)
 
 ## Completed Milestones
 
@@ -120,10 +122,9 @@ main
 
 ## Next Actions
 
-1. 提交并推送 Phase 7 (FSEvents)
-2. Phase 8: Multitouch + 全局激活 — **需要用户授权输入监控(TCC)后验证手势**;
-   Minimum Usable Release Gate
-3. Phase 9/10: 外围功能 + 分发公开发布
+1. **等待用户**: 授予输入监控权限 + 退出旧版 → 手势实测 → 发布门 → 转公开 + v0.1.0
+2. **等待用户**: Apple 签名凭据(若要求正式分发)
+3. 剩余打磨: 长名标签断行优化、文件夹图标区分、磁盘缓存上限策略、120Hz 复测
 
 ## Last Updated
 
