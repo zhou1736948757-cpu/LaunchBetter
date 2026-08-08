@@ -330,7 +330,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         print("PAGETEST after: \(controller.pageTestScrollDiagnostics())")
         let ok = controller.pageTestCurrentPage() == 0
         let moved = controller.pageTestScrollX() < controller.pageTestPageWidth()
-        print("PAGETEST \(ok && moved ? "OK" : "FAIL")")
+        // v0.1.4: 重开面板回到第一页
+        _ = controller.pageTestGoTo(2)
+        step {}
+        let reset = controller.pageTestHideShowReset()
+        step {}
+        print("PAGETEST hideShowReset=\(reset ? "OK" : "FAIL") page=\(controller.pageTestCurrentPage())")
+        print("PAGETEST \(ok && moved && reset ? "OK" : "FAIL")")
         NSApp.terminate(nil)
     }
 

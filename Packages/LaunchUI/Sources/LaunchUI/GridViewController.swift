@@ -517,13 +517,16 @@ final class GridViewController: NSViewController {
     private var pagingSession = PagingGestureSession()
 
     /// 滚轮/双指滑动翻页: 横向滑动(deltaX)或纵向滚轮(deltaY)均翻页。
-    /// 惯性(momentum)阶段忽略, 避免松手后连翻多页。
+    /// 惯性(momentum)阶段拦截(交给系统会滚动到任意非整页位置, 卡在两页中间, v0.1.4)。
     private func handlePageScroll(_ event: NSEvent) -> Bool {
         guard !searchMode else { return false }
 
-        // momentum: 忽略(不产生翻页, 会话已在上一次 ended 重置)
+        // momentum/惯性: 全部拦截(防系统自由滚动), 惯性结束时吸附到最近页
         if event.momentumPhase != [] {
-            return false
+            if event.momentumPhase == .ended {
+                snapToNearestPage()
+            }
+            return true
         }
 
         switch event.phase {
@@ -531,6 +534,8 @@ final class GridViewController: NSViewController {
             pagingSession.reset()
         case .ended, .cancelled:
             pagingSession.feed(phase: .ended, deltaX: 0, deltaY: 0)
+            // 手势结束: 吸附到最近整页(动画被中途打断/位移不足时防卡中间)
+            snapToNearestPage()
             return false
         default:
             break
@@ -569,6 +574,21 @@ final class GridViewController: NSViewController {
             return true
         }
         return false
+    }
+
+    /// 吸附到最近整页: 当前位置偏离整页时动画滚动回最近页(v0.1.4 防卡两页中间)。
+    private func snapToNearestPage() {
+        guard !searchMode else { return }
+        guard let scroll = collectionView.enclosingScrollView else { return }
+        let clip = scroll.contentView
+        let pageWidth = clip.bounds.width > 0 ? clip.bounds.width : collectionView.bounds.width
+        guard pageWidth > 0 else { return }
+        let nearest = Int((clip.bounds.origin.x / pageWidth).rounded())
+        let clamped = min(max(0, nearest), pageCount - 1)
+        let targetX = CGFloat(clamped) * pageWidth
+        guard abs(clip.bounds.origin.x - targetX) > 1 else { return }
+        currentPage = clamped
+        goToPage(clamped, animated: true)
     }
 
     /// 确定性诊断(冒烟验证用): 当前快照结构。
@@ -714,6 +734,13 @@ private extension NSCollectionView {
                 context.duration = 0.35
                 context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
                 clip.animator().setBoundsOrigin(NSPoint(x: x, y: 0))
+            } completionHandler: {
+                // 动画被中途打断时校准回整页(v0.1.4 防卡两页中间)
+                MainActor.assumeIsolated {
+                    if abs(clip.bounds.origin.x - x) > 1 {
+                        clip.scroll(to: NSPoint(x: x, y: 0))
+                    }
+                }
             }
         } else {
             // NSClipView.scroll(to:) 是文档化的编程滚动 API

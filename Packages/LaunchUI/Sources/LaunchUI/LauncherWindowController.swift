@@ -105,8 +105,11 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         searchField.sendsSearchStringImmediately = true
         root.addSubview(searchField)
         searchField.translatesAutoresizingMaskIntoConstraints = false
+        // 避开刘海屏 notch(用户实测 v0.1.3 重叠): 安全区动态下移(v0.1.4)
+        let screen = window.screen ?? NSScreen.main
+        let topInset = max(0, screen?.safeAreaInsets.top ?? 0)
         NSLayoutConstraint.activate([
-            searchField.topAnchor.constraint(equalTo: root.topAnchor, constant: 24),
+            searchField.topAnchor.constraint(equalTo: root.topAnchor, constant: 24 + topInset),
             searchField.centerXAnchor.constraint(equalTo: root.centerXAnchor),
             searchField.widthAnchor.constraint(equalToConstant: 320),
         ])
@@ -213,6 +216,8 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         store.searchQuery = ""
         searchField.stringValue = ""
         gridViewController.refresh()
+        // v0.1.4: 重新打开面板回到第一页
+        gridViewController.goToPage(0, animated: false)
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.12
             window.animator().alphaValue = 0
@@ -320,6 +325,13 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
     public func pageTestGoTo(_ page: Int) -> Int {
         gridViewController?.goToPage(page, animated: false)
         return gridViewController?.currentPageValue ?? -1
+    }
+
+    /// 测试: hide + show 后应回到第一页(v0.1.4)。
+    public func pageTestHideShowReset() -> Bool {
+        hide()
+        show()
+        return gridViewController?.currentPageValue == 0
     }
 
     public func pageTestScrollX() -> Double {
