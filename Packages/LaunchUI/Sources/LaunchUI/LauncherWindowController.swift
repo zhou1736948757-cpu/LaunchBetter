@@ -34,6 +34,17 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
 
     private func configureWindow() {
         guard let window else { return }
+        // 失焦自动退出(点击其他应用); 模态对话框(重命名等)期间不退出
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.didResignKeyNotification,
+            object: window,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard NSApp.modalWindow == nil, window.attachedSheet == nil else { return }
+                self?.hide()
+            }
+        }
         let root = NSView()
 
         let effectView = NSVisualEffectView()
@@ -52,6 +63,9 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         let grid = GridViewController(store: store, iconProvider: iconProvider)
         grid.onOpenFolder = { [weak self] folderID in
             self?.openFolder(folderID)
+        }
+        grid.onClickBlank = { [weak self] in
+            self?.hide()
         }
         gridViewController = grid
 

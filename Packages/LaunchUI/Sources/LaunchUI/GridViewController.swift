@@ -24,6 +24,9 @@ final class GridViewController: NSViewController {
     /// 点击文件夹时回调(打开文件夹视图)。
     var onOpenFolder: ((FolderID) -> Void)?
 
+    /// 点击空白处回调(退出启动器)。
+    var onClickBlank: (() -> Void)?
+
     /// 拖拽控制(由窗口控制器注入)。
     var dragController: DragController?
 
@@ -169,8 +172,12 @@ final class GridViewController: NSViewController {
 
     func handleClick(at point: NSPoint) {
         let local = collectionView.convert(point, from: nil)
-        guard let indexPath = collectionView.indexPathForItem(at: local) else { return }
-        guard let item = dataSource.itemIdentifier(for: indexPath) else { return }
+        guard let indexPath = collectionView.indexPathForItem(at: local),
+              let item = dataSource.itemIdentifier(for: indexPath) else {
+            // 点击空白处 → 退出启动器
+            onClickBlank?()
+            return
+        }
         switch item {
         case .app(let id):
             store.launch(id)
