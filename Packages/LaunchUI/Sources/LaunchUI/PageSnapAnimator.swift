@@ -43,6 +43,7 @@ final class PageSnapAnimator {
             guard gen == generation else { return true }
             onFrame?(spring.target, true)
             onSettled?()
+            self.spring = nil
             return false
         }
         guard gen == generation else { return true }

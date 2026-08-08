@@ -32,7 +32,6 @@ final class DragController {
     private var sourceItem: DisplayModel.DisplayItem?
     private var sourceIndex = 0
     private var displayAtDragStart: DisplayModel?
-    private var transformedPaths: Set<IndexPath> = []
     private var lastEdgeAdvance: CFTimeInterval = 0
     private var lastKnownPoint: CGPoint?
     private var sessionID = UUID()
@@ -175,6 +174,8 @@ final class DragController {
     private var lastGapIndex: Int?
     private var currentTransforms: [IndexPath: CATransform3D] = [:]
     private var lastOverlayVisual: OverlayVisual?
+    /// 缓存绑定的几何指纹(页宽; 变化时清缓存重算, v0.1.6 M5)。
+    private var cachedPageWidth: CGFloat = 0
 
     // 诊断计数(v0.1.6 §64)
     private(set) var dragFrameCount = 0
@@ -203,6 +204,20 @@ final class DragController {
     private func processTick(_ point: NSPoint) {
         guard state == .dragging, let item = sourceItem,
               let display = displayAtDragStart else { return }
+
+        // 外部目录/布局/配置变化 → 取消拖拽(陈旧 session 防护, 评审 M5)
+        if store.displayRevision != dragStartRevision {
+            cancelDrag()
+            return
+        }
+        // 几何(页宽)变化 → 清 preview 缓存, 下次按新几何重算(评审 M5)
+        let currentPageWidth = grid?.geometry.pageWidth ?? 0
+        if cachedPageWidth > 0, currentPageWidth != cachedPageWidth {
+            clearTransformsIfNeeded()
+            lastDestination = nil
+            lastGapIndex = nil
+        }
+        cachedPageWidth = currentPageWidth
 
         // 边缘翻页(节流 0.4s; 静止悬停持续触发, M1)
         maybeAdvancePage(point)
@@ -276,10 +291,11 @@ final class DragController {
         guard now - lastEdgeAdvance > 0.4 else { return }
         let atLeftEdge = local.x >= pageRect.minX && local.x < pageRect.minX + edge
         let atRightEdge = local.x <= pageRect.maxX && local.x > pageRect.maxX - edge
-        if atLeftEdge {
+        // v0.1.6 m4: 首/尾页不再启动 no-op settle
+        if atLeftEdge, grid.currentPageValue > 0 {
             grid.previousPage()
             lastEdgeAdvance = now
-        } else if atRightEdge {
+        } else if atRightEdge, grid.currentPageValue < grid.pageCountValue - 1 {
             grid.nextPage()
             lastEdgeAdvance = now
         }
@@ -344,13 +360,17 @@ final class DragController {
     }
 
     private func resetTransforms() {
-        currentTransforms.removeAll()
-        guard let grid else { return }
-        for path in transformedPaths {
+        guard let grid else {
+            currentTransforms.removeAll()
+            return
+        }
+        // v0.1.6 M4 修复: 预览位移写回 identity(currentTransforms 为目标状态源,
+        // 不再依赖已废弃的 transformedPaths, 否则取消/结束时 layer 残留非 identity)
+        for path in currentTransforms.keys {
             guard let cell = grid.cellView(at: path) else { continue }
             cell.view.layer?.transform = CATransform3DIdentity
         }
-        transformedPaths.removeAll()
+        currentTransforms.removeAll()
     }
 }
 

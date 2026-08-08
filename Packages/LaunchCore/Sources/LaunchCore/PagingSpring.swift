@@ -54,16 +54,17 @@ public struct PagingSpring: Sendable {
 /// 外边缘 rubber band(v0.1.6 §18): 纯数学、连续、饱和、无 allocation。
 /// 仅当 offset 越过 [minX, maxX] 边界时作用。
 public enum PagingRubberBand {
-    /// 对原始 offset 施加 rubber band。
+    /// 对原始 offset 施加 rubber band(刚度阻尼 + 饱和上限, v0.1.6 m3)。
     /// - Returns: 施加后位置。正常范围内恒等于输入(direct mapping)。
     public static func clamp(_ offset: CGFloat, minX: CGFloat, maxX: CGFloat) -> CGFloat {
+        let maxOverflow = PagingTuning.rubberBandMaxOverflowPages * max(0, maxX - minX)
         if offset < minX {
             let overflow = minX - offset
-            let damped = overflow * PagingTuning.rubberBandStiffness
+            let damped = min(overflow * PagingTuning.rubberBandStiffness, maxOverflow)
             return minX - damped
         } else if offset > maxX {
             let overflow = offset - maxX
-            let damped = overflow * PagingTuning.rubberBandStiffness
+            let damped = min(overflow * PagingTuning.rubberBandStiffness, maxOverflow)
             return maxX + damped
         }
         return offset

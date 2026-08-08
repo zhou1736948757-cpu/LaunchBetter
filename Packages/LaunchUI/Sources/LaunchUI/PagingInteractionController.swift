@@ -96,8 +96,12 @@ final class PagingInteractionController {
     func handleWheel(_ event: NSEvent) -> Bool {
         guard isEnabled else { return false }
 
-        // momentum: 全拦截, 0 位移 0 snap 0 重结算(§20)
+        // momentum: 全拦截, 0 位移 0 snap 0 重结算(§20);
+        // 若同事件同时携带 ended/cancelled, 同步结束交互生命周期(评审 m1)
         if event.momentumPhase != [] {
+            if event.phase == .ended || event.phase == .cancelled {
+                endGesture()
+            }
             return true
         }
 
