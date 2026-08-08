@@ -55,8 +55,11 @@ final class AppCellView: NSCollectionViewItem {
         super.viewDidLayout()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        iconLayer.frame = view.bounds
-        letterLayer.frame = view.bounds
+        // 图标层底部收进 24pt(标签条带), 图标永不压到标签
+        var iconFrame = view.bounds
+        iconFrame.size.height -= 24
+        iconLayer.frame = iconFrame
+        letterLayer.frame = iconFrame
         letterLayer.contentsScale = view.window?.backingScaleFactor ?? 2
         CATransaction.commit()
     }
@@ -124,9 +127,11 @@ final class AppCellView: NSCollectionViewItem {
             iconLayer.contents = image
             iconLayer.contentsGravity = .resizeAspect
             iconLayer.contentsScale = view.window?.backingScaleFactor ?? 2
+            // 移除占位色块(图标直接显示在壁纸上)
+            iconLayer.backgroundColor = nil
             letterLayer.isHidden = true
         } else {
-            // 无图标: 保持占位
+            // 无图标: 保持占位(色块 + 首字母)
             iconLayer.contents = nil
             letterLayer.isHidden = false
         }

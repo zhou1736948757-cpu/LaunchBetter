@@ -11,13 +11,13 @@ import LaunchCore
 public enum AppDiscoveryService {
     /// 默认应用源目录。
     ///
-    /// 排除 /System/Applications(系统应用, 46 个, 用户一般不需要在自定义启动器中
-    /// 显示; 文档 §69 将其列为低优先级)。需要时可经自定义源加入。
+    /// 含 /System/Applications(用户要求显示系统应用; 其变更极少, §69 视为低优先级)。
     public static var defaultSources: [URL] {
         [
             URL(fileURLWithPath: "/Applications", isDirectory: true),
             FileManager.default.homeDirectoryForCurrentUser
                 .appendingPathComponent("Applications", isDirectory: true),
+            URL(fileURLWithPath: "/System/Applications", isDirectory: true),
         ]
     }
 

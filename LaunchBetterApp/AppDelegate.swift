@@ -49,6 +49,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 print("TOUCHWATCH 持续监听中, 请做四指捏合; Ctrl+C 或 kill 结束")
                 fflush(stdout)
             }
+        } else if CommandLine.arguments.contains("--perf") {
+            // 性能基线: 10 次 show/hide 循环(真实事件循环时序)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
+                guard let self, let controller = self.container?.windowController else {
+                    print("PERF FAIL")
+                    NSApp.terminate(nil)
+                    return
+                }
+                var cycle = 0
+                @MainActor func next() {
+                    guard cycle < 10 else {
+                        print("PERF done")
+                        NSApp.terminate(nil)
+                        return
+                    }
+                    cycle += 1
+                    controller.show()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak controller] in
+                        MainActor.assumeIsolated {
+                            controller?.hide()
+                        }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                            MainActor.assumeIsolated {
+                                next()
+                            }
+                        }
+                    }
+                }
+                MainActor.assumeIsolated {
+                    next()
+                }
+            }
         } else if CommandLine.arguments.contains("--smoke") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
                 self?.runSmokeDiagnostics()

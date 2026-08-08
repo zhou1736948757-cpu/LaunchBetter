@@ -136,22 +136,29 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
     public func show() {
         guard !visible else { return }
         visible = true
+        let showStart = CFAbsoluteTimeGetCurrent()
+        lastShowStart = showStart
         guard let window, let launcherWindow = window as? LauncherWindow else { return }
         launcherWindow.showOnScreen(containing: NSEvent.mouseLocation)
         // 语言可能已变更: 刷新本地化文案
         searchField.placeholderString = L10n.t(.searchPlaceholder)
         updateBackground(for: window)
         gridViewController.refresh()
+        let contentReady = CFAbsoluteTimeGetCurrent() - showStart
         window.alphaValue = 0
         window.makeKeyAndOrderFront(nil)
+        let orderedFront = CFAbsoluteTimeGetCurrent() - showStart
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.12
             window.animator().alphaValue = 1
         }
         window.makeFirstResponder(searchField)
+        if CommandLine.arguments.contains("--perf") {
+            print("PERF show contentReadyMs=\(String(format: "%.1f", contentReady * 1000)) orderedFrontMs=\(String(format: "%.1f", orderedFront * 1000))")
+        }
     }
 
-    /// 壁纸背景: 按当前屏幕渲染模糊壁纸(后台), 主线程应用(§62 模式)。
+    /// 壁纸背景: 内存命中同步应用(热显示零延迟), 否则后台渲染(§62 模式)。
     private func updateBackground(for window: NSWindow) {
         guard let provider = wallpaperProvider, let screen = window.screen else { return }
         let request = WallpaperProvider.RenderRequest(
@@ -159,15 +166,24 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
             backingScale: window.backingScaleFactor,
             blurRadius: 30
         )
+        if CommandLine.arguments.contains("--perf") {
+            print("PERF showRequest frame=\(screen.frame) scale=\(window.backingScaleFactor)")
+        }
         backgroundRequest = request
         // 布局层帧(屏幕变化时跟随)
         backgroundLayer.frame = window.contentView?.bounds ?? screen.frame
         dimLayer.frame = backgroundLayer.frame
 
+        if let cached = provider.cachedWallpaper(for: request) {
+            applyBackground(cached)
+            return
+        }
+
         Task.detached(priority: .userInitiated) { [weak self, weak provider] in
             guard let provider else { return }
             let image = provider.blurredWallpaper(for: request)
-            await MainActor.run {
+            // 每次显示仅一次主线程跳转(§88: 禁止每帧跳转, 此处是离散事件)
+            DispatchQueue.main.async {
                 guard let self, self.backgroundRequest == request else { return }
                 self.applyBackground(image)
             }
@@ -179,7 +195,13 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         CATransaction.setDisableActions(true)
         backgroundLayer.contents = image
         CATransaction.commit()
+        if CommandLine.arguments.contains("--perf") {
+            print("PERF wallpaperReadyMs=\(String(format: "%.1f", (CFAbsoluteTimeGetCurrent() - lastShowStart) * 1000))")
+        }
     }
+
+    private var lastShowStart: CFAbsoluteTime = 0
+    private var wallpaperShowCounter = 0
 
     public func hide() {
         guard visible else { return }

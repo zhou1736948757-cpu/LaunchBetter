@@ -87,6 +87,23 @@ public final class DependencyContainer {
         let wallpaperProvider = WallpaperProvider(
             cachesURL: cachesDir
         )
+        // 启动即后台预渲染壁纸(首显时直接命中缓存, 热启动 <100ms 目标)
+        if let mainScreen = NSScreen.main {
+            let prewarmRequest = WallpaperProvider.RenderRequest(
+                screenFrame: mainScreen.frame,
+                backingScale: mainScreen.backingScaleFactor,
+                blurRadius: 30
+            )
+            if CommandLine.arguments.contains("--perf") {
+                print("PERF prewarmRequest frame=\(mainScreen.frame) scale=\(mainScreen.backingScaleFactor)")
+            }
+            Task.detached(priority: .utility) { [weak wallpaperProvider] in
+                let image = wallpaperProvider?.blurredWallpaper(for: prewarmRequest)
+                if CommandLine.arguments.contains("--perf") {
+                    print("PERF prewarm image=\(image != nil)")
+                }
+            }
+        }
         let windowController = LauncherWindowController(
             store: store,
             iconProvider: iconAdapter,

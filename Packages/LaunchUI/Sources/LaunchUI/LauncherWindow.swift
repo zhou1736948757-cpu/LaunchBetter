@@ -25,9 +25,11 @@ public final class LauncherWindow: NSWindow {
             backing: .buffered,
             defer: false
         )
-        level = .floating
+        // 置顶层级: 与 legacy LaunchHistory 一致(screenSaver), 盖过 Dock 与系统面板
+        level = .screenSaver
         isOpaque = false
         backgroundColor = .clear
+        isReleasedWhenClosed = false
         collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
         animationBehavior = .none
     }
