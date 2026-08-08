@@ -198,11 +198,11 @@ final class GridViewController: NSViewController {
 
         switch item {
         case .app(let id):
-            let addItem = NSMenuItem(title: "加入文件夹", action: nil, keyEquivalent: "")
+            let addItem = NSMenuItem(title: L10n.t(.addToFolder), action: nil, keyEquivalent: "")
             let submenu = NSMenu()
             let folders = store.folderNames()
             if folders.isEmpty {
-                let empty = NSMenuItem(title: "(无文件夹)", action: nil, keyEquivalent: "")
+                let empty = NSMenuItem(title: L10n.t(.noFolders), action: nil, keyEquivalent: "")
                 empty.isEnabled = false
                 submenu.addItem(empty)
             } else {
@@ -217,21 +217,47 @@ final class GridViewController: NSViewController {
             menu.addItem(addItem)
 
             let newFolder = NSMenuItem(
-                title: "新建文件夹", action: #selector(createFolderWith(_:)), keyEquivalent: ""
+                title: L10n.t(.newFolder), action: #selector(createFolderWith(_:)), keyEquivalent: ""
             )
             newFolder.representedObject = id
             newFolder.target = self
             menu.addItem(newFolder)
+
+            menu.addItem(.separator())
+
+            let hide = NSMenuItem(
+                title: L10n.t(store.isHidden(id) ? .unhideApp : .hideApp),
+                action: #selector(toggleHidden(_:)), keyEquivalent: ""
+            )
+            hide.representedObject = id
+            hide.target = self
+            menu.addItem(hide)
+
+            let rename = NSMenuItem(
+                title: L10n.t(.renameApp), action: #selector(renameApp(_:)), keyEquivalent: ""
+            )
+            rename.representedObject = id
+            rename.target = self
+            menu.addItem(rename)
+
+            menu.addItem(.separator())
+
+            let trash = NSMenuItem(
+                title: L10n.t(.moveToTrash), action: #selector(moveToTrash(_:)), keyEquivalent: ""
+            )
+            trash.representedObject = id
+            trash.target = self
+            menu.addItem(trash)
         case .folder(let id, _):
             let rename = NSMenuItem(
-                title: "重命名…", action: #selector(renameFolder(_:)), keyEquivalent: ""
+                title: L10n.t(.rename), action: #selector(renameFolder(_:)), keyEquivalent: ""
             )
             rename.representedObject = id
             rename.target = self
             menu.addItem(rename)
 
             let dissolve = NSMenuItem(
-                title: "解散文件夹", action: #selector(dissolveFolder(_:)), keyEquivalent: ""
+                title: L10n.t(.dissolveFolder), action: #selector(dissolveFolder(_:)), keyEquivalent: ""
             )
             dissolve.representedObject = id
             dissolve.target = self
@@ -268,6 +294,29 @@ final class GridViewController: NSViewController {
     @objc private func dissolveFolder(_ sender: NSMenuItem) {
         guard let folderID = sender.representedObject as? FolderID else { return }
         store.dissolveFolder(folderID)
+    }
+
+    @objc private func toggleHidden(_ sender: NSMenuItem) {
+        guard let appID = sender.representedObject as? AppID else { return }
+        store.setHidden(appID, hidden: !store.isHidden(appID))
+    }
+
+    @objc private func renameApp(_ sender: NSMenuItem) {
+        guard let appID = sender.representedObject as? AppID else { return }
+        let name = promptForName(defaultValue: store.displayName(for: appID))
+        guard let name, !name.isEmpty else { return }
+        store.setCustomName(appID, name: name)
+    }
+
+    @objc private func moveToTrash(_ sender: NSMenuItem) {
+        guard let appID = sender.representedObject as? AppID else { return }
+        let alert = NSAlert()
+        alert.messageText = L10n.t(.moveToTrash)
+        alert.informativeText = "\(store.displayName(for: appID))?"
+        alert.addButton(withTitle: L10n.t(.ok))
+        alert.addButton(withTitle: L10n.t(.cancel))
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        store.moveToTrash(appID)
     }
 
     private func promptForName(defaultValue: String) -> String? {

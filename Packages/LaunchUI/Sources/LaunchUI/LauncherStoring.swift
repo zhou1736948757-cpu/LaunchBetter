@@ -70,4 +70,18 @@ public protocol LauncherStoring: AnyObject {
 
     /// 应用一次拖拽 drop(单次布局变更 + 单次结构更新, §57)。
     func applyDragDrop(_ mutation: LayoutTransaction.LayoutMutation)
+
+    // MARK: - Phase 9 功能
+
+    /// 隐藏/取消隐藏应用(持久配置, 显示过滤)。
+    func setHidden(_ appID: AppID, hidden: Bool)
+
+    /// 自定义显示名(持久配置; nil 清除)。
+    func setCustomName(_ appID: AppID, name: String?)
+
+    /// 移到废纸篓(卸载)。
+    func moveToTrash(_ appID: AppID)
+
+    /// 是否已隐藏。
+    func isHidden(_ appID: AppID) -> Bool
 }

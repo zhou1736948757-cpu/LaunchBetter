@@ -11,6 +11,7 @@ public final class DependencyContainer {
     public let windowController: LauncherWindowController
     public let directoryMonitor: DirectoryMonitor
     public let activationCoordinator: ActivationCoordinator
+    public let settingsController: SettingsWindowController
 
     public init() {
         let bundleID = Bundle.main.bundleIdentifier ?? "dev.launchbetter.LaunchBetter"
@@ -62,6 +63,8 @@ public final class DependencyContainer {
 
         self.store = store
         self.iconAdapter = iconAdapter
+        L10n.configure(language: store.config.language)
+        print("L10N configured lang=\(store.config.language) placeholder=\(L10n.t(.searchPlaceholder))")
 
         // FSEvents 增量目录监控(§69-72): 安装/删除/更新实时反映, 启动器显示仍零扫描。
         // 注入式回调(避免 NotificationCenter 胶水): 目录变化 → 增量对账 → 布局刷新
@@ -81,16 +84,31 @@ public final class DependencyContainer {
         self.directoryMonitor = directoryMonitor
 
         // 窗口控制器单实例(激活协调器与冒烟共享)
-        let windowController = LauncherWindowController(store: store, iconProvider: iconAdapter)
+        let wallpaperProvider = WallpaperProvider(
+            cachesURL: cachesDir
+        )
+        let windowController = LauncherWindowController(
+            store: store,
+            iconProvider: iconAdapter,
+            wallpaperProvider: wallpaperProvider
+        )
         self.windowController = windowController
 
-        // 激活: 四指手势 + 全局热键(§115)
+        // 激活: 四指手势 + 全局热键 + 热角(§115)
         let activation = ActivationCoordinator(
             windowController: windowController,
             gestureEngine: GestureCaptureEngine(),
             hotkey: GlobalHotkey()
         )
         activation.start()
+        // 设置变更即时生效(热键/热角/语言)
+        store.onConfigChange = { [weak activation] config in
+            activation?.reconfigure(with: config)
+        }
+        activation.reconfigure(with: store.config)
         self.activationCoordinator = activation
+
+        // 设置窗口
+        self.settingsController = SettingsWindowController(handler: store)
     }
 }

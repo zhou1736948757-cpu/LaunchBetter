@@ -1,5 +1,6 @@
 import AppKit
 import LaunchCore
+import LaunchUI
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -12,6 +13,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 全局热键/手势/热角属 Phase 8。
         container.windowController.show()
 
+        if let setLang = CommandLine.arguments.firstIndex(of: "--setlang") {
+            // 测试辅助: 用应用自身编码路径保存配置(验证真实持久化往返)
+            let value = CommandLine.arguments[setLang + 1]
+            var config = container?.store.config ?? AppConfiguration()
+            switch value {
+            case "english": config.language = .english
+            case "hans": config.language = .simplifiedChinese
+            case "hant": config.language = .traditionalChinese
+            default: config.language = .system
+            }
+            container?.store.save(config)
+            print("CONFIG saved lang=\(value)")
+        }
         if let screenshotPath = screenshotArgument() {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
                 self?.captureScreenshot(to: screenshotPath)
@@ -191,12 +205,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         mainMenu.addItem(appMenuItem)
         let appMenu = NSMenu()
         appMenu.addItem(
-            withTitle: "退出 LaunchBetter",
+            withTitle: L10n.t(.settings),
+            action: #selector(openSettings),
+            keyEquivalent: ","
+        )
+        appMenu.addItem(.separator())
+        appMenu.addItem(
+            withTitle: L10n.t(.quit),
             action: #selector(NSApplication.terminate(_:)),
             keyEquivalent: "q"
         )
         appMenuItem.submenu = appMenu
         NSApp.mainMenu = mainMenu
+    }
+
+    @objc private func openSettings() {
+        container?.settingsController.show()
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {

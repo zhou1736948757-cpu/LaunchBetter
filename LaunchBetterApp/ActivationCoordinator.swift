@@ -15,6 +15,7 @@ public final class ActivationCoordinator {
 
     private var gestureStatus: GestureCaptureEngine.Status = .unavailable
     private var permissionPromptShown = false
+    private var hotCornerMonitor: HotCornerMonitor?
 
     /// 冒烟/截图等非交互模式不弹窗。
     private var isInteractive: Bool {
@@ -24,6 +25,53 @@ public final class ActivationCoordinator {
             && !args.contains("--folders")
             && !args.contains("--screenshot")
             && !args.contains("--iconbench")
+    }
+
+    /// 按配置注册热键/热角(设置变更即时生效)。
+    public func reconfigure(with config: AppConfiguration) {
+        hotkey.stop()
+        if config.hotkey.enabled {
+            _ = hotkey.start(keyCode: config.hotkey.keyCode, modifiers: hotkeyModifiers(config.hotkey.modifiers))
+        }
+        reconfigureHotCorners(config.hotCorner)
+    }
+
+    private func hotkeyModifiers(_ modifiers: HotkeyModifiers) -> UInt32 {
+        var value: UInt32 = 0
+        if modifiers.contains(.command) { value |= 256 }
+        if modifiers.contains(.shift) { value |= 512 }
+        if modifiers.contains(.option) { value |= 2048 }
+        if modifiers.contains(.control) { value |= 4096 }
+        return value
+    }
+
+    private func reconfigureHotCorners(_ corners: HotCornerConfig) {
+        hotCornerMonitor?.stop()
+        hotCornerMonitor = nil
+        let hasAction = corners.topLeft != .none || corners.topRight != .none
+            || corners.bottomLeft != .none || corners.bottomRight != .none
+        guard hasAction else { return }
+        let monitor = HotCornerMonitor { [weak self] in
+            self?.hotCornerConfigSnapshot ?? corners
+        }
+        monitor.onAction = { [weak self] action in
+            Task { @MainActor in
+                self?.handleCornerAction(action)
+            }
+        }
+        monitor.start()
+        hotCornerMonitor = monitor
+    }
+
+    private var hotCornerConfigSnapshot: HotCornerConfig?
+
+    private func handleCornerAction(_ action: HotCornerAction) {
+        switch action {
+        case .none: break
+        case .showLauncher: windowController.show()
+        case .hideLauncher: windowController.hide()
+        case .toggleLauncher: windowController.toggle()
+        }
     }
 
     public init(
@@ -56,7 +104,7 @@ public final class ActivationCoordinator {
                 self?.windowController.toggle()
             }
         }
-        // 默认 Cmd+L(Carbon keyCode 37, cmd 修饰符 256); 设置化属 Phase 9
+        // 默认 Cmd+L(Carbon keyCode 37, cmd 修饰符 256); 设置变更经 reconfigure
         let registered = hotkey.start(keyCode: 37, modifiers: 256)
         print("ACTIVATION hotkey=Cmd+L registered=\(registered)")
 

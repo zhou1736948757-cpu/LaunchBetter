@@ -14,14 +14,18 @@ import LaunchUI
 /// 变更经 LayoutStore 应用并持久化,缓存同步后触发 onDataChange。
 /// 禁止: 每帧状态(拖拽/动画)进入本存储(§60)。
 @MainActor
-public final class LauncherStore: LauncherStoring {
+public final class LauncherStore: LauncherStoring, SettingsHandling {
     public var onDataChange: (() -> Void)?
+
+    /// 配置变更回调(热键/语言/热角即时生效接线)。
+    public var onConfigChange: ((AppConfiguration) -> Void)?
 
     private let catalogActor: AppCatalogActor
     private let layoutStore: LayoutStore
+    private let settingsStore: SettingsStore
     private var catalogSnapshot: CatalogSnapshot
     private var layout: LayoutSnapshot
-    private var config: AppConfiguration
+    public private(set) var config: AppConfiguration
     private var searchIndex = SearchIndex()
 
     public var searchQuery = "" {
@@ -44,7 +48,13 @@ public final class LauncherStore: LauncherStoring {
         self.layoutStore = layoutStore
         self.catalogSnapshot = initialSnapshot
         self.layout = initialLayout
-        self.config = (try? settingsStore.load()) ?? AppConfiguration()
+        do {
+            self.config = try settingsStore.load() ?? AppConfiguration()
+        } catch {
+            print("CONFIG load error: \(error)")
+            self.config = AppConfiguration()
+        }
+        self.settingsStore = settingsStore
 
         // 首帧: 用已恢复的快照构建显示模型(同步, 快照加载 < 10ms 目标)
         layout = LayoutReconciler.reconcile(
@@ -229,6 +239,59 @@ public final class LauncherStore: LauncherStoring {
             rebuildSearchIndex()
             onDataChange?()
         }
+    }
+
+    // MARK: - SettingsHandling
+
+    public func save(_ config: AppConfiguration) {
+        self.config = config
+        L10n.configure(language: config.language)
+        try? settingsStore.save(config)
+        rebuildSearchIndex()
+        onConfigChange?(config)
+        onDataChange?()
+    }
+
+    public var allApps: [(id: AppID, name: String)] {
+        catalogSnapshot.apps.map { ($0.id, displayName(for: $0.id)) }
+    }
+
+    // MARK: - Phase 9 功能
+
+    public func setHidden(_ appID: AppID, hidden: Bool) {
+        var newConfig = config
+        if hidden {
+            if !newConfig.hiddenAppIDs.contains(appID) {
+                newConfig.hiddenAppIDs.append(appID)
+            }
+        } else {
+            newConfig.hiddenAppIDs.removeAll { $0 == appID }
+        }
+        save(newConfig)
+    }
+
+    public func setCustomName(_ appID: AppID, name: String?) {
+        var newConfig = config
+        if let name, !name.isEmpty {
+            newConfig.customDisplayNames[appID] = name
+        } else {
+            newConfig.customDisplayNames.removeValue(forKey: appID)
+        }
+        save(newConfig)
+    }
+
+    public func moveToTrash(_ appID: AppID) {
+        guard let record = catalogSnapshot.app(with: appID) else { return }
+        NSWorkspace.shared.recycle([record.url]) { _, error in
+            if let error {
+                print("TRASH failed \(error)")
+            }
+        }
+        // 目录监控(FSEvents)会自动移除; 布局墓碑宽限期保护
+    }
+
+    public func isHidden(_ appID: AppID) -> Bool {
+        config.hiddenAppIDs.contains(appID)
     }
 
     // MARK: - 诊断

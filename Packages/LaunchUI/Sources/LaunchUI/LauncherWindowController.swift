@@ -1,5 +1,7 @@
 import AppKit
 import LaunchCore
+import LaunchPlatform
+import QuartzCore
 
 /// 启动器窗口控制器: 组装搜索栏 + 网格 + 窗口生命周期。
 ///
@@ -12,16 +14,25 @@ import LaunchCore
 public final class LauncherWindowController: NSWindowController, NSSearchFieldDelegate {
     private let store: any LauncherStoring
     private let iconProvider: (any IconImageProviding)?
+    private let wallpaperProvider: WallpaperProvider?
     private var gridViewController: GridViewController!
     private var folderViewController: FolderViewController?
     private let searchField = NSSearchField()
     private var dragController: DragController?
+    private var backgroundLayer = CALayer()
+    private var dimLayer = CALayer()
+    private var backgroundRequest: WallpaperProvider.RenderRequest?
 
     private var visible = false
 
-    public init(store: any LauncherStoring, iconProvider: (any IconImageProviding)?) {
+    public init(
+        store: any LauncherStoring,
+        iconProvider: (any IconImageProviding)?,
+        wallpaperProvider: WallpaperProvider? = nil
+    ) {
         self.store = store
         self.iconProvider = iconProvider
+        self.wallpaperProvider = wallpaperProvider
         let screen = NSScreen.main ?? NSScreen.screens[0]
         let window = LauncherWindow(screen: screen)
         super.init(window: window)
@@ -46,19 +57,13 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
             }
         }
         let root = NSView()
+        root.wantsLayer = true
 
-        let effectView = NSVisualEffectView()
-        effectView.material = .hudWindow
-        effectView.blendingMode = .behindWindow
-        effectView.state = .active
-        root.addSubview(effectView)
-        effectView.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            effectView.leadingAnchor.constraint(equalTo: root.leadingAnchor),
-            effectView.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-            effectView.topAnchor.constraint(equalTo: root.topAnchor),
-            effectView.bottomAnchor.constraint(equalTo: root.bottomAnchor),
-        ])
+        // 背景: 壁纸层 + 深色叠加层(§93; 无壁纸时保持深色)
+        backgroundLayer.contentsGravity = .resizeAspectFill
+        dimLayer.backgroundColor = NSColor.black.withAlphaComponent(0.35).cgColor
+        root.layer?.addSublayer(backgroundLayer)
+        root.layer?.addSublayer(dimLayer)
 
         let grid = GridViewController(store: store, iconProvider: iconProvider)
         grid.onOpenFolder = { [weak self] folderID in
@@ -96,7 +101,7 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         ])
 
         searchField.delegate = self
-        searchField.placeholderString = "搜索应用"
+        searchField.placeholderString = L10n.t(.searchPlaceholder)
         searchField.alignment = .center
         searchField.sendsSearchStringImmediately = true
         root.addSubview(searchField)
@@ -134,6 +139,9 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         visible = true
         guard let window, let launcherWindow = window as? LauncherWindow else { return }
         launcherWindow.showOnScreen(containing: NSEvent.mouseLocation)
+        // 语言可能已变更: 刷新本地化文案
+        searchField.placeholderString = L10n.t(.searchPlaceholder)
+        updateBackground(for: window)
         gridViewController.refresh()
         window.alphaValue = 0
         window.makeKeyAndOrderFront(nil)
@@ -142,6 +150,36 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
             window.animator().alphaValue = 1
         }
         window.makeFirstResponder(searchField)
+    }
+
+    /// 壁纸背景: 按当前屏幕渲染模糊壁纸(后台), 主线程应用(§62 模式)。
+    private func updateBackground(for window: NSWindow) {
+        guard let provider = wallpaperProvider, let screen = window.screen else { return }
+        let request = WallpaperProvider.RenderRequest(
+            screenFrame: screen.frame,
+            backingScale: window.backingScaleFactor,
+            blurRadius: 30
+        )
+        backgroundRequest = request
+        // 布局层帧(屏幕变化时跟随)
+        backgroundLayer.frame = window.contentView?.bounds ?? screen.frame
+        dimLayer.frame = backgroundLayer.frame
+
+        Task.detached(priority: .userInitiated) { [weak self, weak provider] in
+            guard let provider else { return }
+            let image = provider.blurredWallpaper(for: request)
+            await MainActor.run {
+                guard let self, self.backgroundRequest == request else { return }
+                self.applyBackground(image)
+            }
+        }
+    }
+
+    private func applyBackground(_ image: CGImage?) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        backgroundLayer.contents = image
+        CATransaction.commit()
     }
 
     public func hide() {

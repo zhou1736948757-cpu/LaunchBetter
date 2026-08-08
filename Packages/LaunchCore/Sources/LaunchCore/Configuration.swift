@@ -141,8 +141,8 @@ public struct HotkeyConfig: Codable, Sendable, Hashable {
     }
 }
 
-/// 热角动作。
-public enum HotCornerAction: Codable, Sendable, Hashable {
+/// 热角动作(String 编码, 可读持久化)。
+public enum HotCornerAction: String, Codable, Sendable, Hashable {
     case none
     case showLauncher
     case hideLauncher
