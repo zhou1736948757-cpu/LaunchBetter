@@ -1,6 +1,5 @@
 import AppKit
 import LaunchCore
-import LaunchPlatform
 import QuartzCore
 
 /// 启动器窗口控制器: 组装搜索栏 + 网格 + 窗口生命周期。
