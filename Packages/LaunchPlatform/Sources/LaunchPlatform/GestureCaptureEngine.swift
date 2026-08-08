@@ -51,7 +51,8 @@ public final class GestureCaptureEngine: @unchecked Sendable {
         }
         setStatus(registered > 0 ? .running : .unavailable)
 
-        // 输入监控权限检测: 3 秒无回调 → 提示(回调不会因权限到达)
+        // 输入监控权限检测: 启动后单次检查(3s 无回调 → waitingForPermission)。
+        // 之后的重查由设置界面触发(restart(), Phase 9), 不做周期轮询(性能)。
         let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
         timer.schedule(deadline: .now() + 3, leeway: .seconds(1))
         timer.setEventHandler { [weak self] in
@@ -103,6 +104,19 @@ public final class GestureCaptureEngine: @unchecked Sendable {
         if isRunning && !received {
             setStatus(.waitingForPermission)
         }
+    }
+
+    /// 重新注册设备(用户授权后调用)。
+    public func restart() {
+        lock.lock()
+        permissionWatchTimer?.cancel()
+        permissionWatchTimer = nil
+        let wrapper = multitouch
+        multitouch = nil
+        receivedAnyCallback = false
+        lock.unlock()
+        wrapper?.stopDevices()
+        start()
     }
 
     private func setStatus(_ newStatus: Status) {

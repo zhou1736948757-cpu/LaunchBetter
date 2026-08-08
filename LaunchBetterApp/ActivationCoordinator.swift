@@ -14,6 +14,17 @@ public final class ActivationCoordinator {
     private let hotkey: GlobalHotkey
 
     private var gestureStatus: GestureCaptureEngine.Status = .unavailable
+    private var permissionPromptShown = false
+
+    /// 冒烟/截图等非交互模式不弹窗。
+    private var isInteractive: Bool {
+        let args = CommandLine.arguments
+        return !args.contains("--smoke")
+            && !args.contains("--dragtest")
+            && !args.contains("--folders")
+            && !args.contains("--screenshot")
+            && !args.contains("--iconbench")
+    }
 
     public init(
         windowController: LauncherWindowController,
@@ -66,11 +77,29 @@ public final class ActivationCoordinator {
         gestureStatus = status
         switch status {
         case .waitingForPermission:
-            print("ACTIVATION 四指手势等待输入监控权限: 系统设置 → 隐私与安全性 → 输入监控 → 启用 LaunchBetter")
+            print("ACTIVATION 四指手势等待输入监控权限")
+            promptForPermissionIfNeeded()
         case .running:
             print("ACTIVATION 四指手势运行中")
         case .unavailable:
             print("ACTIVATION 四指手势不可用(框架/设备缺失)")
+        }
+    }
+
+    /// 未授权 → 弹窗请求, 可跳转系统设置(启动时单次, 重查放设置界面)。
+    private func promptForPermissionIfNeeded() {
+        guard !permissionPromptShown, isInteractive else { return }
+        permissionPromptShown = true
+        let alert = NSAlert()
+        alert.messageText = "需要输入监控权限"
+        alert.informativeText = "四指捏合手势需要“输入监控”权限才能工作。\n请点击“打开系统设置”,在 隐私与安全性 → 输入监控 中启用 LaunchBetter,然后回到应用。"
+        alert.addButton(withTitle: "打开系统设置")
+        alert.addButton(withTitle: "稍后")
+        let response = alert.runModal()
+        if response == .alertFirstButtonReturn {
+            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent") {
+                NSWorkspace.shared.open(url)
+            }
         }
     }
 
