@@ -21,14 +21,12 @@
 
 ## Current Phase
 
-Phase 9 (外围功能) — 完成(壁纸/本地化/设置/热角/隐藏/自定义名/卸载, 已提交 282a40b);
-Phase 10 预发布审计通过; 等待用户完成两个关口
+**Phase 10 完成 — v0.1.0 公开发布(600e4d4 + v0.1.0 tag)**
 
 ## Current Task
 
-**关口 A**: 用户授予输入监控权限 + 退出旧版 LaunchHistory → 四指手势实测 → 发布门 → 转公开
-**关口 B**: 用户提供 Apple Developer 签名/公证凭据 → 正式分发签名
-(其余工作已完成)
+- 剩余: 正式签名分发(需用户 Apple 凭据, 可选)
+- 打磨项: 长名标签断行、文件夹图标区分、磁盘缓存上限策略、120Hz 复测
 
 ## Current Branch
 
@@ -116,15 +114,16 @@ main
 
 ## GitHub / Release Status
 
-- 仓库: github.com/zhou1736948757-cpu/LaunchBetter (PRIVATE)
-- 计划: 通过 Minimum Usable Release Gate 后转 PUBLIC (已授权), 首个版本 v0.1.0
-- 预发布审计清单: secret scan / credential scan / .gitignore / 许可来源 / build+test / README / 历史合理性
+- 仓库: github.com/zhou1736948757-cpu/LaunchBetter (**PUBLIC**)
+- **v0.1.0 已发布**: https://github.com/zhou1736948757-cpu/LaunchBetter/releases/tag/v0.1.0
+- 预发布审计通过: secret scan 干净 / 无硬编码私密路径 / 182 测试全绿 / GPL-3.0 就位
+- 四指手势实测通过(用户验证), 触点帧开销 1-6μs/帧
 
 ## Next Actions
 
-1. **等待用户**: 授予输入监控权限 + 退出旧版 → 手势实测 → 发布门 → 转公开 + v0.1.0
-2. **等待用户**: Apple 签名凭据(若要求正式分发)
-3. 剩余打磨: 长名标签断行优化、文件夹图标区分、磁盘缓存上限策略、120Hz 复测
+1. **可选**: 用户提供 Apple 签名/公证凭据 → 正式分发 v0.1.1
+2. 打磨项: 长名标签断行优化、文件夹图标区分、磁盘缓存上限策略、120Hz 显示器复测
+3. Phase 9 遗留: 设置界面壁纸开关接入 WallpaperProvider
 
 ## Last Updated
 
