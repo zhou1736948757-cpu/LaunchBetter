@@ -21,11 +21,11 @@
 
 ## Current Phase
 
-Phase 4 (Icon Pipeline) — 完成(提交 5ff991d),142 测试通过,评审修复已落实,进入 Phase 5
+Phase 6 (Drag Engine) — 完成,拖拽全链路验证,评审修复已落实,待提交并进入 Phase 7
 
 ## Current Task
 
-Phase 5 持久布局 + 文件夹系统: LayoutStore 应用 LayoutMutation、LayoutSnapshot 持久化、文件夹创建/重命名/解散、墓碑、重启持久性
+Phase 7 FSEvents 增量目录: DirectoryMonitor/scope 监控/.app 折叠/去抖/scoped reconcile/事件丢失恢复
 
 ## Current Branch
 
@@ -33,7 +33,7 @@ main
 
 ## Last Known Good Commit
 
-5ff991d (Phase 4)
+6f24cb2 (Phase 5 + 标签修复);Phase 6 提交待创建
 
 ## Completed Milestones
 
@@ -119,10 +119,10 @@ main
 
 ## Next Actions
 
-1. 提交并推送 Phase 4 (图标管道 + 评审修复)
-2. Phase 5: 持久布局 + 文件夹系统(LayoutStore 应用 LayoutMutation、
-   LayoutSnapshot 持久化、文件夹创建/重命名/解散、墓碑、重启持久性)
-3. Phase 6: 拖拽引擎
+1. 提交并推送 Phase 6 (拖拽引擎 + Luna Max 评审修复)
+2. Phase 7: FSEvents 增量目录
+3. Phase 8: Multitouch + 全局激活 + Minimum Usable Release Gate
+4. Phase 9/10: 外围功能 + 分发公开发布
 
 ## Last Updated
 

@@ -24,6 +24,20 @@ final class GridViewController: NSViewController {
     /// 点击文件夹时回调(打开文件夹视图)。
     var onOpenFolder: ((FolderID) -> Void)?
 
+    /// 拖拽控制(由窗口控制器注入)。
+    var dragController: DragController?
+
+    /// 集合视图(拖拽/诊断用)。首次访问触发 view 加载。
+    var collectionViewRef: NSCollectionView {
+        if collectionView == nil {
+            _ = view
+        }
+        return collectionView
+    }
+
+    /// 槽位步进(图标 + 间距), 预览变换位移量。
+    var slotStep: CGFloat { 96 + 28 }
+
     init(store: any LauncherStoring, iconProvider: (any IconImageProviding)?) {
         self.store = store
         self.iconProvider = iconProvider
@@ -277,6 +291,104 @@ final class GridViewController: NSViewController {
     func diagnostics() -> String {
         let snapshot = dataSource.snapshot()
         return "sections=\(snapshot.numberOfSections) items=\(snapshot.itemIdentifiers.count) pageCount=\(pageCount) search=\(searchMode)"
+    }
+
+    // MARK: - 拖拽辅助
+
+    /// 扁平显示索引(所有页面槽位)。
+    func flatIndex(of item: Item) -> Int? {
+        var flat = 0
+        let snapshot = dataSource.snapshot()
+        for section in 0..<snapshot.numberOfSections {
+            for element in snapshot.itemIdentifiers(inSection: section) {
+                if element == item {
+                    return flat
+                }
+                flat += 1
+            }
+        }
+        return nil
+    }
+
+    /// 扁平索引 → IndexPath。
+    func indexPath(atFlatIndex index: Int) -> IndexPath? {
+        var flat = 0
+        let snapshot = dataSource.snapshot()
+        for section in 0..<snapshot.numberOfSections {
+            let items = snapshot.itemIdentifiers(inSection: section)
+            if index < flat + items.count {
+                return IndexPath(item: index - flat, section: section)
+            }
+            flat += items.count
+        }
+        return nil
+    }
+
+    /// 单元格(可见时)。
+    func cellView(at path: IndexPath) -> NSCollectionViewItem? {
+        collectionView.item(at: path)
+    }
+
+    /// 光标 → 拖拽目的地(显示空间 page/slot)。
+    func dragDestination(from point: NSPoint) -> LayoutTransaction.Destination {
+        let local = collectionView.convert(point, from: nil)
+        let bounds = collectionView.bounds
+        guard bounds.width > 0 else { return LayoutTransaction.Destination(page: 0, slot: 0) }
+        let page = min(max(0, Int(floor(local.x / bounds.width))), max(0, pageCount - 1))
+        return LayoutTransaction.Destination(page: page, slot: slot(at: local))
+    }
+
+    /// 光标所在槽位(页内)。
+    private func slot(at local: NSPoint) -> Int {
+        let bounds = collectionView.bounds
+        let columns = store.gridColumns
+        let rows = store.gridRows
+        let itemSize: CGFloat = 96
+        let spacing: CGFloat = 28
+        let gridWidth = CGFloat(columns) * itemSize + CGFloat(columns - 1) * spacing
+        let gridHeight = CGFloat(rows) * itemSize + CGFloat(rows - 1) * spacing
+        let startX = (bounds.width - gridWidth) / 2
+        let startY = (bounds.height - gridHeight) / 2
+        let pageOffset = floor(local.x / bounds.width) * bounds.width
+        let col = Int(floor((local.x - pageOffset - startX) / (itemSize + spacing)))
+        let row = Int(floor((local.y - startY) / (itemSize + spacing)))
+        let clampedCol = min(max(0, col), columns - 1)
+        let clampedRow = min(max(0, row), rows - 1)
+        return clampedRow * columns + clampedCol
+    }
+
+    /// 光标处的显示项(拖拽源/文件夹悬停)。
+    func itemAt(point: NSPoint) -> Item? {
+        let local = collectionView.convert(point, from: nil)
+        guard let indexPath = collectionView.indexPathForItem(at: local) else { return nil }
+        return dataSource.itemIdentifier(for: indexPath)
+    }
+
+    /// 全部显示项(冒烟诊断)。
+    func allItems() -> [Item] {
+        let snapshot = dataSource.snapshot()
+        return snapshot.itemIdentifiers
+    }
+
+    /// 光标悬停的文件夹(移入文件夹目标)。
+    func hoveredFolder(at point: NSPoint) -> FolderID? {
+        let local = collectionView.convert(point, from: nil)
+        guard let indexPath = collectionView.indexPathForItem(at: local),
+              let item = dataSource.itemIdentifier(for: indexPath),
+              case .folder(let id, _) = item else {
+            return nil
+        }
+        return id
+    }
+
+    /// overlay 层级(拖拽图标)。
+    func addOverlayLayer(_ layer: CALayer) {
+        if !view.wantsLayer { view.wantsLayer = true }
+        view.layer?.addSublayer(layer)
+    }
+
+    func removeOverlayLayer(_ layer: CALayer) {
+        layer.removeFromSuperlayer()
     }
 }
 

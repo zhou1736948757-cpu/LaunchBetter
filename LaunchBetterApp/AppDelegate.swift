@@ -62,7 +62,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         print("SMOKE window [\(windowController.diagnostics())]")
 
-        // 文件夹流程: 创建 → 重命名 → 加入 → 解散(链式, 经 LayoutStore 异步持久化)
+        // 拖拽引擎: 程序化驱动 beginDrag → updateDrag ×N → endDrag(真实代码路径)
+        if CommandLine.arguments.contains("--dragtest") {
+            let semaphore = DispatchSemaphore(value: 0)
+            store.onDataChange = { semaphore.signal() }
+            let items = windowController.dragTestItems()
+            guard let first = items.first else {
+                print("SMOKE dragtest=SKIPPED empty")
+                finishSmoke(store: store)
+                return
+            }
+            let orderBefore = store.displayModel().flatSlots.map(String.init(describing:))
+            // 目标点: 窗口中心偏右(模拟拖到末尾)
+            let targetPoint = NSPoint(x: 900, y: 400)
+            windowController.dragTestBegin(item: first, at: targetPoint)
+            for i in 0..<20 {
+                windowController.dragTestUpdate(at: NSPoint(x: 700 + CGFloat(i) * 15, y: 400))
+            }
+            windowController.dragTestEnd(at: targetPoint)
+            DispatchQueue.global().async { [weak self, weak store] in
+                _ = semaphore.wait(timeout: .now() + 5)
+                DispatchQueue.main.async {
+                    guard let store else { return }
+                    let orderAfter = store.displayModel().flatSlots.map(String.init(describing:))
+                    let changed = orderBefore != orderAfter
+                    print("SMOKE dragtest=OK changed=\(changed) items=\(orderAfter.count)")
+                    self?.finishSmoke(store: store)
+                }
+            }
+            return
+        }
+
         if CommandLine.arguments.contains("--folders") {
             let visible = display.flatSlots
             let apps = visible.compactMap { item -> AppID? in

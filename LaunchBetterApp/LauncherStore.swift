@@ -216,6 +216,10 @@ public final class LauncherStore: LauncherStoring {
         return folder.children.filter { !missing.contains($0) && !hidden.contains($0) }
     }
 
+    public func applyDragDrop(_ mutation: LayoutTransaction.LayoutMutation) {
+        performLayoutMutation(mutation)
+    }
+
     // MARK: - 诊断
 
     /// 冒烟诊断辅助。

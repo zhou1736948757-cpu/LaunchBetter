@@ -15,6 +15,7 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
     private var gridViewController: GridViewController!
     private var folderViewController: FolderViewController?
     private let searchField = NSSearchField()
+    private var dragController: DragController?
 
     private var visible = false
 
@@ -53,6 +54,24 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
             self?.openFolder(folderID)
         }
         gridViewController = grid
+
+        // 拖拽引擎: 网格鼠标事件 → DragController(经样本缓冲/帧协调器)
+        let dragController = DragController(grid: grid, store: store)
+        self.dragController = dragController
+        grid.dragController = dragController
+        if let collectionView = grid.collectionViewRef as? ClickableCollectionView {
+            collectionView.onDragBegin = { [weak dragController] point in
+                guard let dragController, let item = grid.itemAt(point: point) else { return }
+                dragController.beginDrag(item: item, at: point)
+            }
+            collectionView.onDragMove = { [weak dragController] point in
+                dragController?.updateDrag(at: point)
+            }
+            collectionView.onDragEnd = { [weak dragController] point in
+                dragController?.endDrag(at: point)
+            }
+        }
+
         root.addSubview(grid.view)
         grid.view.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
@@ -114,6 +133,8 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
     public func hide() {
         guard visible else { return }
         visible = false
+        // M4: 隐藏时终止拖拽(display link/overlay 清理)
+        dragController?.shutdown()
         iconProvider?.trimMemoryForHidden()
         guard let window else { return }
         store.searchQuery = ""
@@ -164,6 +185,23 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
     /// 确定性诊断(冒烟验证用)。
     public func diagnostics() -> String {
         "window=\(isVisible) grid[\(gridViewController?.diagnostics() ?? "nil")]"
+    }
+
+    /// 冒烟诊断: 拖拽测试 API(公开, 数据均为 LaunchCore 公开类型)。
+    public func dragTestItems() -> [DisplayModel.DisplayItem] {
+        gridViewController?.allItems() ?? []
+    }
+
+    public func dragTestBegin(item: DisplayModel.DisplayItem, at point: NSPoint) {
+        gridViewController?.dragController?.beginDrag(item: item, at: point)
+    }
+
+    public func dragTestUpdate(at point: NSPoint) {
+        gridViewController?.dragController?.updateDrag(at: point)
+    }
+
+    public func dragTestEnd(at point: NSPoint) {
+        gridViewController?.dragController?.endDrag(at: point)
     }
 
     // MARK: - 键盘

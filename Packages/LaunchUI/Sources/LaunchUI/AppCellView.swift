@@ -34,12 +34,12 @@ final class AppCellView: NSCollectionViewItem {
 
         label.alignment = .center
         label.font = .systemFont(ofSize: 10)
-        label.lineBreakMode = .byTruncatingTail
+        label.lineBreakMode = .byWordWrapping
         label.maximumNumberOfLines = 2
         label.textColor = .white
         label.shadow = NSShadow()
-        label.shadow?.shadowColor = NSColor.black.withAlphaComponent(0.6)
-        label.shadow?.shadowBlurRadius = 2
+        label.shadow?.shadowColor = NSColor.black.withAlphaComponent(0.85)
+        label.shadow?.shadowBlurRadius = 4
         label.shadow?.shadowOffset = NSSize(width: 0, height: -1)
         root.addSubview(label)
         label.translatesAutoresizingMaskIntoConstraints = false
@@ -69,6 +69,8 @@ final class AppCellView: NSCollectionViewItem {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         iconLayer.contents = nil
+        // M3: 复用强制恢复 identity(防止拖拽预览变换污染)
+        view.layer?.transform = CATransform3DIdentity
         CATransaction.commit()
     }
 

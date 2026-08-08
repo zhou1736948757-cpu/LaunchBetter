@@ -67,4 +67,7 @@ public protocol LauncherStoring: AnyObject {
 
     /// 文件夹可见子项(供文件夹视图)。
     func folderChildren(_ id: FolderID) -> [AppID]?
+
+    /// 应用一次拖拽 drop(单次布局变更 + 单次结构更新, §57)。
+    func applyDragDrop(_ mutation: LayoutTransaction.LayoutMutation)
 }
