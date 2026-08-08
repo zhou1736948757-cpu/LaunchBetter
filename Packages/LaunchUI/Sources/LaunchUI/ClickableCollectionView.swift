@@ -8,6 +8,9 @@ import LaunchCore
 /// - 分页文档: 宽度锁定(NSClipView 滚动时会约束文档视图宽度, 导致分页失效)
 @MainActor
 final class ClickableCollectionView: NSCollectionView {
+    /// 必须 flipped(y-down): 非 flipped 文档视图垂直滚动时 bounds.origin 不同步,
+    /// 单元格可见区计算错误 → 滚动后内容消失(搜索模式实测证据, Stage 1 §11)。
+    override var isFlipped: Bool { true }
     var onClick: ((NSPoint) -> Void)?
     var onContextMenu: ((NSPoint) -> NSMenu?)?
     var onDragBegin: ((NSPoint) -> Void)?
@@ -23,6 +26,19 @@ final class ClickableCollectionView: NSCollectionView {
         if frame.width != width {
             frame.size.width = width
         }
+    }
+
+    /// 设置文档尺寸: 宽度锁定(分页防 NSClipView 收缩), 高度按需(搜索溢出时垂直滚动)。
+    func setDocumentSize(_ size: NSSize) {
+        lockedDocumentWidth = size.width
+        if frame.size != size {
+            frame.size = size
+        }
+    }
+
+    /// 解除文档宽度锁定(模式切换时恢复弹性)。
+    func unlockDocumentWidth() {
+        lockedDocumentWidth = 0
     }
 
     override func setFrameSize(_ newSize: NSSize) {

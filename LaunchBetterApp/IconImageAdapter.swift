@@ -18,7 +18,10 @@ public final class IconImageAdapter: IconImageProviding {
     }
 
     public func icon(for appID: AppID, pointSize: Int, scale: Int) async -> CGImage? {
-        guard let version = store?.iconContentVersion(for: appID) else { return nil }
+        guard let version = store?.iconContentVersion(for: appID) else {
+            if CommandLine.arguments.contains("--searchprobe") { print("ICONDIAG storeNil") }
+            return nil
+        }
         let key = IconKey(
             appID: appID,
             pointSize: pointSize,

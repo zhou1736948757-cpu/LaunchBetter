@@ -10,6 +10,9 @@ import QuartzCore
 ///
 /// Drop: LayoutTransaction.drop 一次计算 → 一次布局变更 → 一次结构更新。
 /// 生命周期: 由窗口控制器在 hide/关闭时调用 shutdown()(M4)。
+///
+/// 几何(Stage 1, P0): 全部走 GridGeometry —— 页宽 = clip 可视宽;边缘翻页用
+/// 当前页可视 rect;预览变换用源/目标 frame 的二维差值(跨行/跨页正确)。
 @MainActor
 final class DragController {
     enum State: Equatable {
@@ -34,6 +37,8 @@ final class DragController {
     private var lastKnownPoint: CGPoint?
     private var sessionID = UUID()
     private var plainLabel = ""
+    /// 拖拽开始时的显示修订(外部变化陈旧防护, 评审 M7)。
+    private var dragStartRevision: UInt64 = 0
 
     init(grid: GridViewController, store: any LauncherStoring) {
         self.grid = grid
@@ -47,11 +52,12 @@ final class DragController {
     /// 开始拖拽(已通过阈值判定)。
     func beginDrag(item: DisplayModel.DisplayItem, at point: NSPoint) {
         guard state == .idle else { return }
-        guard let grid, let sourceIndex = grid.flatIndex(of: item) else { return }
+        guard let grid, !grid.isSearchMode, let sourceIndex = grid.flatIndex(of: item) else { return }
         state = .dragging
         sourceItem = item
         self.sourceIndex = sourceIndex
         displayAtDragStart = store.displayModel()
+        dragStartRevision = store.displayRevision
         lastEdgeAdvance = 0
         lastKnownPoint = point
         sessionID = UUID()
@@ -62,9 +68,10 @@ final class DragController {
         case .folder(let id, _):
             plainLabel = store.folderName(for: id)
         }
-        overlay.configure(label: plainLabel)
+        // 复用源单元格已显示的图标(零磁盘 IO, Stage 1 §23-24)
+        overlay.configure(label: plainLabel, sourceImage: grid.visibleIconImage(for: item))
         grid.addOverlayLayer(overlay.layer)
-        overlay.move(to: point, in: grid.collectionViewRef)
+        overlay.move(to: point, in: grid.view)
 
         let coordinator = FrameCoordinator(
             view: grid.collectionViewRef, buffer: sampleBuffer, session: sessionID
@@ -86,6 +93,11 @@ final class DragController {
     /// 结束拖拽: 计算 drop 并应用一次结构更新。
     func endDrag(at point: NSPoint) {
         guard state == .dragging, let item = sourceItem else {
+            cancelDrag()
+            return
+        }
+        // 拖拽期间目录/布局/配置变化 → 陈旧 drop 防护: 取消拖拽(评审 M7)
+        if store.displayRevision != dragStartRevision {
             cancelDrag()
             return
         }
@@ -126,6 +138,7 @@ final class DragController {
         sourceItem = nil
         displayAtDragStart = nil
         lastKnownPoint = nil
+        dragStartRevision = 0
     }
 
     private func source(from item: DisplayModel.DisplayItem) -> LayoutTransaction.Source {
@@ -162,8 +175,10 @@ final class DragController {
             return false
         }()
 
-        // 所有分支统一更新 overlay 位置(m1 修复)
-        overlay.move(to: point, in: grid?.collectionViewRef ?? NSCollectionView())
+        // 所有分支统一更新 overlay 位置(m1 修复); 父视图 = 网格容器(视口坐标)
+        if let grid {
+            overlay.move(to: point, in: grid.view)
+        }
 
         if isFolderTarget, let folder = grid?.hoveredFolder(at: point) {
             overlay.showFolderTarget(folder, store: store)
@@ -183,39 +198,52 @@ final class DragController {
         applyPreviewTransforms(gapIndex: preview.gapIndex)
     }
 
+    /// 边缘翻页: 使用当前可视页 rect(非文档宽度), 并考虑当前页边界(Stage 1 §25)。
+    /// 只在指针位于当前页内时判定边缘, 防止翻页后指针落在前一页边缘造成来回振荡(§26)。
     private func maybeAdvancePage(_ point: NSPoint) {
         guard let grid else { return }
         let collectionView = grid.collectionViewRef
         let local = collectionView.convert(point, from: nil)
-        let width = collectionView.bounds.width
+        let pageRect = grid.currentPageRect
+        guard pageRect.width > 0 else { return }
         let edge: CGFloat = 60
         let now = CACurrentMediaTime()
         guard now - lastEdgeAdvance > 0.4 else { return }
-        if local.x < edge {
+        let atLeftEdge = local.x >= pageRect.minX && local.x < pageRect.minX + edge
+        let atRightEdge = local.x <= pageRect.maxX && local.x > pageRect.maxX - edge
+        if atLeftEdge {
             grid.previousPage()
             lastEdgeAdvance = now
-        } else if local.x > width - edge {
+        } else if atRightEdge {
             grid.nextPage()
             lastEdgeAdvance = now
         }
     }
 
-    /// 预览变换: 源项与 gap 之间的直接项整体平移一个槽位。
+    /// 预览变换: 源项与 gap 之间的项整体移动一个槽位。
+    /// 二维实现: 每项从当前 frame 移到相邻槽位 frame, dx/dy 由几何差值给出
+    /// (跨行/跨页正确, Stage 1 §20-21)。
+    /// 预览变换: 源项与 gap 之间的项整体移动一个槽位。
+    /// 区间 = [min(source, gap), max(source, gap) - 1](评审 M5: 含 gap 处被挤动项)。
     private func applyPreviewTransforms(gapIndex: Int) {
         resetTransforms()
         guard sourceIndex != gapIndex else { return }
-        let lower = min(sourceIndex, gapIndex) + 1
+        let lower = min(sourceIndex, gapIndex)
         let upper = max(sourceIndex, gapIndex) - 1
         guard lower <= upper, let grid else { return }
-        let direction: CGFloat = sourceIndex < gapIndex ? -1 : 1
-        let step = grid.slotStep
+        let step: Int = sourceIndex < gapIndex ? -1 : 1
 
         for index in lower...upper {
             guard let path = grid.indexPath(atFlatIndex: index),
                   let cell = grid.cellView(at: path) else { continue }
-            cell.view.layer?.transform = CATransform3DMakeTranslation(
-                direction * step, 0, 0
-            )
+            let target = index + step
+            guard target >= 0 else { continue }
+            let sourceFrame = grid.frame(atFlatIndex: index)
+            let targetFrame = grid.frame(atFlatIndex: target)
+            let dx = targetFrame.minX - sourceFrame.minX
+            let dy = targetFrame.minY - sourceFrame.minY
+            guard dx != 0 || dy != 0 else { continue }
+            cell.view.layer?.transform = CATransform3DMakeTranslation(dx, dy, 0)
             transformedPaths.insert(path)
         }
     }
@@ -233,7 +261,7 @@ final class DragController {
     }
 }
 
-/// 拖拽 overlay: 跟随光标的图标层 + 文件夹目标提示。
+/// 拖拽 overlay: 跟随光标的真实图标层 + 文件夹目标提示。
 @MainActor
 final class DragOverlayLayer {
     let layer = CALayer()
@@ -248,6 +276,7 @@ final class DragOverlayLayer {
         iconLayer.cornerRadius = 16
         iconLayer.masksToBounds = true
         iconLayer.frame = layer.bounds
+        iconLayer.contentsGravity = .resizeAspect
         labelLayer.fontSize = 11
         labelLayer.alignmentMode = .center
         labelLayer.foregroundColor = NSColor.white.cgColor
@@ -257,14 +286,22 @@ final class DragOverlayLayer {
         layer.isHidden = true
     }
 
-    func configure(label: String) {
-        iconLayer.backgroundColor = NSColor.systemGray.cgColor
+    /// 配置 overlay: 复用源单元格已渲染图标(零磁盘 IO), 无图标时保留占位。
+    func configure(label: String, sourceImage: CGImage?) {
+        if let sourceImage {
+            iconLayer.contents = sourceImage
+            iconLayer.backgroundColor = nil
+        } else {
+            iconLayer.contents = nil
+            iconLayer.backgroundColor = NSColor.systemGray.cgColor
+        }
         labelLayer.string = label
         layer.isHidden = false
     }
 
-    func move(to point: NSPoint, in collectionView: NSCollectionView) {
-        let local = collectionView.convert(point, from: nil)
+    /// 位置必须转 overlay 挂载父视图(视口)坐标 —— 分页滚动后 document 坐标含页偏移(评审 M6)。
+    func move(to point: NSPoint, in container: NSView) {
+        let local = container.convert(point, from: nil)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         layer.position = CGPoint(x: local.x, y: local.y - 60)
@@ -282,7 +319,6 @@ final class DragOverlayLayer {
     func showPlain(label: String) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        iconLayer.backgroundColor = NSColor.systemGray.cgColor
         labelLayer.string = label
         CATransaction.commit()
     }

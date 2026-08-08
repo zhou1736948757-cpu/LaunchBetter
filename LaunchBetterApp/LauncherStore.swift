@@ -30,12 +30,23 @@ public final class LauncherStore: LauncherStoring, SettingsHandling {
 
     public var searchQuery = "" {
         didSet {
-            // 搜索只碰内存索引(§95)
+            // 搜索只碰内存索引(§95); 值未变化不 bump(避免 hide/show 无意义刷新, 评审 M8)
+            if searchQuery != oldValue {
+                bumpRevision()
+            }
         }
     }
 
     public var gridColumns: Int { config.gridColumns }
     public var gridRows: Int { config.gridRows }
+    public var iconSize: Int { config.iconSize }
+
+    /// 显示修订号: 目录/布局/配置/搜索任一变化即递增(Stage 1 §30)。
+    public private(set) var displayRevision: UInt64 = 0
+
+    private func bumpRevision() {
+        displayRevision &+= 1
+    }
 
     public init(
         catalogActor: AppCatalogActor,
@@ -102,6 +113,7 @@ public final class LauncherStore: LauncherStoring, SettingsHandling {
             refreshLayoutFromStore()
         }
         rebuildSearchIndex()
+        bumpRevision()
         onDataChange?()
     }
 
@@ -110,6 +122,7 @@ public final class LauncherStore: LauncherStoring, SettingsHandling {
             guard let self else { return }
             layout = await layoutStore.currentLayout()
             rebuildSearchIndex()
+            bumpRevision()
             onDataChange?()
         }
     }
@@ -124,6 +137,7 @@ public final class LauncherStore: LauncherStoring, SettingsHandling {
             if await layoutStore.apply(mutation, display: display) {
                 layout = await layoutStore.currentLayout()
                 rebuildSearchIndex()
+                bumpRevision()
                 onDataChange?()
             }
         }
@@ -184,6 +198,7 @@ public final class LauncherStore: LauncherStoring, SettingsHandling {
             if await layoutStore.createFolder(display: display, name: name, appIDs: appIDs) != nil {
                 layout = await layoutStore.currentLayout()
                 rebuildSearchIndex()
+                bumpRevision()
                 onDataChange?()
             }
         }
@@ -194,6 +209,7 @@ public final class LauncherStore: LauncherStoring, SettingsHandling {
             guard let self else { return }
             if await layoutStore.renameFolder(id, to: name) {
                 layout = await layoutStore.currentLayout()
+                bumpRevision()
                 onDataChange?()
             }
         }
@@ -206,6 +222,7 @@ public final class LauncherStore: LauncherStoring, SettingsHandling {
             if await layoutStore.dissolveFolder(display: display, id: id) {
                 layout = await layoutStore.currentLayout()
                 rebuildSearchIndex()
+                bumpRevision()
                 onDataChange?()
             }
         }
@@ -237,6 +254,7 @@ public final class LauncherStore: LauncherStoring, SettingsHandling {
             catalogSnapshot = await catalogActor.currentSnapshot()
             layout = await layoutStore.reconcile(catalog: catalogSnapshot, now: Date())
             rebuildSearchIndex()
+            bumpRevision()
             onDataChange?()
         }
     }
@@ -248,6 +266,7 @@ public final class LauncherStore: LauncherStoring, SettingsHandling {
         L10n.configure(language: config.language)
         try? settingsStore.save(config)
         rebuildSearchIndex()
+        bumpRevision()
         onConfigChange?(config)
         onDataChange?()
     }

@@ -8,19 +8,46 @@ import LaunchCore
 /// - 复用时: 取消消费者任务、清除 represented ID、恢复占位
 /// - 结果应用条件: 任务未取消 AND representedAppID 仍等于期望 ID
 /// - 消费者取消不杀死共享图标任务(§81)
+///
+/// 几何(Stage 1, P0):
+/// - 图标显示尺寸 = configure 传入的 pointSize(与 IconKey 请求一致)
+/// - 标签位置由 (cellBounds, iconSize, labelHeight) 统一计算, 无魔数
 final class AppCellView: NSCollectionViewItem {
     static let identifier = NSUserInterfaceItemIdentifier("AppCellView")
+
+    /// 标签高度(pt)。
+    private static let labelHeight: CGFloat = 13
 
     private let iconLayer = CALayer()
     private let label = NSTextField(labelWithString: "")
     private let letterLayer = CATextLayer()
+    private var labelBottomConstraint: NSLayoutConstraint?
 
     private var representedAppID: AppID?
     private var iconRequestTask: Task<Void, Never>?
     private var iconProvider: (any IconImageProviding)?
 
+    /// 当前配置的图标点尺寸(与 IconKey 请求一致)。
+    private var iconPointSize: Int = 80
+    private var lastRequestedScale = 0
+
+    /// 源单元格当前显示的图标(拖拽 overlay 复用, 零磁盘 IO)。
+    var visibleIconImage: CGImage? {
+        guard let contents = iconLayer.contents else { return nil }
+        return contents as! CGImage
+    }
+
+    /// 诊断: 是否已显示真实图标(contents 非空)。
+    var hasRealIcon: Bool { iconLayer.contents != nil }
+
     override func loadView() {
-        let root = NSView()
+        let root = CellRootView()
+        root.onWindowChange = { [weak self] in
+            self?.reRequestIconIfScaleChanged()
+        }
+        root.onScreenChange = { [weak self] in
+            self?.reRequestIconIfScaleChanged()
+        }
         root.wantsLayer = true
         iconLayer.cornerRadius = 16
         iconLayer.masksToBounds = true
@@ -43,12 +70,12 @@ final class AppCellView: NSCollectionViewItem {
         label.shadow?.shadowOffset = NSSize(width: 0, height: -1)
         root.addSubview(label)
         label.translatesAutoresizingMaskIntoConstraints = false
+        labelBottomConstraint = label.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -9)
         NSLayoutConstraint.activate([
             label.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 2),
             label.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -2),
-            // 单行标签底部锚定(高度 13pt, 字段顶边 81, 图标底 72 → 9pt 间隙)
-            label.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -3),
-            label.heightAnchor.constraint(equalToConstant: 13),
+            label.heightAnchor.constraint(equalToConstant: Self.labelHeight),
+            labelBottomConstraint!,
         ])
         view = root
     }
@@ -57,13 +84,25 @@ final class AppCellView: NSCollectionViewItem {
         super.viewDidLayout()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        // 图标 64pt(单元格 66%), 单行标签从 80pt 起, 间隙 ~16pt(宽松分离)
-        var iconFrame = view.bounds
-        iconFrame.size.height = 64
+        layoutIconAndLabel()
+        CATransaction.commit()
+    }
+
+    /// 图标/标签统一布局: 图标尺寸 = iconPointSize(与 IconKey 请求一致, 顶部锚定),
+    /// 标签与图标间距 = max(6, (单元格高 - 图标高) / 4)(用户反馈"再拉开一些" 的方向)。
+    private func layoutIconAndLabel() {
+        let bounds = view.bounds
+        let size = CGFloat(iconPointSize)
+        var iconFrame = bounds
+        iconFrame.size.height = size
+        iconFrame.origin.y = bounds.height - size
         iconLayer.frame = iconFrame
         letterLayer.frame = iconFrame
+        letterLayer.fontSize = size * 0.5
         letterLayer.contentsScale = view.window?.backingScaleFactor ?? 2
-        CATransaction.commit()
+
+        let gap = max(6, (bounds.height - size) / 4)
+        labelBottomConstraint?.constant = -gap
     }
 
     override func prepareForReuse() {
@@ -88,6 +127,7 @@ final class AppCellView: NSCollectionViewItem {
         pointSize: Int,
         iconProvider: (any IconImageProviding)?
     ) {
+        iconPointSize = max(16, pointSize)
         letterLayer.string = String(displayName.prefix(1)).uppercased()
         letterLayer.isHidden = false
 
@@ -112,10 +152,34 @@ final class AppCellView: NSCollectionViewItem {
         representedAppID = appID
         let expectedID = appID
         iconRequestTask?.cancel()
-        let scale = view.window?.backingScaleFactor ?? 2
+        let scale = Int(view.window?.backingScaleFactor ?? 2)
+        lastRequestedScale = scale
         let task = Task { [weak self] in
             guard !Task.isCancelled else { return }
-            let image = await iconProvider.icon(for: expectedID, pointSize: pointSize, scale: Int(scale))
+            let image = await iconProvider.icon(
+                for: expectedID, pointSize: pointSize, scale: scale
+            )
+            guard !Task.isCancelled, let self, self.representedAppID == expectedID else { return }
+            self.applyIcon(image)
+        }
+        iconRequestTask = task
+    }
+
+    /// 窗口显示器变更(backing scale 变化)→ 以新 scale 重新请求图标(Stage 1 §32)。
+    private func reRequestIconIfScaleChanged() {
+        guard let window = view.window, let appID = representedAppID, let iconProvider else { return }
+        let scale = Int(window.backingScaleFactor)
+        guard scale != lastRequestedScale, iconRequestTask != nil else { return }
+        iconRequestTask?.cancel()
+        let expectedID = appID
+        lastRequestedScale = scale
+        let provider = iconProvider
+        let size = iconPointSize
+        let task = Task { [weak self] in
+            guard !Task.isCancelled else { return }
+            let image = await provider.icon(
+                for: expectedID, pointSize: size, scale: scale
+            )
             guard !Task.isCancelled, let self, self.representedAppID == expectedID else { return }
             self.applyIcon(image)
         }
@@ -139,4 +203,36 @@ final class AppCellView: NSCollectionViewItem {
         }
         CATransaction.commit()
     }
+}
+
+/// 单元格根视图: 感知窗口/屏幕变更(显示器切换 → backing scale 变化)。
+/// viewDidMoveToWindow 只在挂载时触发; 跨显示器移动需监听 screen 变化通知(评审 M3)。
+private final class CellRootView: NSView {
+    var onWindowChange: (() -> Void)?
+    var onScreenChange: (() -> Void)?
+    private var screenObserver: NSObjectProtocol?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if let screenObserver {
+            NotificationCenter.default.removeObserver(screenObserver)
+            self.screenObserver = nil
+        }
+        if let window {
+            screenObserver = NotificationCenter.default.addObserver(
+                forName: NSWindow.didChangeScreenNotification,
+                object: window,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.onScreenChange?()
+                }
+            }
+        }
+        onWindowChange?()
+    }
+
+    // 注: 不在此 deinit 移除观察者(Swift 6 隔离限制, 非 Sendable token)。
+    // 观察者随窗口销毁自动清理; 弱引用回调保证单元格释放后无副作用。
+    // 重复挂窗时 viewDidMoveToWindow 会先移除旧观察者。
 }

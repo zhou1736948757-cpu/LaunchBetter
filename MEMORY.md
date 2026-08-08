@@ -21,21 +21,48 @@
 
 ## Current Phase
 
-**v0.1.2 — 翻页修复已发布(268ab36), 已安装 /Applications**
+**Stage 1 (fix/v0.1.3-grid-foundation) — 几何基础改造完成: 0 BLOCKER 0 MAJOR(评审通过)**
 
 ## Current Task
 
-- 用户待办: ① 真实双指滑动翻页实测; ② 图标/标签间距定稿(方向已对, 再加大一点);
+- 用户待办: ① 真实双指滑动翻页实测(Test A-E, §38); ② 图标/标签间距再加大一点;
   ③ 设置界面入口(面板内加按钮); ④ 搜索栏具体问题待用户补充
-- 剩余: 正式签名分发(需 Apple 凭据, 可选); 长名断行/文件夹图标区分/磁盘缓存上限/120Hz 复测
+- 剩余: 正式签名分发(需 Apple 凭据, 可选); 长名断行/文件夹图标区分/磁盘缓存上限/120Hz 复测;
+  三指拖拽/垂直布局/LaunchHistory parity 属 Stage 2
 
 ## Current Branch
 
-main
+fix/v0.1.3-grid-foundation(Stage 1 完成, 待用户决定合并)
 
 ## Last Known Good Commit
 
-268ab36 (v0.1.2 翻页修复)
+d1696cd (Stage 1 报告 Docs/PhaseReports/stage-01-grid-foundation.md; 评审 8/8 PASS)
+
+## Stage 1 关键成果(已验证)
+
+- **GridGeometry**(LaunchCore 纯逻辑): 几何唯一真值 — pageSize/columns/rows/cellSize/iconSize/
+  spacing/pageCapacity + frameForSlot/slotForPoint/pageForPoint;21 XCTest
+- **PagingGestureSession**(LaunchCore): 一次手势最多一页/惯性忽略/水平主导;7 XCTest
+- pageWidth 唯一真值 = clip 可视宽; 拖拽/槽位/边缘翻页全部经 GridGeometry
+- 搜索溢出: 垂直滚动结果网格(>42 结果可达), 退出恢复原页码; **flipped 文档视图修复**
+  (非 flipped + 垂直滚动 bounds.origin 不同步 → 滚动后内容消失, 实测证据)
+- rows/columns/iconSize Settings 真正生效(GRIDTEST 实测 8x5→capacity 40; 48/64/80/96 变体)
+- 图标点尺寸 = IconKey pointSize 一致(48/64/80/96 变体测试); 跨显示器 scale 重请求
+- 布局失效优化: 翻页 prepare 4→4(原 +1/次滚动)
+- show/hide 修订去重(displayRevision; searchQuery 仅实际变化时 bump)
+- 拖拽: 二维预览(含 gap 处被挤动项)、页边缘翻页防振荡、overlay 真实图标零磁盘 IO、
+  拖拽期 revision 陈旧防护、overlay 视口坐标
+- 截图管线: cacheDisplay 对纯 layer-backed 层级不可靠(假空图)→ layer render
+- 测试: 96(swift-testing)+28(XCTest 新增)全绿; smoke/dragtest/pagetest/searchprobe/gridtest OK
+- visual-reviewer(mimo)4 次误报(镜像/缺字形/裁切/搜索空), 均被像素级证据证伪;
+  唯一真实捕获 = 搜索顶行裁切 → 促成 flipped 修复
+
+## 阶段收尾规则(用户要求, 必须执行)
+
+每个大阶段完成后:
+1. 删除旧版本 App(仅保留最新): 清空 DerivedData/Build/Products 中的旧 Debug/Release 构建,
+   /Applications/LaunchBetter.app 只保留最新(ad-hoc 签名覆盖安装)
+2. 推送 GitHub(分支 + 报告), 待用户决定合并
 
 ## Completed Milestones
 

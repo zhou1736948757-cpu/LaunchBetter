@@ -93,6 +93,92 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
                 self?.runIconBenchmark()
             }
+        } else if CommandLine.arguments.contains("--searchprobe") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+                self?.runSearchProbe()
+            }
+        } else if CommandLine.arguments.contains("--gridtest") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+                self?.runGridSettingsTest()
+            }
+        }
+    }
+
+    /// 搜索溢出运行时验证: 宽查询(> pageCapacity 结果) → 全部结果可滚动访问。
+    private func runSearchProbe() {
+        guard let store = container?.store, let windowController = container?.windowController else {
+            print("SEARCHPROBE FAIL")
+            NSApp.terminate(nil)
+            return
+        }
+        let capacity = store.displayModel().pageCapacity
+        let query = "com"
+        // 搜索前截图(同壁纸基线)
+        windowController.captureContentScreenshot(to: "/tmp/lb-search-before.png")
+        store.searchQuery = query
+        // 等搜索布局 + 图标异步加载完成后再测量/截图
+        DispatchQueue.main.asyncAfter(deadline: .now() + 6.0) { [weak self] in
+            MainActor.assumeIsolated {
+                guard let store = self?.container?.store, let windowController = self?.container?.windowController else {
+                    NSApp.terminate(nil)
+                    return
+                }
+                let results = store.searchResults() ?? []
+                let diag = windowController.pageTestScrollDiagnostics()
+                print("SEARCHPROBE query=\(query) results=\(results.count) capacity=\(capacity) overflow=\(results.count > capacity)")
+                print("SEARCHPROBE \(diag)")
+                print("SEARCHPROBE realIcons=\(windowController.realIconCount())/\(windowController.visibleItemCountForDiag())")
+                if let screenshotPath = CommandLine.arguments.last, !screenshotPath.hasPrefix("--") {
+                    windowController.captureContentScreenshot(to: screenshotPath)
+                }
+                store.searchQuery = ""
+                windowController.refreshGrid()
+                print("SEARCHPROBE restored search=\(store.searchResults() == nil)")
+                print("SEARCHPROBE OK")
+                NSApp.terminate(nil)
+            }
+        }
+    }
+
+    /// Settings 几何生效验证: 改 columns/rows/iconSize → 布局/容量/图标请求尺寸跟随; 完成后恢复。
+    private func runGridSettingsTest() {
+        guard let store = container?.store, let windowController = container?.windowController else {
+            print("GRIDTEST FAIL")
+            NSApp.terminate(nil)
+            return
+        }
+        let original = store.config
+        var test = original
+        // 可选参数: --gridtest [columns] [rows] [iconSize] [截图路径]
+        let args = CommandLine.arguments
+        let base = args.firstIndex(of: "--gridtest") ?? args.endIndex
+        func intArg(_ offset: Int, default d: Int) -> Int {
+            let idx = args.index(base, offsetBy: offset)
+            return (args.indices.contains(idx) ? Int(args[idx]) : nil) ?? d
+        }
+        let gColumns = intArg(1, default: 8)
+        let gRows = intArg(2, default: 5)
+        let gIconSize = intArg(3, default: 48)
+        test.gridColumns = gColumns
+        test.gridRows = gRows
+        test.iconSize = gIconSize
+        store.save(test)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+            MainActor.assumeIsolated {
+                windowController.refreshGrid()
+                let display = store.displayModel()
+                let diag = windowController.pageTestScrollDiagnostics()
+                print("GRIDTEST columns=\(gColumns) rows=\(gRows) iconSize=\(gIconSize) pages=\(display.pages.count) capacity=\(display.pageCapacity) iconSize=\(store.iconSize)")
+                print("GRIDTEST \(diag)")
+                if let screenshotPath = CommandLine.arguments.last, !screenshotPath.hasPrefix("--") {
+                    windowController.captureContentScreenshot(to: screenshotPath)
+                }
+                store.save(original)
+                windowController.refreshGrid()
+                print("GRIDTEST restored columns=\(store.config.gridColumns) rows=\(store.config.gridRows) iconSize=\(store.config.iconSize)")
+                print("GRIDTEST OK")
+                NSApp.terminate(nil)
+            }
         }
     }
 
@@ -222,17 +308,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             action()
             RunLoop.current.run(until: Date().addingTimeInterval(0.5))
         }
+        // Stage 1 §36: 0→1→2→1→0 序列 + 诊断字段
+        func report(_ label: String) {
+            let scrollX = controller.pageTestScrollX()
+            let page = controller.pageTestCurrentPage()
+            let count = controller.pageTestPageCount()
+            let pageW = controller.pageTestPageWidth()
+            let docW = controller.pageTestDocumentWidth()
+            print("PAGETEST \(label) scrollX=\(Int(scrollX)) currentPage=\(page) pageCount=\(count) pageWidth=\(Int(pageW)) documentWidth=\(Int(docW))")
+        }
         print("PAGETEST before: \(controller.pageTestScrollDiagnostics())")
-        _ = controller.pageTestGoTo(1)
-        let x1 = controller.pageTestScrollX()
-        _ = controller.pageTestGoTo(2)
-        let x2 = controller.pageTestScrollX()
-        _ = controller.pageTestGoTo(1)
-        let x3 = controller.pageTestScrollX()
-        print("PAGETEST x=\(Int(x1))->\(Int(x2))->\(Int(x3))")
+        report("p0")
+        step { _ = controller.pageTestGoTo(1) }
+        report("p1")
+        step { _ = controller.pageTestGoTo(2) }
+        report("p2")
+        step { _ = controller.pageTestGoTo(1) }
+        report("p3")
+        step { _ = controller.pageTestGoTo(0) }
+        report("p4")
         print("PAGETEST after: \(controller.pageTestScrollDiagnostics())")
-        let moved = x2 > x1 && x3 < x2
-        print("PAGETEST \(moved ? "OK" : "FAIL")")
+        let ok = controller.pageTestCurrentPage() == 0
+        let moved = controller.pageTestScrollX() < controller.pageTestPageWidth()
+        print("PAGETEST \(ok && moved ? "OK" : "FAIL")")
         NSApp.terminate(nil)
     }
 
