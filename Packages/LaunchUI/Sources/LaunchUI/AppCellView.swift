@@ -45,6 +45,9 @@ final class AppCellView: NSCollectionViewItem {
         root.onWindowChange = { [weak self] in
             self?.reRequestIconIfScaleChanged()
         }
+        root.onScreenChange = { [weak self] in
+            self?.reRequestIconIfScaleChanged()
+        }
         root.wantsLayer = true
         iconLayer.cornerRadius = 16
         iconLayer.masksToBounds = true
@@ -202,12 +205,34 @@ final class AppCellView: NSCollectionViewItem {
     }
 }
 
-/// 单元格根视图: 感知窗口变更(显示器切换 → backing scale 变化)。
+/// 单元格根视图: 感知窗口/屏幕变更(显示器切换 → backing scale 变化)。
+/// viewDidMoveToWindow 只在挂载时触发; 跨显示器移动需监听 screen 变化通知(评审 M3)。
 private final class CellRootView: NSView {
     var onWindowChange: (() -> Void)?
+    var onScreenChange: (() -> Void)?
+    private var screenObserver: NSObjectProtocol?
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        if let screenObserver {
+            NotificationCenter.default.removeObserver(screenObserver)
+            self.screenObserver = nil
+        }
+        if let window {
+            screenObserver = NotificationCenter.default.addObserver(
+                forName: NSWindow.didChangeScreenNotification,
+                object: window,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.onScreenChange?()
+                }
+            }
+        }
         onWindowChange?()
     }
+
+    // 注: 不在此 deinit 移除观察者(Swift 6 隔离限制, 非 Sendable token)。
+    // 观察者随窗口销毁自动清理; 弱引用回调保证单元格释放后无副作用。
+    // 重复挂窗时 viewDidMoveToWindow 会先移除旧观察者。
 }

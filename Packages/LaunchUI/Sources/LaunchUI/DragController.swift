@@ -37,6 +37,8 @@ final class DragController {
     private var lastKnownPoint: CGPoint?
     private var sessionID = UUID()
     private var plainLabel = ""
+    /// 拖拽开始时的显示修订(外部变化陈旧防护, 评审 M7)。
+    private var dragStartRevision: UInt64 = 0
 
     init(grid: GridViewController, store: any LauncherStoring) {
         self.grid = grid
@@ -50,11 +52,12 @@ final class DragController {
     /// 开始拖拽(已通过阈值判定)。
     func beginDrag(item: DisplayModel.DisplayItem, at point: NSPoint) {
         guard state == .idle else { return }
-        guard let grid, let sourceIndex = grid.flatIndex(of: item) else { return }
+        guard let grid, !grid.isSearchMode, let sourceIndex = grid.flatIndex(of: item) else { return }
         state = .dragging
         sourceItem = item
         self.sourceIndex = sourceIndex
         displayAtDragStart = store.displayModel()
+        dragStartRevision = store.displayRevision
         lastEdgeAdvance = 0
         lastKnownPoint = point
         sessionID = UUID()
@@ -68,7 +71,7 @@ final class DragController {
         // 复用源单元格已显示的图标(零磁盘 IO, Stage 1 §23-24)
         overlay.configure(label: plainLabel, sourceImage: grid.visibleIconImage(for: item))
         grid.addOverlayLayer(overlay.layer)
-        overlay.move(to: point, in: grid.collectionViewRef)
+        overlay.move(to: point, in: grid.view)
 
         let coordinator = FrameCoordinator(
             view: grid.collectionViewRef, buffer: sampleBuffer, session: sessionID
@@ -90,6 +93,11 @@ final class DragController {
     /// 结束拖拽: 计算 drop 并应用一次结构更新。
     func endDrag(at point: NSPoint) {
         guard state == .dragging, let item = sourceItem else {
+            cancelDrag()
+            return
+        }
+        // 拖拽期间目录/布局/配置变化 → 陈旧 drop 防护: 取消拖拽(评审 M7)
+        if store.displayRevision != dragStartRevision {
             cancelDrag()
             return
         }
@@ -130,6 +138,7 @@ final class DragController {
         sourceItem = nil
         displayAtDragStart = nil
         lastKnownPoint = nil
+        dragStartRevision = 0
     }
 
     private func source(from item: DisplayModel.DisplayItem) -> LayoutTransaction.Source {
@@ -166,8 +175,10 @@ final class DragController {
             return false
         }()
 
-        // 所有分支统一更新 overlay 位置(m1 修复)
-        overlay.move(to: point, in: grid?.collectionViewRef ?? NSCollectionView())
+        // 所有分支统一更新 overlay 位置(m1 修复); 父视图 = 网格容器(视口坐标)
+        if let grid {
+            overlay.move(to: point, in: grid.view)
+        }
 
         if isFolderTarget, let folder = grid?.hoveredFolder(at: point) {
             overlay.showFolderTarget(folder, store: store)
@@ -212,10 +223,12 @@ final class DragController {
     /// 预览变换: 源项与 gap 之间的项整体移动一个槽位。
     /// 二维实现: 每项从当前 frame 移到相邻槽位 frame, dx/dy 由几何差值给出
     /// (跨行/跨页正确, Stage 1 §20-21)。
+    /// 预览变换: 源项与 gap 之间的项整体移动一个槽位。
+    /// 区间 = [min(source, gap), max(source, gap) - 1](评审 M5: 含 gap 处被挤动项)。
     private func applyPreviewTransforms(gapIndex: Int) {
         resetTransforms()
         guard sourceIndex != gapIndex else { return }
-        let lower = min(sourceIndex, gapIndex) + 1
+        let lower = min(sourceIndex, gapIndex)
         let upper = max(sourceIndex, gapIndex) - 1
         guard lower <= upper, let grid else { return }
         let step: Int = sourceIndex < gapIndex ? -1 : 1
@@ -223,8 +236,10 @@ final class DragController {
         for index in lower...upper {
             guard let path = grid.indexPath(atFlatIndex: index),
                   let cell = grid.cellView(at: path) else { continue }
+            let target = index + step
+            guard target >= 0 else { continue }
             let sourceFrame = grid.frame(atFlatIndex: index)
-            let targetFrame = grid.frame(atFlatIndex: index + step)
+            let targetFrame = grid.frame(atFlatIndex: target)
             let dx = targetFrame.minX - sourceFrame.minX
             let dy = targetFrame.minY - sourceFrame.minY
             guard dx != 0 || dy != 0 else { continue }
@@ -284,8 +299,9 @@ final class DragOverlayLayer {
         layer.isHidden = false
     }
 
-    func move(to point: NSPoint, in collectionView: NSCollectionView) {
-        let local = collectionView.convert(point, from: nil)
+    /// 位置必须转 overlay 挂载父视图(视口)坐标 —— 分页滚动后 document 坐标含页偏移(评审 M6)。
+    func move(to point: NSPoint, in container: NSView) {
+        let local = container.convert(point, from: nil)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         layer.position = CGPoint(x: local.x, y: local.y - 60)

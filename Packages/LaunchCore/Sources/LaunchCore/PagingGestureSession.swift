@@ -86,6 +86,12 @@ public struct PagingGestureSession: Sendable, Equatable {
         pageChanges = 0
     }
 
+    /// began 相位: 清累计器与提交标记(评审 MINOR: 对异常事件序列稳健)。
+    public mutating func began() {
+        resetAccumulator()
+        committed = false
+    }
+
     private mutating func resetAccumulator() {
         accumulatedDeltaX = 0
         accumulatedDeltaY = 0

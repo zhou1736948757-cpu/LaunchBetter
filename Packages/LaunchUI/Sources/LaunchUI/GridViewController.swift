@@ -55,6 +55,9 @@ final class GridViewController: NSViewController {
     /// 退出搜索后恢复的页码。
     private var pagedPageBeforeSearch = 0
 
+    /// 搜索模式(诊断/拖拽开关)。
+    var isSearchMode: Bool { searchMode }
+
     /// 点击文件夹时回调(打开文件夹视图)。
     var onOpenFolder: ((FolderID) -> Void)?
 
@@ -322,6 +325,10 @@ final class GridViewController: NSViewController {
         // 参数变化 → 页容量变化 → 重新分页并回第一页
         currentPage = 0
         forceRefresh()
+        // Diffable 对相同 item 复用 cell(不重新调用数据源闭包) →
+        // 必须 reloadData 强制重配置, 否则 iconPointSize 停留在旧值(评审 M2)
+        collectionView.reloadData()
+        collectionView.scrollToPage(currentPage, animated: false)
     }
 
     // MARK: - 页面导航
@@ -545,12 +552,19 @@ final class GridViewController: NSViewController {
             return true
         }
 
-        // 纵向滚轮(普通鼠标滚轮): 保留分页行为, 每次滚动稳定一页
+        // 纵向输入: 触控板连续手势也经会话状态机(一次手势最多一页, 评审 M4);
+        // 离散鼠标滚轮(无 phase)保留每格一页
         if abs(event.deltaY) > 0.5 {
-            if event.deltaY < 0 {
-                nextPage()
-            } else {
-                previousPage()
+            let committed = pagingSession.feed(
+                phase: event.phase == .changed ? .changed : .began,
+                deltaX: event.deltaY, deltaY: 0
+            )
+            if committed {
+                if pagingSession.direction > 0 {
+                    nextPage()
+                } else {
+                    previousPage()
+                }
             }
             return true
         }

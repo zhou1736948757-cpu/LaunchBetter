@@ -122,7 +122,9 @@ public final class PagingGridLayout: NSCollectionViewLayout {
         currentGeometry = geometry
         itemFrames = [:]
         lastVisibleWidth = geometry.pageWidth
-        lastVisibleHeight = bounds.height
+        // 失效基准 = clip 可视高(搜索模式文档更高, 不能以文档高为基准, 否则每次滚动都失效)
+        lastVisibleHeight = collectionView.enclosingScrollView?.contentView.bounds.height
+            ?? bounds.height
 
         switch mode {
         case .paged:

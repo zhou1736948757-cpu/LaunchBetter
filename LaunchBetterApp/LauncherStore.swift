@@ -30,8 +30,10 @@ public final class LauncherStore: LauncherStoring, SettingsHandling {
 
     public var searchQuery = "" {
         didSet {
-            // 搜索只碰内存索引(§95)
-            bumpRevision()
+            // 搜索只碰内存索引(§95); 值未变化不 bump(避免 hide/show 无意义刷新, 评审 M8)
+            if searchQuery != oldValue {
+                bumpRevision()
+            }
         }
     }
 
