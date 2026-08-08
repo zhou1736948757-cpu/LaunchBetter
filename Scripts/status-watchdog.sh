@@ -214,6 +214,58 @@ check_network() {
   fi
 }
 
+check_memory_freshness() {
+  # 规则(AGENTS.md §31): 几个有意义的提交内必须刷新 MEMORY.md
+  local last_mem_ts last_code_ts commits_since last_mem_sha
+  last_mem_sha=$(git -C "$PROJECT_DIR" log -1 --format=%H -- MEMORY.md 2>/dev/null)
+  last_mem_ts=$(git -C "$PROJECT_DIR" log -1 --format=%ct -- MEMORY.md 2>/dev/null || echo 0)
+  last_code_ts=$(git -C "$PROJECT_DIR" log -1 --format=%ct 2>/dev/null || echo 0)
+  if [ -z "$last_mem_sha" ]; then
+    log "MEMORY MISSING: MEMORY.md 不存在(或未提交)"
+    write_state "\"memory\": {\"stale\": true, \"detail\": \"missing\"}"
+    return
+  fi
+  if [ "$last_code_ts" -gt "$last_mem_ts" ]; then
+    commits_since=$(git -C "$PROJECT_DIR" log --oneline --format=%h "$last_mem_sha"..HEAD 2>/dev/null | wc -l | tr -d ' ')
+    local pending
+    pending=$(git -C "$PROJECT_DIR" log --oneline -5 --format="%h %s" "$last_mem_sha"..HEAD 2>/dev/null | head -5 | tr '\n' ';')
+    log "MEMORY STALE: MEMORY 更新后又有 $commits_since 个提交未同步: $pending"
+    write_state "\"memory\": {\"stale\": true, \"commitsSinceUpdate\": $commits_since, \"pending\": \"$pending\"}"
+    return
+  fi
+  log "MEMORY FRESH"
+  write_state "\"memory\": {\"stale\": false}"
+}
+
+check_memory_structure() {
+  # 规则(主提示 §24): MEMORY.md 必须包含的章节(多词名称, 用 | 分隔迭代)
+  local missing=""
+  local IFS='|'
+  for s in "North Star" "Non-Negotiable Decisions" "Current Phase" "Current Task" "Current Branch" "Last Known Good Commit" "Completed Milestones" "Verified Technical Facts" "Current Performance Measurements" "Known Issues / Blockers" "Architecture Changes" "Rejected Approaches" "GitHub / Release Status" "Next Actions" "Last Updated"; do
+    grep -q "^## $s$" "$PROJECT_DIR/MEMORY.md" 2>/dev/null || missing="$missing | $s"
+  done
+  if [ -n "$missing" ]; then
+    log "MEMORY STRUCTURE MISSING:$missing"
+    write_state "\"memory_structure\": {\"ok\": false, \"missing\": \"$missing\"}"
+  else
+    log "MEMORY STRUCTURE OK"
+    write_state "\"memory_structure\": {\"ok\": true}"
+  fi
+}
+
+check_forbidden_patterns() {
+  # 规则(AGENTS.md §禁止模式): 全仓库 DispatchQueue.main.sync 数量 = 0
+  local hits
+  hits=$(rg -n "DispatchQueue\.main\.sync" --glob '*.swift' "$PROJECT_DIR" 2>/dev/null | head -3)
+  if [ -n "$hits" ]; then
+    log "RULE VIOLATION main.sync 出现: $hits"
+    write_state "\"forbidden\": {\"mainSyncCount\": $(rg -c "DispatchQueue\.main\.sync" --glob '*.swift' "$PROJECT_DIR" 2>/dev/null | awk -F: '{s+=$2} END{print s+0}')}"
+  else
+    log "RULES OK (main.sync=0)"
+    write_state "\"forbidden\": {\"mainSyncCount\": 0}"
+  fi
+}
+
 check_heartbeat() {
   local last_commit last_activity
   last_commit=$(cd "$PROJECT_DIR" && git log -1 --format=%ct 2>/dev/null || echo 0)
@@ -237,6 +289,9 @@ log "WATCHDOG started interval=${INTERVAL}s pid=$$"
 while true; do
   check_heartbeat
   check_context
+  check_memory_freshness
+  check_memory_structure
+  check_forbidden_patterns
   check_subagents
   check_builds
   check_network
