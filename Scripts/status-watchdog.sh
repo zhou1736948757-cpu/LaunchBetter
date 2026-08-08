@@ -16,7 +16,7 @@
 # 状态: /tmp/launchbetter-watchdog/state.json + watchdog.log
 
 INTERVAL="${1:-600}"
-PROJECT_DIR="/Users/mac/Projects/LaunchBetter"
+PROJECT_DIR="${LAUNCHBETTER_PROJECT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
 DB="$HOME/.local/share/opencode/opencode.db"
 STATE_DIR="/tmp/launchbetter-watchdog"
 LOG="$STATE_DIR/watchdog.log"
