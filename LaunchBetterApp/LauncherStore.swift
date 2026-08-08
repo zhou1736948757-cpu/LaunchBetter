@@ -220,6 +220,17 @@ public final class LauncherStore: LauncherStoring {
         performLayoutMutation(mutation)
     }
 
+    /// 外部目录变化(FSEvents)后调用: 拉取最新目录快照 → 布局对账(新应用/墓碑)→ 刷新。
+    public func catalogDidChangeExternally() {
+        Task { [weak self] in
+            guard let self else { return }
+            catalogSnapshot = await catalogActor.currentSnapshot()
+            layout = await layoutStore.reconcile(catalog: catalogSnapshot, now: Date())
+            rebuildSearchIndex()
+            onDataChange?()
+        }
+    }
+
     // MARK: - 诊断
 
     /// 冒烟诊断辅助。

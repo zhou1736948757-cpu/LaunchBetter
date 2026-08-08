@@ -162,8 +162,9 @@ struct AppDiscoveryServiceTests {
         defer { try? FileManager.default.removeItem(at: dir) }
         let appURL = try makeFakeApp(in: dir, name: "Foo", bundleID: "com.test.Foo")
         let record = try #require(AppDiscoveryService.makeRecord(from: appURL))
-        #expect(record.id.rawValue == appURL.resolvingSymlinksInPath().standardizedFileURL.path)
-        #expect(record.url == appURL.resolvingSymlinksInPath().standardizedFileURL)
+        let canonicalPath = PathCanonicalizer.canonicalPath(from: appURL)
+        #expect(record.id.rawValue == canonicalPath)
+        #expect(record.url == URL(fileURLWithPath: canonicalPath))
     }
 }
 

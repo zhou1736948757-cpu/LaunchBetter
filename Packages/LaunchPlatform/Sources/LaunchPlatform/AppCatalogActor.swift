@@ -108,4 +108,114 @@ public actor AppCatalogActor {
         }
         return delta
     }
+
+    // MARK: - 增量对账(FSEvents, §71-72)
+
+    /// 处理目录监控变更摘要: scoped reconcile(仅受影响应用/目录), 不触发全量扫描。
+    public func applyChangeSummary(_ summary: DirectoryMonitor.ChangeSummary) async -> CatalogDelta {
+        var delta = CatalogDelta()
+        // 事件丢失 → 受影响 scope 全量重扫(恢复机制, §72)
+        if summary.eventLossDetected {
+            for scope in summary.dirtyScopes {
+                let scoped = await reconcileScope(URL(fileURLWithPath: scope))
+                delta = delta.merged(with: scoped)
+            }
+            return delta
+        }
+        for scope in summary.dirtyScopes {
+            let scoped = await reconcileScope(URL(fileURLWithPath: scope))
+            delta = delta.merged(with: scoped)
+        }
+        for appRoot in summary.dirtyAppRoots {
+            let scoped = await reconcileAppRoot(URL(fileURLWithPath: appRoot))
+            delta = delta.merged(with: scoped)
+        }
+        return delta
+    }
+
+    /// 仅重扫单个应用(§71 .app root 折叠后)。
+    public func reconcileAppRoot(_ appRootURL: URL) async -> CatalogDelta {
+        let record = await Task.detached(priority: .utility) {
+            AppDiscoveryService.makeRecord(from: appRootURL)
+        }.value
+        let discovered = record.map { [$0] } ?? []
+        return applyIncremental(discovered, appRootPath: appRootURL.path)
+    }
+
+    /// 仅枚举单个 scope 目录(§71 目录脏)。
+    public func reconcileScope(_ scopeURL: URL) async -> CatalogDelta {
+        let discovered = await Task.detached(priority: .utility) {
+            AppDiscoveryService.discover(sources: [scopeURL])
+        }.value
+        return applyIncremental(discovered, scopePrefix: scopeURL.path + "/")
+    }
+
+    /// 事件丢失时对全部 scope 执行恢复性重扫。
+    public func recoverAllScopes() async -> CatalogDelta {
+        (try? await reconcileFromDisk()) ?? CatalogDelta()
+    }
+
+    /// 应用根匹配: 容忍 /var 与 /private/var 表示差异(应用删除后 realpath 失效)。
+    private func matchesAppRoot(_ id: AppID, _ appRootPath: String) -> Bool {
+        let idPath = id.rawValue
+        return idPath == appRootPath
+            || idPath == "/private" + appRootPath
+            || appRootPath == "/private" + idPath
+    }
+
+    private func applyIncremental(
+        _ discovered: [AppRecord],
+        scopePrefix: String? = nil,
+        appRootPath: String? = nil
+    ) -> CatalogDelta {
+        let currentByID = Dictionary(uniqueKeysWithValues: snapshot.apps.map { ($0.id, $0) })
+        var inserted: [AppRecord] = []
+        var updated: [AppRecord] = []
+        for record in discovered {
+            guard let previous = currentByID[record.id] else {
+                inserted.append(record)
+                continue
+            }
+            if previous != record {
+                updated.append(record)
+            }
+        }
+        let discoveredIDs = Set(discovered.map(\.id))
+        var removed: [AppID] = []
+        for record in snapshot.apps {
+            let inScope: Bool
+            if let appRootPath {
+                inScope = matchesAppRoot(record.id, appRootPath)
+            } else if let scopePrefix {
+                inScope = record.id.rawValue.hasPrefix(scopePrefix)
+            } else {
+                inScope = false
+            }
+            if inScope && !discoveredIDs.contains(record.id) {
+                removed.append(record.id)
+            }
+        }
+        let delta = CatalogDelta(
+            inserted: inserted,
+            updated: updated,
+            removed: removed.sorted { $0.rawValue < $1.rawValue }
+        )
+        guard !delta.isEmpty else { return delta }
+
+        var apps = snapshot.apps.filter { !removed.contains($0.id) }
+        for record in inserted + updated {
+            apps.removeAll { $0.id == record.id }
+            apps.append(record)
+        }
+        snapshot = CatalogSnapshot(apps: apps)
+        generation += 1
+
+        do {
+            try store.save(snapshot)
+            lastPersistErrorDescription = nil
+        } catch {
+            lastPersistErrorDescription = String(describing: error)
+        }
+        return delta
+    }
 }

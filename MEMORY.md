@@ -21,11 +21,11 @@
 
 ## Current Phase
 
-Phase 6 (Drag Engine) — 完成,拖拽全链路验证,评审修复已落实,待提交并进入 Phase 7
+Phase 7 (FSEvents) — 完成,实时端到端验证通过,待提交并进入 Phase 8
 
 ## Current Task
 
-Phase 7 FSEvents 增量目录: DirectoryMonitor/scope 监控/.app 折叠/去抖/scoped reconcile/事件丢失恢复
+Phase 8 Multitouch + 全局激活(需用户授予输入监控权限 TCC)+ Minimum Usable Release Gate
 
 ## Current Branch
 
@@ -33,7 +33,7 @@ main
 
 ## Last Known Good Commit
 
-6f24cb2 (Phase 5 + 标签修复);Phase 6 提交待创建
+bf33d16 (Phase 6);Phase 7 提交待创建
 
 ## Completed Milestones
 
@@ -119,10 +119,10 @@ main
 
 ## Next Actions
 
-1. 提交并推送 Phase 6 (拖拽引擎 + Luna Max 评审修复)
-2. Phase 7: FSEvents 增量目录
-3. Phase 8: Multitouch + 全局激活 + Minimum Usable Release Gate
-4. Phase 9/10: 外围功能 + 分发公开发布
+1. 提交并推送 Phase 7 (FSEvents)
+2. Phase 8: Multitouch + 全局激活 — **需要用户授权输入监控(TCC)后验证手势**;
+   Minimum Usable Release Gate
+3. Phase 9/10: 外围功能 + 分发公开发布
 
 ## Last Updated
 

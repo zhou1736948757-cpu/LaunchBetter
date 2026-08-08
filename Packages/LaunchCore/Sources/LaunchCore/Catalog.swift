@@ -55,4 +55,27 @@ public struct CatalogDelta: Codable, Sendable, Hashable {
     public var isEmpty: Bool {
         inserted.isEmpty && updated.isEmpty && removed.isEmpty
     }
+
+    /// 合并两个增量(按 AppID 去重, 确定性排序)。
+    public func merged(with other: CatalogDelta) -> CatalogDelta {
+        var insertedIDs = Set(inserted.map(\.id))
+        var mergedInserted = inserted
+        for record in other.inserted where !insertedIDs.contains(record.id) {
+            mergedInserted.append(record)
+            insertedIDs.insert(record.id)
+        }
+        var updatedIDs = Set(updated.map(\.id))
+        var mergedUpdated = updated
+        for record in other.updated where !updatedIDs.contains(record.id) {
+            mergedUpdated.append(record)
+            updatedIDs.insert(record.id)
+        }
+        let mergedRemoved = Array(Set(removed).union(other.removed))
+            .sorted { $0.rawValue < $1.rawValue }
+        return CatalogDelta(
+            inserted: mergedInserted.sorted { $0.id.rawValue < $1.id.rawValue },
+            updated: mergedUpdated.sorted { $0.id.rawValue < $1.id.rawValue },
+            removed: mergedRemoved
+        )
+    }
 }

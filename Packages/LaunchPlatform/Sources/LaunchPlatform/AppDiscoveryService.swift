@@ -58,7 +58,7 @@ public enum AppDiscoveryService {
             forKeys: [.contentModificationDateKey]
         ).contentModificationDate)
 
-        let canonicalURL = url.resolvingSymlinksInPath().standardizedFileURL
+        let canonicalURL = URL(fileURLWithPath: PathCanonicalizer.canonicalPath(from: url))
         let appID = PathCanonicalizer.canonicalAppID(from: url)
 
         let bundleIdentifier = plist["CFBundleIdentifier"] as? String

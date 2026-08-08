@@ -256,11 +256,12 @@ struct AppCatalogActorTests {
         _ = await actor.start()
         _ = try await actor.reconcileFromDisk()
 
+        let fooPath = PathCanonicalizer.canonicalPath(
+            from: sourceDir.appendingPathComponent("Foo.app")
+        )
         try FileManager.default.removeItem(at: sourceDir.appendingPathComponent("Foo.app"))
         let delta = try await actor.reconcileFromDisk()
-        #expect(delta.removed == [AppID(
-            sourceDir.appendingPathComponent("Foo.app").resolvingSymlinksInPath().standardizedFileURL.path
-        )!])
+        #expect(delta.removed == [AppID(fooPath)!])
         #expect(delta.inserted.isEmpty)
     }
 

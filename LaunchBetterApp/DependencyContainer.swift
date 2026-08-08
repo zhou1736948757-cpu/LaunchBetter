@@ -9,6 +9,7 @@ public final class DependencyContainer {
     public let store: LauncherStore
     public let iconAdapter: IconImageAdapter
     public let windowController: LauncherWindowController
+    public let directoryMonitor: DirectoryMonitor
 
     public init() {
         let bundleID = Bundle.main.bundleIdentifier ?? "dev.launchbetter.LaunchBetter"
@@ -60,6 +61,24 @@ public final class DependencyContainer {
 
         self.store = store
         self.iconAdapter = iconAdapter
+
+        // FSEvents 增量目录监控(§69-72): 安装/删除/更新实时反映, 启动器显示仍零扫描。
+        // 注入式回调(避免 NotificationCenter 胶水): 目录变化 → 增量对账 → 布局刷新
+        let directoryMonitor = DirectoryMonitor(
+            scopes: sources.map(\.path),
+            latency: 1.0
+        )
+        directoryMonitor.onChange = { [weak catalogActor, weak store] summary in
+            Task { @MainActor in
+                guard let delta = await catalogActor?.applyChangeSummary(summary), !delta.isEmpty else {
+                    return
+                }
+                store?.catalogDidChangeExternally()
+            }
+        }
+        directoryMonitor.start()
+        self.directoryMonitor = directoryMonitor
+
         self.windowController = LauncherWindowController(store: store, iconProvider: iconAdapter)
     }
 }
