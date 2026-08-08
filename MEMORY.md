@@ -21,12 +21,13 @@
 
 ## Current Phase
 
-**Phase 10 完成 — v0.1.0 公开发布(600e4d4 + v0.1.0 tag)**
+**v0.1.2 — 翻页修复已发布(268ab36), 已安装 /Applications**
 
 ## Current Task
 
-- 剩余: 正式签名分发(需用户 Apple 凭据, 可选)
-- 打磨项: 长名标签断行、文件夹图标区分、磁盘缓存上限策略、120Hz 复测
+- 用户待办: ① 真实双指滑动翻页实测; ② 图标/标签间距定稿(方向已对, 再加大一点);
+  ③ 设置界面入口(面板内加按钮); ④ 搜索栏具体问题待用户补充
+- 剩余: 正式签名分发(需 Apple 凭据, 可选); 长名断行/文件夹图标区分/磁盘缓存上限/120Hz 复测
 
 ## Current Branch
 
@@ -34,7 +35,7 @@ main
 
 ## Last Known Good Commit
 
-282a40b (Phase 9 + Phase 10 prep)
+268ab36 (v0.1.2 翻页修复)
 
 ## Completed Milestones
 
@@ -115,15 +116,25 @@ main
 ## GitHub / Release Status
 
 - 仓库: github.com/zhou1736948757-cpu/LaunchBetter (**PUBLIC**)
-- **v0.1.0 已发布**: https://github.com/zhou1736948757-cpu/LaunchBetter/releases/tag/v0.1.0
+- 版本: v0.1.0(首版) → v0.1.1(图标色块/标签/壁纸性能) → **v0.1.2(翻页修复, 268ab36)**
 - 预发布审计通过: secret scan 干净 / 无硬编码私密路径 / 182 测试全绿 / GPL-3.0 就位
 - 四指手势实测通过(用户验证), 触点帧开销 1-6μs/帧
 
-## Next Actions
+## 待办(用户侧)
 
-1. **可选**: 用户提供 Apple 签名/公证凭据 → 正式分发 v0.1.1
-2. 打磨项: 长名标签断行优化、文件夹图标区分、磁盘缓存上限策略、120Hz 显示器复测
-3. Phase 9 遗留: 设置界面壁纸开关接入 WallpaperProvider
+1. 真实触控板双指滑动翻页实测(程序化已通过: 1470→2940→1470)
+2. 图标/标签间距: 方向已对(图标 64pt/66%, 单行标签, 间隙~16pt), 再加大一档定稿
+3. 设置界面: 面板内无入口(全屏置顶时菜单栏不可见) → 需在面板加设置按钮;
+   壁纸开关未真正接入 WallpaperProvider; 热键仅 5 预设; 语言切换后设置窗口不即时刷新
+4. 搜索栏具体问题待用户补充现象(当前: 结果单页列表, 顶部居中)
+5. **可选**: Apple 签名/公证凭据 → 正式分发
+6. 打磨: 长名断行优化、文件夹图标区分、磁盘缓存上限策略、120Hz 复测
+
+## Watchdog 状态
+
+- 运行中(600s 周期), 状态 /tmp/launchbetter-watchdog/
+- 上下文 ≥50% 自动 compact: **最佳努力** — session.compact 是 TUI 命令无 HTTP 端点,
+  脚本探测 server 失败时仅记录建议(真实限制, 需人工或等上下文满自动压缩)
 
 ## Last Updated
 
