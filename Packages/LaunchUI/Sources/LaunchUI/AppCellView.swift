@@ -34,7 +34,10 @@ final class AppCellView: NSCollectionViewItem {
     /// 源单元格当前显示的图标(拖拽 overlay 复用, 零磁盘 IO)。
     var visibleIconImage: CGImage? {
         guard let contents = iconLayer.contents else { return nil }
-        return contents as! CGImage
+        let ref = contents as CFTypeRef
+        // 类型校验后强转, 消除对任意 contents 的裸 force-cast crash point(v0.1.6 §53)
+        guard CFGetTypeID(ref) == CGImage.typeID else { return nil }
+        return ref as! CGImage
     }
 
     /// 诊断: 是否已显示真实图标(contents 非空)。

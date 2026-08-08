@@ -359,10 +359,31 @@ final class GridViewController: NSViewController {
             paging.jumpTo(page: clamped)
             updatePageDots()
         }
+        prewarmAdjacentPages(clamped)
     }
 
     func nextPage() { goToPage(currentPage + 1) }
     func previousPage() { goToPage(currentPage - 1) }
+
+    /// 相邻页图标预热(v0.1.6 §36-37): 只维护 current±1 working set, 不全量预加载。
+    private func prewarmAdjacentPages(_ page: Int) {
+        guard let iconProvider else { return }
+        let display = store.displayModel()
+        let scale = Int(view.window?.backingScaleFactor ?? 2)
+        let pointSize = Int(iconSize)
+        for p in [page - 1, page + 1] where p >= 0 && p < display.pages.count {
+            let apps = display.pages[p].compactMap { item -> AppID? in
+                if case .app(let id) = item { return id }
+                return nil
+            }
+            for id in apps {
+                // 异步预热入内存缓存(已命中者 O(1); 未命中走存储库管道, 不阻塞主线程)
+                Task(priority: .utility) { [weak iconProvider] in
+                    _ = await iconProvider?.icon(for: id, pointSize: pointSize, scale: scale)
+                }
+            }
+        }
+    }
 
     // MARK: - 点击启动
 
@@ -552,6 +573,7 @@ final class GridViewController: NSViewController {
             guard let self else { return }
             self.currentPage = page
             self.updatePageDots()
+            self.prewarmAdjacentPages(page)
         }
         paging.onSettleComplete = { [weak self] in
             // 可在此追加 settle 完成后的低优先级工作(如图标预热)
@@ -572,6 +594,20 @@ final class GridViewController: NSViewController {
 
     /// 分页交互诊断(v0.1.6 §63)。
     var pagingDiagnostics: String { paging.diagnostics() }
+
+    /// 分页探针: 合成 NSEvent 驱动分页交互(性能测量, §63/§82)。
+    func pagingProbeFeed(_ event: NSEvent) {
+        if event.phase == .began {
+            paging.resetCounters()
+        }
+        _ = paging.handleWheel(event)
+    }
+
+    /// 布局诊断(§56/§83): 一次交互中 prepare / attribute query 计数。
+    var layoutDiagnostics: String {
+        let layout = collectionView.collectionViewLayout as? PagingGridLayout
+        return "prepare=\(layout?.prepareCount ?? 0) attributeQueries=\(layout?.attributeQueryCount ?? 0)"
+    }
 
     /// 确定性诊断(冒烟验证用): 当前快照结构。
     func diagnostics() -> String {

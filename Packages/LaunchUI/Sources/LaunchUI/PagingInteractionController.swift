@@ -57,6 +57,10 @@ final class PagingInteractionController {
     private(set) var settlingSkippedWriteCount = 0
     private(set) var interruptionCount = 0
     private(set) var settleCount = 0
+    private(set) var lastGestureDuration: CFTimeInterval = 0
+    private(set) var lastSettleDuration: CFTimeInterval = 0
+    private var gestureStartTime: CFTimeInterval = 0
+    private var settleStartTime: CFTimeInterval = 0
 
     init() {
         animator.onFrame = { [weak self] position, settled in
@@ -78,10 +82,12 @@ final class PagingInteractionController {
         settlingSkippedWriteCount = 0
         interruptionCount = 0
         settleCount = 0
+        lastGestureDuration = 0
+        lastSettleDuration = 0
     }
 
     func diagnostics() -> String {
-        "phase=\(phase) input=\(inputEventCount) frames=\(displayFrameCount) scroll=\(scrollWriteCount) skipped=\(settlingSkippedWriteCount) interrupts=\(interruptionCount) settles=\(settleCount)"
+        "phase=\(phase) input=\(inputEventCount) frames=\(displayFrameCount) scroll=\(scrollWriteCount) skipped=\(settlingSkippedWriteCount) interrupts=\(interruptionCount) settles=\(settleCount) gestureMs=\(Int(lastGestureDuration * 1000)) settleMs=\(Int(lastSettleDuration * 1000))"
     }
 
     // MARK: - 事件入口
@@ -130,6 +136,7 @@ final class PagingInteractionController {
         baseOffset = onReadCurrentOffset()
         lastAppliedOffset = baseOffset
         latestDesiredOffset = baseOffset
+        gestureStartTime = ProcessInfo.processInfo.systemUptime
         phase = .tracking
         ensureDisplayLink()
     }
@@ -173,6 +180,7 @@ final class PagingInteractionController {
             displacement: displacement,
             releaseVelocity: velocity.estimatedVelocity
         )
+        lastGestureDuration = ProcessInfo.processInfo.systemUptime - gestureStartTime
         startSettle(toPage: targetPage, fromOffset: onReadCurrentOffset(), velocity: velocity.estimatedVelocity)
     }
 
@@ -188,6 +196,7 @@ final class PagingInteractionController {
             velocity: velocity
         )
         settleCount += 1
+        settleStartTime = ProcessInfo.processInfo.systemUptime
         phase = .settling
         ensureDisplayLink()
     }
@@ -203,6 +212,7 @@ final class PagingInteractionController {
     }
 
     private func finishSettle() {
+        lastSettleDuration = ProcessInfo.processInfo.systemUptime - settleStartTime
         phase = .idle
         stopDisplayLinkIfIdle()
     }

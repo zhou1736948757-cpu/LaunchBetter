@@ -97,6 +97,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
                 self?.runSearchProbe()
             }
+        } else if CommandLine.arguments.contains("--pagingprobe") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+                self?.runPagingProbe()
+            }
         } else if CommandLine.arguments.contains("--gridtest") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
                 self?.runGridSettingsTest()
@@ -135,6 +139,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 windowController.refreshGrid()
                 print("SEARCHPROBE restored search=\(store.searchResults() == nil)")
                 print("SEARCHPROBE OK")
+                NSApp.terminate(nil)
+            }
+        }
+    }
+
+    /// 分页性能探针(v0.1.6 §63/§82): 合成触控板 swipe + momentum, 测量计数器。
+    private func runPagingProbe() {
+        guard let controller = container?.windowController else {
+            print("PAGINGPROBE FAIL")
+            NSApp.terminate(nil)
+            return
+        }
+        func makeScroll(dx: CGFloat, phase: Int, momentum: Int) -> NSEvent? {
+            guard let src = CGEventSource(stateID: .hidSystemState),
+                  let cg = CGEvent(scrollWheelEvent2Source: src, units: .pixel, wheelCount: 2, wheel1: 0, wheel2: Int32(dx), wheel3: 0) else { return nil }
+            cg.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+            cg.setIntegerValueField(.scrollWheelEventPointDeltaAxis1, value: 0)
+            cg.setIntegerValueField(.scrollWheelEventPointDeltaAxis2, value: Int64(dx))
+            // 相位经 rawValue 设置(kCGScrollWheelEventPhase=99 / MomentumPhase=123)
+            cg.setIntegerValueField(CGEventField(rawValue: 99)!, value: Int64(phase))
+            cg.setIntegerValueField(CGEventField(rawValue: 123)!, value: Int64(momentum))
+            return NSEvent(cgEvent: cg)
+        }
+        print("PAGINGPROBE before: \(controller.pagingProbeDiagnostics())")
+        // 1. 手势: began + changed×8(累计 -460pt > 30%×1470=441 → 下一页)
+        controller.pagingProbeFeed(makeScroll(dx: 0, phase: 1, momentum: 0)!)
+        for _ in 0..<4 { controller.pagingProbeFeed(makeScroll(dx: -60, phase: 2, momentum: 0)!) }
+        for _ in 0..<4 { controller.pagingProbeFeed(makeScroll(dx: -55, phase: 2, momentum: 0)!) }
+        controller.pagingProbeFeed(makeScroll(dx: 0, phase: 4, momentum: 0)!)
+        // 2. momentum 序列(应 0 位移 0 snap)
+        controller.pagingProbeFeed(makeScroll(dx: -80, phase: 0, momentum: 1)!)
+        controller.pagingProbeFeed(makeScroll(dx: -80, phase: 0, momentum: 2)!)
+        controller.pagingProbeFeed(makeScroll(dx: 0, phase: 0, momentum: 4)!)
+        // 等 settle 完成
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            MainActor.assumeIsolated {
+                let page = controller.pageTestCurrentPage()
+                print("PAGINGPROBE after: \(controller.pagingProbeDiagnostics()) page=\(page) scrollX=\(Int(controller.pageTestScrollX()))")
+                let ok = page == 1 && controller.pageTestScrollX() > 1400
+                print("PAGINGPROBE \(ok ? "OK" : "FAIL")")
                 NSApp.terminate(nil)
             }
         }

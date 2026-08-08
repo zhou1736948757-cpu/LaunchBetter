@@ -44,8 +44,17 @@ public final class LauncherStore: LauncherStoring, SettingsHandling {
     /// 显示修订号: 目录/布局/配置/搜索任一变化即递增(Stage 1 §30)。
     public private(set) var displayRevision: UInt64 = 0
 
+    /// 诊断(§65-66): 搜索索引重建次数 / onDataChange 通知次数。
+    public private(set) var searchIndexRebuildCount = 0
+    public private(set) var notifyCount = 0
+
     private func bumpRevision() {
         displayRevision &+= 1
+    }
+
+    private func notifyDataChange() {
+        notifyCount += 1
+        onDataChange?()
     }
 
     public init(
@@ -110,21 +119,23 @@ public final class LauncherStore: LauncherStoring, SettingsHandling {
         Task { [weak self] in
             guard let self else { return }
             _ = await layoutStore.reconcile(catalog: snapshot, now: Date())
-            refreshLayoutFromStore()
+            await self.commitLayoutChange()
         }
+        // catalog 变化 → 重建搜索索引(progressive: 首帧即用已恢复快照可搜, §51)
         rebuildSearchIndex()
         bumpRevision()
-        onDataChange?()
+        notifyDataChange()
     }
 
-    private func refreshLayoutFromStore() {
-        Task { [weak self] in
-            guard let self else { return }
-            layout = await layoutStore.currentLayout()
+    /// 布局变更统一提交(v0.1.6 §49): 一次 currentLayout + 按需 rebuild + revision + notify。
+    /// 普通布局变更(reorder/文件夹)不重建 SearchIndex(§47-48)。
+    private func commitLayoutChange(searchMetadataChanged: Bool = false) async {
+        layout = await layoutStore.currentLayout()
+        if searchMetadataChanged {
             rebuildSearchIndex()
-            bumpRevision()
-            onDataChange?()
         }
+        bumpRevision()
+        notifyDataChange()
     }
 
     /// 执行一次布局变更: 经 LayoutStore 应用并持久化, 同步缓存。
@@ -135,15 +146,13 @@ public final class LauncherStore: LauncherStoring, SettingsHandling {
         Task { [weak self] in
             guard let self else { return }
             if await layoutStore.apply(mutation, display: display) {
-                layout = await layoutStore.currentLayout()
-                rebuildSearchIndex()
-                bumpRevision()
-                onDataChange?()
+                await self.commitLayoutChange()
             }
         }
     }
 
     private func rebuildSearchIndex() {
+        searchIndexRebuildCount += 1
         searchIndex.removeAll()
         for record in catalogSnapshot.apps {
             searchIndex.index(
@@ -196,10 +205,7 @@ public final class LauncherStore: LauncherStoring, SettingsHandling {
         Task { [weak self] in
             guard let self else { return }
             if await layoutStore.createFolder(display: display, name: name, appIDs: appIDs) != nil {
-                layout = await layoutStore.currentLayout()
-                rebuildSearchIndex()
-                bumpRevision()
-                onDataChange?()
+                await self.commitLayoutChange()
             }
         }
     }
@@ -208,9 +214,7 @@ public final class LauncherStore: LauncherStoring, SettingsHandling {
         Task { [weak self] in
             guard let self else { return }
             if await layoutStore.renameFolder(id, to: name) {
-                layout = await layoutStore.currentLayout()
-                bumpRevision()
-                onDataChange?()
+                await self.commitLayoutChange()
             }
         }
     }
@@ -220,10 +224,7 @@ public final class LauncherStore: LauncherStoring, SettingsHandling {
         Task { [weak self] in
             guard let self else { return }
             if await layoutStore.dissolveFolder(display: display, id: id) {
-                layout = await layoutStore.currentLayout()
-                rebuildSearchIndex()
-                bumpRevision()
-                onDataChange?()
+                await self.commitLayoutChange()
             }
         }
     }
@@ -255,20 +256,25 @@ public final class LauncherStore: LauncherStoring, SettingsHandling {
             layout = await layoutStore.reconcile(catalog: catalogSnapshot, now: Date())
             rebuildSearchIndex()
             bumpRevision()
-            onDataChange?()
+            notifyDataChange()
         }
     }
 
     // MARK: - SettingsHandling
 
     public func save(_ config: AppConfiguration) {
+        // 仅自定义显示名变化时重建搜索索引(§47-48);
+        // gridRows/columns/iconSize/wallpaper/hotkey/hotcorner/hidden 等不重建。
+        let searchMetadataChanged = config.customDisplayNames != self.config.customDisplayNames
         self.config = config
         L10n.configure(language: config.language)
         try? settingsStore.save(config)
-        rebuildSearchIndex()
+        if searchMetadataChanged {
+            rebuildSearchIndex()
+        }
         bumpRevision()
         onConfigChange?(config)
-        onDataChange?()
+        notifyDataChange()
     }
 
     public var allApps: [(id: AppID, name: String)] {

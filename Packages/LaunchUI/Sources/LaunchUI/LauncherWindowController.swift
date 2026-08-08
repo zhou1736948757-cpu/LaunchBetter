@@ -345,6 +345,17 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         gridViewController?.currentPageValue ?? -1
     }
 
+    /// 分页探针(性能测量, v0.1.6 §63): 合成 NSEvent 驱动分页交互。
+    public func pagingProbeFeed(_ event: NSEvent) {
+        gridViewController?.pagingProbeFeed(event)
+    }
+
+    public func pagingProbeDiagnostics() -> String {
+        let paging = gridViewController?.pagingDiagnostics ?? "nil"
+        let layout = gridViewController?.layoutDiagnostics ?? "nil"
+        return "paging[\(paging)] layout[\(layout)]"
+    }
+
     public func pageTestPageCount() -> Int {
         gridViewController?.pageCountValue ?? -1
     }

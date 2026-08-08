@@ -36,6 +36,9 @@ public final class PagingGridLayout: NSCollectionViewLayout {
     /// 诊断: 当前 item 帧数。
     public var itemFrameCount: Int { itemFrames.count }
 
+    /// 诊断: layoutAttributesForElements 查询计数(§56 测量)。
+    public private(set) var attributeQueryCount = 0
+
 
     /// 最近一次 prepare 使用的几何(供 GridViewController/DragController 同步读取)。
     public private(set) var currentGeometry: GridGeometry?
@@ -189,7 +192,8 @@ public final class PagingGridLayout: NSCollectionViewLayout {
     }
 
     public override func layoutAttributesForElements(in rect: NSRect) -> [NSCollectionViewLayoutAttributes] {
-        itemFrames.compactMap { indexPath, frame in
+        attributeQueryCount += 1
+        return itemFrames.compactMap { indexPath, frame in
             guard frame.intersects(rect) else { return nil }
             let attrs = NSCollectionViewLayoutAttributes(forItemWith: indexPath)
             attrs.frame = frame
