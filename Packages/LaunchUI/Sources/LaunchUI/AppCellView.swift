@@ -33,15 +33,20 @@ final class AppCellView: NSCollectionViewItem {
         iconLayer.addSublayer(letterLayer)
 
         label.alignment = .center
-        label.font = .systemFont(ofSize: 11)
+        label.font = .systemFont(ofSize: 10)
         label.lineBreakMode = .byTruncatingTail
-        label.maximumNumberOfLines = 1
+        label.maximumNumberOfLines = 2
+        label.textColor = .white
+        label.shadow = NSShadow()
+        label.shadow?.shadowColor = NSColor.black.withAlphaComponent(0.6)
+        label.shadow?.shadowBlurRadius = 2
+        label.shadow?.shadowOffset = NSSize(width: 0, height: -1)
         root.addSubview(label)
         label.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
-            label.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 4),
-            label.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -4),
-            label.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -4),
+            label.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 2),
+            label.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -2),
+            label.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -2),
         ])
         view = root
     }
