@@ -260,6 +260,18 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         "window=\(isVisible) grid[\(gridViewController?.diagnostics() ?? "nil")]"
     }
 
+    /// 诊断: 可见单元格中已加载真实图标数。
+    public func realIconCount() -> Int {
+        guard let grid = gridViewController else { return 0 }
+        return grid.collectionViewRef.visibleItems().compactMap { $0 as? AppCellView }
+            .filter(\.hasRealIcon).count
+    }
+
+    /// 诊断: 可见单元格数。
+    public func visibleItemCountForDiag() -> Int {
+        gridViewController?.collectionViewRef.visibleItems().count ?? 0
+    }
+
     /// 冒烟诊断: 拖拽测试 API(公开, 数据均为 LaunchCore 公开类型)。
     public func dragTestItems() -> [DisplayModel.DisplayItem] {
         gridViewController?.allItems() ?? []

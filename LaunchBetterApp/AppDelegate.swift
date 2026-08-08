@@ -116,19 +116,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 搜索前截图(同壁纸基线)
         windowController.captureContentScreenshot(to: "/tmp/lb-search-before.png")
         store.searchQuery = query
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+        // 等搜索布局 + 图标异步加载完成后再测量/截图
+        DispatchQueue.main.asyncAfter(deadline: .now() + 6.0) { [weak self] in
             MainActor.assumeIsolated {
-                windowController.refreshGrid()
+                guard let store = self?.container?.store, let windowController = self?.container?.windowController else {
+                    NSApp.terminate(nil)
+                    return
+                }
                 let results = store.searchResults() ?? []
                 let diag = windowController.pageTestScrollDiagnostics()
                 print("SEARCHPROBE query=\(query) results=\(results.count) capacity=\(capacity) overflow=\(results.count > capacity)")
                 print("SEARCHPROBE \(diag)")
-                
-                
-                
-                
-                
-                
+                print("SEARCHPROBE realIcons=\(windowController.realIconCount())/\(windowController.visibleItemCountForDiag())")
                 if let screenshotPath = CommandLine.arguments.last, !screenshotPath.hasPrefix("--") {
                     windowController.captureContentScreenshot(to: screenshotPath)
                 }

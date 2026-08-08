@@ -37,6 +37,9 @@ final class AppCellView: NSCollectionViewItem {
         return contents as! CGImage
     }
 
+    /// 诊断: 是否已显示真实图标(contents 非空)。
+    var hasRealIcon: Bool { iconLayer.contents != nil }
+
     override func loadView() {
         let root = CellRootView()
         root.onWindowChange = { [weak self] in
