@@ -66,12 +66,20 @@ xcodebuild -project LaunchBetter.xcodeproj -scheme LaunchBetter test
 - 禁止: force push、重写已发布历史、未授权重置用户工作、删除含未合并工作的分支
 - 提交信息简明描述变更
 
-## 模型路由
+## 模型路由(用户指令,2026-08-09 更新)
 
-- 实现: opencode-go/deepseek-v4-flash(主力)
-- 独立评审: opencode-go/glm-5.2(Phase Gate/架构/并发边界用最高推理)
-- 视觉评审: opencode-go/gpt-5.6-luna(仅 UI 视觉证据场景)
-- 仲裁: opencode-go/qwen3.8-max(Flash 与 GLM 分歧、疑难调试,慎用)
+- **总控(主对话)**: opencode-go/deepseek-v4-flash —— 阶段规划、任务打包、调度评审、
+  验证收口、Git 提交、MEMORY 维护
+- **实现(独立 subagent)**: opencode-go/deepseek-v4-flash **variant: max**(Max 思考深度),
+  经 `.opencode/agents/implementer.md` 单独窗口运行,与主对话**完全隔离上下文**(防污染)。
+  总控只给任务包(范围/约束/验收/必写测试),implementer 返回(改动清单/假设清单/测试结果/偏差);
+  总控收到后必须独立验证,不盲信。**所有 DeepSeek sub agent 一律 variant: max**
+- **方案门 + 阶段评审**: opencode-go/gpt-5.6-luna (variant: max),经 `.opencode/agents/reviewer.md`
+  独立窗口 —— 高风险任务(几何/手势/并发/性能)动手前先评审执行计划;阶段末评审
+  0 BLOCKER 0 MAJOR 才能完成
+- **视觉评审**: opencode-go/mimo-v2.5,经 `.opencode/agents/visual-reviewer.md` —— 仅截图证据场景;
+  视觉结论必须经像素级验证后采纳(该项目 4 次误报记录)
+- **仲裁**: opencode-go/qwen3.8-max —— Flash 与 Luna 分歧、疑难调试,慎用
 
 ## 单一写者规则
 
