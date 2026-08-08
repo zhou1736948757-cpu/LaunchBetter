@@ -84,6 +84,13 @@ final class DragController {
         sampleBuffer.write(point, session: sessionID)
     }
 
+    /// 诊断: 手动驱动一帧(无 display link 环境验证缓存, v0.1.6 §69)。
+    func probeProcessTick(_ point: NSPoint) {
+        guard state == .dragging else { return }
+        lastKnownPoint = point
+        processTick(point)
+    }
+
     /// 拖拽移动(高频写入缓冲, 仅最新样本生效)。
     func updateDrag(at point: NSPoint) {
         guard state == .dragging else { return }

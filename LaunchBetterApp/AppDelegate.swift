@@ -97,6 +97,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
                 self?.runSearchProbe()
             }
+        } else if CommandLine.arguments.contains("--dragcacheprobe") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+                self?.runDragCacheProbe()
+            }
         } else if CommandLine.arguments.contains("--pagingprobe") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
                 self?.runPagingProbe()
@@ -135,6 +139,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if let screenshotPath = CommandLine.arguments.last, !screenshotPath.hasPrefix("--") {
                     windowController.captureContentScreenshot(to: screenshotPath)
                 }
+                // §71: customDisplayName 变化应触发搜索索引重建
+                let rb0 = store.searchIndexRebuildCount
+                let target = store.displayModel().visibleAppIDs.first
+                if let target {
+                    store.setCustomName(target, name: "SearchInvProbeName")
+                    let rb1 = store.searchIndexRebuildCount
+                    store.setCustomName(target, name: nil)
+                    let delta = rb1 - rb0
+                    print("SEARCHPROBE searchRebuildOnCustomName=\(delta > 0 ? "OK (+\(delta))" : "FAIL (0)")")
+                }
                 store.searchQuery = ""
                 windowController.refreshGrid()
                 print("SEARCHPROBE restored search=\(store.searchResults() == nil)")
@@ -142,6 +156,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 NSApp.terminate(nil)
             }
         }
+    }
+
+    /// 拖拽缓存探针(v0.1.6 §69): 同 destination 停留 20 帧, preview/transform 写应≈1。
+    private func runDragCacheProbe() {
+        guard let controller = container?.windowController, let store = container?.store else {
+            print("DRAGCACHE FAIL")
+            NSApp.terminate(nil)
+            return
+        }
+        guard let first = controller.dragTestItems().first else {
+            print("DRAGCACHE FAIL empty")
+            NSApp.terminate(nil)
+            return
+        }
+        let p = NSPoint(x: 900, y: 400)
+        controller.dragTestBegin(item: first, at: p)
+        // 停留同一位置 20 帧(手动驱动, 无 display link 环境)
+        for _ in 0..<20 {
+            controller.dragProbeTick(p)
+        }
+        let c1 = controller.dragCacheDiagnostics()
+        // 再停留 30 帧
+        for _ in 0..<30 {
+            controller.dragProbeTick(p)
+        }
+        let c2 = controller.dragCacheDiagnostics()
+        print("DRAGCACHE after20: \(c1)")
+        print("DRAGCACHE after50: \(c2)")
+        controller.dragTestEnd(at: p)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+            MainActor.assumeIsolated {
+                _ = store.searchResults()
+                self?.finishProbe("DRAGCACHE", ok: true)
+            }
+        }
+    }
+
+    private func finishProbe(_ name: String, ok: Bool) {
+        print("\(name) \(ok ? "OK" : "FAIL")")
+        NSApp.terminate(nil)
     }
 
     /// 分页性能探针(v0.1.6 §63/§82): 合成触控板 swipe + momentum, 测量计数器。
@@ -191,6 +245,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSApp.terminate(nil)
             return
         }
+        let rebuildBefore = store.searchIndexRebuildCount
         let original = store.config
         var test = original
         // 可选参数: --gridtest [columns] [rows] [iconSize] [截图路径]
@@ -220,6 +275,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 store.save(original)
                 windowController.refreshGrid()
                 print("GRIDTEST restored columns=\(store.config.gridColumns) rows=\(store.config.gridRows) iconSize=\(store.config.iconSize)")
+                print("GRIDTEST searchRebuildDelta=\(store.searchIndexRebuildCount - rebuildBefore) (期望 0: UI-only config 不重建搜索索引, §71)")
                 print("GRIDTEST OK")
                 NSApp.terminate(nil)
             }
