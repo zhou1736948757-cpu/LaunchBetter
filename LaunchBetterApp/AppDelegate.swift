@@ -93,6 +93,93 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
                 self?.runIconBenchmark()
             }
+        } else if CommandLine.arguments.contains("--searchprobe") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+                self?.runSearchProbe()
+            }
+        } else if CommandLine.arguments.contains("--gridtest") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+                self?.runGridSettingsTest()
+            }
+        }
+    }
+
+    /// 搜索溢出运行时验证: 宽查询(> pageCapacity 结果) → 全部结果可滚动访问。
+    private func runSearchProbe() {
+        guard let store = container?.store, let windowController = container?.windowController else {
+            print("SEARCHPROBE FAIL")
+            NSApp.terminate(nil)
+            return
+        }
+        let capacity = store.displayModel().pageCapacity
+        let query = "com"
+        // 搜索前截图(同壁纸基线)
+        windowController.captureContentScreenshot(to: "/tmp/lb-search-before.png")
+        store.searchQuery = query
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+            MainActor.assumeIsolated {
+                windowController.refreshGrid()
+                let results = store.searchResults() ?? []
+                let diag = windowController.pageTestScrollDiagnostics()
+                print("SEARCHPROBE query=\(query) results=\(results.count) capacity=\(capacity) overflow=\(results.count > capacity)")
+                print("SEARCHPROBE \(diag)")
+                
+                
+                
+                
+                
+                
+                if let screenshotPath = CommandLine.arguments.last, !screenshotPath.hasPrefix("--") {
+                    windowController.captureContentScreenshot(to: screenshotPath)
+                }
+                store.searchQuery = ""
+                windowController.refreshGrid()
+                print("SEARCHPROBE restored search=\(store.searchResults() == nil)")
+                print("SEARCHPROBE OK")
+                NSApp.terminate(nil)
+            }
+        }
+    }
+
+    /// Settings 几何生效验证: 改 columns/rows/iconSize → 布局/容量/图标请求尺寸跟随; 完成后恢复。
+    private func runGridSettingsTest() {
+        guard let store = container?.store, let windowController = container?.windowController else {
+            print("GRIDTEST FAIL")
+            NSApp.terminate(nil)
+            return
+        }
+        let original = store.config
+        var test = original
+        // 可选参数: --gridtest [columns] [rows] [iconSize] [截图路径]
+        let args = CommandLine.arguments
+        let base = args.firstIndex(of: "--gridtest") ?? args.endIndex
+        func intArg(_ offset: Int, default d: Int) -> Int {
+            let idx = args.index(base, offsetBy: offset)
+            return (args.indices.contains(idx) ? Int(args[idx]) : nil) ?? d
+        }
+        let gColumns = intArg(1, default: 8)
+        let gRows = intArg(2, default: 5)
+        let gIconSize = intArg(3, default: 48)
+        test.gridColumns = gColumns
+        test.gridRows = gRows
+        test.iconSize = gIconSize
+        store.save(test)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+            MainActor.assumeIsolated {
+                windowController.refreshGrid()
+                let display = store.displayModel()
+                let diag = windowController.pageTestScrollDiagnostics()
+                print("GRIDTEST columns=\(gColumns) rows=\(gRows) iconSize=\(gIconSize) pages=\(display.pages.count) capacity=\(display.pageCapacity) iconSize=\(store.iconSize)")
+                print("GRIDTEST \(diag)")
+                if let screenshotPath = CommandLine.arguments.last, !screenshotPath.hasPrefix("--") {
+                    windowController.captureContentScreenshot(to: screenshotPath)
+                }
+                store.save(original)
+                windowController.refreshGrid()
+                print("GRIDTEST restored columns=\(store.config.gridColumns) rows=\(store.config.gridRows) iconSize=\(store.config.iconSize)")
+                print("GRIDTEST OK")
+                NSApp.terminate(nil)
+            }
         }
     }
 

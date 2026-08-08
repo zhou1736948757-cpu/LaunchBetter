@@ -8,7 +8,7 @@ import Foundation
 ///
 /// 坐标系约定:
 /// - 文档坐标(document): 水平方向, 页 0 从 0 开始, 页 p 原点在 `pageWidth * p`;
-///   垂直方向 y 向上(AppKit 文档视图约定), 网格垂直居中。
+///   垂直方向 y 向下(flipped 文档视图, Stage 1 §11 修复), 网格垂直居中。
 /// - 页宽 `pageWidth` = NSClipView 可视宽度(滚动视图 contentView.bounds.width),
 ///   绝不等同于 `collectionView.bounds.width`(文档视图宽度 = 页宽 × 页数)。
 ///
@@ -185,15 +185,14 @@ public struct GridGeometry: Sendable, Equatable {
         )
     }
 
-    /// 搜索模式槽位 frame(文档坐标, 顶部锚定: 第 0 行在最上)。
+    /// 搜索模式槽位 frame(文档坐标, y-down: 第 0 行在最上, 顶部锚定)。
     public func searchFrame(forIndex index: Int, itemCount: Int, padding: CGFloat = 24) -> CGRect {
         let col = index % columns
         let row = index / columns
-        let size = searchContentSize(forItemCount: itemCount, padding: padding)
         let stepX = cellSize + horizontalSpacing
+        let stepY = cellSize + verticalSpacing
         let x = (pageWidth - gridWidth) / 2 + CGFloat(col) * stepX
-        // y 向上: 行 0 在顶部 → 从文档顶部量起
-        let y = size.height - padding - CGFloat(row + 1) * cellSize - CGFloat(row) * verticalSpacing
+        let y = padding + CGFloat(row) * stepY
         return CGRect(x: x, y: y, width: cellSize, height: cellSize)
     }
 }

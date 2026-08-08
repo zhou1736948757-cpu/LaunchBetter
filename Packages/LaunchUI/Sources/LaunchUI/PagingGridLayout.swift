@@ -33,6 +33,10 @@ public final class PagingGridLayout: NSCollectionViewLayout {
     /// 诊断: prepare() 调用计数(布局失效测量, Stage 1 §31)。
     public private(set) var prepareCount = 0
 
+    /// 诊断: 当前 item 帧数。
+    public var itemFrameCount: Int { itemFrames.count }
+
+
     /// 最近一次 prepare 使用的几何(供 GridViewController/DragController 同步读取)。
     public private(set) var currentGeometry: GridGeometry?
 

@@ -46,7 +46,10 @@ final class GridViewController: NSViewController {
         let content = layout?.collectionViewContentSize ?? .zero
         let doc = collectionView.frame
         let clip = collectionView.enclosingScrollView?.contentView.bounds ?? .zero
-        return "content=\(Int(content.width))x\(Int(content.height)) docFrame=\(Int(doc.width))x\(Int(doc.height)) clipX=\(Int(clip.origin.x)) clipW=\(Int(clip.width)) prepare=\(layout?.prepareCount ?? 0)"
+        let sections = collectionView.numberOfSections
+        let items = sections > 0 ? collectionView.numberOfItems(inSection: 0) : -1
+        let frames = layout?.itemFrameCount ?? -1
+        return "content=\(Int(content.width))x\(Int(content.height)) docFrame=\(Int(doc.width))x\(Int(doc.height)) clipX=\(Int(clip.origin.x)) clipY=\(Int(clip.origin.y)) clipW=\(Int(clip.width)) sections=\(sections) items=\(items) frames=\(frames) prepare=\(layout?.prepareCount ?? 0)"
     }
     private var searchMode = false
     /// 退出搜索后恢复的页码。
@@ -269,6 +272,10 @@ final class GridViewController: NSViewController {
         pageCount = 1
         currentPage = 0
         dataSource.apply(snapshot, animatingDifferences: false)
+        // 强制布局(文档高度更新), 再滚动到顶 —— viewDidLayout 依赖视图尺寸变化,
+        // 搜索切换时容器尺寸不变不触发, 必须显式落定
+        view.layoutSubtreeIfNeeded()
+        updateDocumentFrame()
         scrollToTop()
         updatePageDots()
     }
@@ -288,7 +295,7 @@ final class GridViewController: NSViewController {
 
     private func scrollToTop() {
         guard let scroll = collectionView.enclosingScrollView else { return }
-        scroll.contentView.scroll(to: NSPoint(x: 0, y: scroll.documentView?.frame.height ?? 0))
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: 0))
     }
 
     private func applyDisplayModel(_ display: DisplayModel) {

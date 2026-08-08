@@ -220,8 +220,9 @@ final class GridGeometryTests: XCTestCase {
         let g = makeGeometry(columns: 7, rows: 6, pageWidth: 1200, pageHeight: 800)
         let frame0 = g.searchFrame(forIndex: 0, itemCount: 100)
         let frame7 = g.searchFrame(forIndex: 7, itemCount: 100) // 第二行
-        // 行 0 在顶部: 行 0 的 maxY 应 > 行 1 的 maxY
-        XCTAssertGreaterThan(frame0.maxY, frame7.maxY)
+        // y-down: 行 0 在最上(更小的 y)
+        XCTAssertLessThan(frame0.minY, frame7.minY)
+        XCTAssertEqual(frame0.minY, 24) // padding 顶部锚定
         // 同列: x 相同
         XCTAssertEqual(frame0.minX, frame7.minX)
     }

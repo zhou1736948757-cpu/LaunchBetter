@@ -265,6 +265,35 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         gridViewController?.allItems() ?? []
     }
 
+    /// 强制刷新网格(诊断/设置生效验证用)。
+    public func refreshGrid() {
+        gridViewController?.forceRefresh()
+    }
+
+    /// 应用自渲染截图: layer 级渲染(与屏幕合成一致)。
+    /// cacheDisplay 对纯 layer-backed 层级不可靠(搜索模式实测为空图, 假 BLOCKER)。
+    public func captureContentScreenshot(to path: String) {
+        guard let window, let contentView = window.contentView, let layer = contentView.layer else { return }
+        let scale = window.backingScaleFactor
+        let width = Int(contentView.bounds.width * scale)
+        let height = Int(contentView.bounds.height * scale)
+        guard let context = CGContext(
+            data: nil, width: width, height: height, bitsPerComponent: 8,
+            bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return }
+        context.scaleBy(x: scale, y: scale)
+        // AppKit y 向上 → 位图 y 向下
+        context.translateBy(x: 0, y: contentView.bounds.height)
+        context.scaleBy(x: 1, y: -1)
+        layer.render(in: context)
+        guard let image = context.makeImage() else { return }
+        let rep = NSBitmapImageRep(cgImage: image)
+        guard let png = rep.representation(using: .png, properties: [:]) else { return }
+        try? png.write(to: URL(fileURLWithPath: path))
+        print("SCREENSHOT_WRITTEN \(path)")
+    }
+
     /// 翻页测试 API(校验真实滚动位置)。
     public func pageTestNext() -> Int {
         gridViewController?.nextPage()
