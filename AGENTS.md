@@ -54,6 +54,11 @@ xcodebuild -project LaunchBetter.xcodeproj -scheme LaunchBetter test
 - 不建无具体用途的抽象层
 - 不引入尚未证明需要的依赖(Sparkle 等 Phase 10 再评估)
 
+## 阶段收尾规则
+
+- 每个大阶段完成后: 删除旧版本 App 构建(仅保留最新, 含 DerivedData 旧构建清理),
+  /Applications/LaunchBetter.app 覆盖为最新; 推送 GitHub 分支
+
 ## Git 纪律
 
 - 原子提交;正常实现单元 = 测试/构建 → 评审 → commit

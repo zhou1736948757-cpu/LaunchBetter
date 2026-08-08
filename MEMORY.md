@@ -57,6 +57,13 @@ d1696cd (Stage 1 报告 Docs/PhaseReports/stage-01-grid-foundation.md; 评审 8/
 - visual-reviewer(mimo)4 次误报(镜像/缺字形/裁切/搜索空), 均被像素级证据证伪;
   唯一真实捕获 = 搜索顶行裁切 → 促成 flipped 修复
 
+## 阶段收尾规则(用户要求, 必须执行)
+
+每个大阶段完成后:
+1. 删除旧版本 App(仅保留最新): 清空 DerivedData/Build/Products 中的旧 Debug/Release 构建,
+   /Applications/LaunchBetter.app 只保留最新(ad-hoc 签名覆盖安装)
+2. 推送 GitHub(分支 + 报告), 待用户决定合并
+
 ## Completed Milestones
 
 - 环境确认: macOS 26.5.2, Xcode 26.6 (17F113), Swift 6.3.3, git 2.50.1, gh 2.96.0
