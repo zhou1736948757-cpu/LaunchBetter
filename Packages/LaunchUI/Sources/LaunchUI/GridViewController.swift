@@ -19,6 +19,17 @@ final class GridViewController: NSViewController {
     private var dataSource: NSCollectionViewDiffableDataSource<Int, Item>!
     private var currentPage = 0
     private var pageCount = 1
+    /// 当前页(诊断)。
+    var currentPageValue: Int { currentPage }
+
+    /// 滚动诊断(翻页调试)。
+    func scrollDiagnostics() -> String {
+        let layout = collectionView.collectionViewLayout as? PagingGridLayout
+        let content = layout?.collectionViewContentSize ?? .zero
+        let doc = collectionView.frame
+        let clip = collectionView.enclosingScrollView?.contentView.bounds ?? .zero
+        return "content=\(Int(content.width))x\(Int(content.height)) docFrame=\(Int(doc.width))x\(Int(doc.height)) clipX=\(Int(clip.origin.x)) clipW=\(Int(clip.width))"
+    }
     private var searchMode = false
 
     /// 点击文件夹时回调(打开文件夹视图)。
@@ -26,6 +37,10 @@ final class GridViewController: NSViewController {
 
     /// 点击空白处回调(退出启动器)。
     var onClickBlank: (() -> Void)?
+
+    /// 页码指示点容器。
+    private var pageDots: NSStackView!
+    private var pageDotViews: [NSView] = []
 
     /// 拖拽控制(由窗口控制器注入)。
     var dragController: DragController?
@@ -67,18 +82,62 @@ final class GridViewController: NSViewController {
         collectionView.onContextMenu = { [weak self] point in
             self?.contextMenu(at: point)
         }
-        container.addSubview(collectionView)
-        collectionView.translatesAutoresizingMaskIntoConstraints = false
+        collectionView.onPageScroll = { [weak self] event in
+            self?.handlePageScroll(event) ?? false
+        }
+
+        // 页码指示点(底部居中)
+        let dots = NSStackView()
+        dots.orientation = .horizontal
+        dots.spacing = 8
+        dots.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(dots)
         NSLayoutConstraint.activate([
-            collectionView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            collectionView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            collectionView.topAnchor.constraint(equalTo: container.topAnchor),
-            collectionView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            dots.centerXAnchor.constraint(equalTo: container.centerXAnchor),
+            dots.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -12),
+        ])
+        pageDots = dots
+
+        // 分页滚动: 集合视图必须包在 NSScrollView 中(否则 scrollToPage 是空操作,
+        // 用户只能看到第一页 — 这是"看不到后两页"的根因)
+        let scrollView = NSScrollView()
+        scrollView.drawsBackground = false
+        scrollView.hasHorizontalScroller = false
+        scrollView.hasVerticalScroller = false
+        scrollView.autohidesScrollers = true
+        scrollView.documentView = collectionView
+        // 关键: 关闭文档视图 autoresizing, 否则滚动视图会把它拉回可视宽度
+        collectionView.autoresizingMask = []
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(scrollView)
+        NSLayoutConstraint.activate([
+            scrollView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            scrollView.topAnchor.constraint(equalTo: container.topAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
         ])
         self.collectionView = collectionView
 
         configureDataSource()
         view = container
+    }
+
+    override func viewDidLayout() {
+        super.viewDidLayout()
+        // 文档视图 frame 必须等于布局 contentSize(否则滚动范围只有一页宽)
+        updateDocumentFrame()
+    }
+
+    /// 同步集合视图 frame 到布局 contentSize(分页滚动的前提)。
+    private func updateDocumentFrame() {
+        guard let layout = collectionView.collectionViewLayout as? PagingGridLayout else { return }
+        let size = layout.collectionViewContentSize
+        if let paged = collectionView as? ClickableCollectionView {
+            // 锁定文档宽度(防 NSClipView 滚动约束), 高度灵活
+            paged.lockDocumentWidth(size.width)
+        } else if collectionView.frame.size != size {
+            collectionView.frame = NSRect(origin: .zero, size: size)
+        }
     }
 
     private func configureDataSource() {
@@ -145,6 +204,7 @@ final class GridViewController: NSViewController {
         currentPage = min(currentPage, pageCount - 1)
         dataSource.apply(snapshot, animatingDifferences: false)
         collectionView.scrollToPage(currentPage, animated: false)
+        updatePageDots()
     }
 
     private func applySearch(_ results: [Item]) {
@@ -155,6 +215,7 @@ final class GridViewController: NSViewController {
         currentPage = 0
         dataSource.apply(snapshot, animatingDifferences: false)
         collectionView.scrollToPage(0, animated: false)
+        updatePageDots()
     }
 
     // MARK: - 页面导航
@@ -163,6 +224,7 @@ final class GridViewController: NSViewController {
         guard !searchMode else { return }
         currentPage = min(max(0, page), pageCount - 1)
         collectionView.scrollToPage(currentPage, animated: animated)
+        updatePageDots()
     }
 
     func nextPage() { goToPage(currentPage + 1) }
@@ -332,21 +394,62 @@ final class GridViewController: NSViewController {
     }
 
     override func scrollWheel(with event: NSEvent) {
-        if !searchMode, abs(event.deltaY) > abs(event.deltaX), abs(event.deltaY) > 0.5 {
+        // 已迁移到集合视图层(ClickableCollectionView.onPageScroll)
+        super.scrollWheel(with: event)
+    }
+
+    /// 滚轮/双指滑动翻页: 横向滑动(deltaX)或纵向滚轮(deltaY)均翻页。
+    /// 惯性(momentum)阶段忽略, 避免松手后连翻多页。
+    private func handlePageScroll(_ event: NSEvent) -> Bool {
+        guard !searchMode else { return false }
+        guard event.momentumPhase == [] || event.momentumPhase == .ended else { return false }
+        if abs(event.deltaX) > abs(event.deltaY), abs(event.deltaX) > 0.5 {
+            if event.deltaX < 0 {
+                nextPage()
+            } else {
+                previousPage()
+            }
+            return true
+        }
+        if abs(event.deltaY) > 0.5 {
             if event.deltaY < 0 {
                 nextPage()
             } else {
                 previousPage()
             }
-        } else {
-            super.scrollWheel(with: event)
+            return true
         }
+        return false
     }
 
     /// 确定性诊断(冒烟验证用): 当前快照结构。
     func diagnostics() -> String {
         let snapshot = dataSource.snapshot()
         return "sections=\(snapshot.numberOfSections) items=\(snapshot.itemIdentifiers.count) pageCount=\(pageCount) search=\(searchMode)"
+    }
+
+    /// 更新页码指示点。
+    private func updatePageDots() {
+        guard let pageDots else { return }
+        for dot in pageDotViews {
+            dot.removeFromSuperview()
+        }
+        pageDotViews = []
+        guard pageCount > 1 else { return }
+        for index in 0..<pageCount {
+            let dot = NSView()
+            dot.wantsLayer = true
+            dot.layer?.cornerRadius = 3
+            dot.translatesAutoresizingMaskIntoConstraints = false
+            dot.widthAnchor.constraint(equalToConstant: 6).isActive = true
+            dot.heightAnchor.constraint(equalToConstant: 6).isActive = true
+            let active = index == currentPage
+            dot.layer?.backgroundColor = (active
+                ? NSColor.white
+                : NSColor.white.withAlphaComponent(0.4)).cgColor
+            pageDots.addArrangedSubview(dot)
+            pageDotViews.append(dot)
+        }
     }
 
     // MARK: - 拖拽辅助
@@ -449,9 +552,12 @@ final class GridViewController: NSViewController {
 }
 
 private extension NSCollectionView {
+    /// 翻页: 页步长 = clip 可见宽度(非文档宽度)。
     func scrollToPage(_ page: Int, animated: Bool) {
-        guard let clip = enclosingScrollView?.contentView else { return }
-        let x = CGFloat(page) * bounds.width
+        guard let scroll = enclosingScrollView else { return }
+        let clip = scroll.contentView
+        let clipWidth = clip.bounds.width > 0 ? clip.bounds.width : bounds.width
+        let x = CGFloat(page) * clipWidth
         if animated {
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = 0.35
@@ -459,7 +565,11 @@ private extension NSCollectionView {
                 clip.animator().setBoundsOrigin(NSPoint(x: x, y: 0))
             }
         } else {
-            clip.setBoundsOrigin(NSPoint(x: x, y: 0))
+            // NSClipView.scroll(to:) 是文档化的编程滚动 API
+            clip.scroll(to: NSPoint(x: x, y: 0))
+            if CommandLine.arguments.contains("--pagetest") {
+                print("PAGETEST scrollToPage x=\(Int(x)) now=\(Int(clip.bounds.origin.x))")
+            }
         }
     }
 }

@@ -5,6 +5,7 @@ import LaunchCore
 /// - 单击(无拖动)→ onClick
 /// - 按住移动超过阈值 → 进入拖拽(经 onDragBegin/onDragMove/onDragEnd)
 /// - 右键 → onContextMenu
+/// - 分页文档: 宽度锁定(NSClipView 滚动时会约束文档视图宽度, 导致分页失效)
 @MainActor
 final class ClickableCollectionView: NSCollectionView {
     var onClick: ((NSPoint) -> Void)?
@@ -12,6 +13,25 @@ final class ClickableCollectionView: NSCollectionView {
     var onDragBegin: ((NSPoint) -> Void)?
     var onDragMove: ((NSPoint) -> Void)?
     var onDragEnd: ((NSPoint) -> Void)?
+
+    /// 分页锁定的文档宽度(0 = 未锁定)。
+    private var lockedDocumentWidth: CGFloat = 0
+
+    /// 锁定文档宽度(分页滚动用)。高度保持灵活(缩放/屏幕变化)。
+    func lockDocumentWidth(_ width: CGFloat) {
+        lockedDocumentWidth = width
+        if frame.width != width {
+            frame.size.width = width
+        }
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        if lockedDocumentWidth > 0 {
+            super.setFrameSize(NSSize(width: lockedDocumentWidth, height: newSize.height))
+        } else {
+            super.setFrameSize(newSize)
+        }
+    }
 
     /// 拖拽阈值(pt)。
     private let dragThreshold: CGFloat = 5
@@ -52,5 +72,17 @@ final class ClickableCollectionView: NSCollectionView {
 
     override func menu(for event: NSEvent) -> NSMenu? {
         onContextMenu?(event.locationInWindow)
+    }
+
+    // MARK: - 翻页滚轮/滑动(响应链: 集合视图最先收到)
+
+    var onPageScroll: ((NSEvent) -> Bool)?
+
+    override func scrollWheel(with event: NSEvent) {
+        // 横向双指滑动 → 翻页; 纵向滚轮 → 翻页; 其余交给内部滚动
+        if let onPageScroll, onPageScroll(event) {
+            return
+        }
+        super.scrollWheel(with: event)
     }
 }

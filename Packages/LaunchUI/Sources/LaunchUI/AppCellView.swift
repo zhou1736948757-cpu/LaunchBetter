@@ -34,8 +34,8 @@ final class AppCellView: NSCollectionViewItem {
 
         label.alignment = .center
         label.font = .systemFont(ofSize: 10)
-        label.lineBreakMode = .byWordWrapping
-        label.maximumNumberOfLines = 2
+        label.lineBreakMode = .byTruncatingTail
+        label.maximumNumberOfLines = 1
         label.textColor = .white
         label.shadow = NSShadow()
         label.shadow?.shadowColor = NSColor.black.withAlphaComponent(0.85)
@@ -46,7 +46,9 @@ final class AppCellView: NSCollectionViewItem {
         NSLayoutConstraint.activate([
             label.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 2),
             label.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -2),
-            label.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -2),
+            // 单行标签底部锚定(高度 13pt, 字段顶边 81, 图标底 72 → 9pt 间隙)
+            label.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -3),
+            label.heightAnchor.constraint(equalToConstant: 13),
         ])
         view = root
     }
@@ -55,9 +57,9 @@ final class AppCellView: NSCollectionViewItem {
         super.viewDidLayout()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        // 图标层底部收进 24pt(标签条带), 图标永不压到标签
+        // 图标 64pt(单元格 66%), 单行标签从 80pt 起, 间隙 ~16pt(宽松分离)
         var iconFrame = view.bounds
-        iconFrame.size.height -= 24
+        iconFrame.size.height = 64
         iconLayer.frame = iconFrame
         letterLayer.frame = iconFrame
         letterLayer.contentsScale = view.window?.backingScaleFactor ?? 2

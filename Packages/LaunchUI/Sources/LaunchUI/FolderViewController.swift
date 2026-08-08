@@ -43,7 +43,7 @@ final class FolderViewController: NSViewController {
             titleLabel.centerXAnchor.constraint(equalTo: root.centerXAnchor),
         ])
 
-        // 子项网格: 单页, 支持点击启动
+        // 子项网格: 单页, 支持点击启动(同样包 NSScrollView, 与主网格一致)
         let collectionView = ClickableCollectionView()
         collectionView.collectionViewLayout = PagingGridLayout(
             columns: store.gridColumns, rows: store.gridRows, itemSize: 96, spacing: 28
@@ -51,13 +51,21 @@ final class FolderViewController: NSViewController {
         collectionView.backgroundColors = [.clear]
         collectionView.isSelectable = false
         collectionView.register(AppCellView.self, forItemWithIdentifier: AppCellView.identifier)
-        root.addSubview(collectionView)
-        collectionView.translatesAutoresizingMaskIntoConstraints = false
+        let scrollView = NSScrollView()
+        scrollView.drawsBackground = false
+        scrollView.hasHorizontalScroller = false
+        scrollView.hasVerticalScroller = false
+        scrollView.autohidesScrollers = true
+        scrollView.documentView = collectionView
+        // 关键: 关闭文档视图 autoresizing, 否则滚动视图会把它拉回可视宽度
+        collectionView.autoresizingMask = []
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        root.addSubview(scrollView)
         NSLayoutConstraint.activate([
-            collectionView.leadingAnchor.constraint(equalTo: root.leadingAnchor),
-            collectionView.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-            collectionView.topAnchor.constraint(equalTo: root.topAnchor, constant: 80),
-            collectionView.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+            scrollView.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            scrollView.topAnchor.constraint(equalTo: root.topAnchor, constant: 80),
+            scrollView.bottomAnchor.constraint(equalTo: root.bottomAnchor),
         ])
 
         // Diffable: 单 section 子项

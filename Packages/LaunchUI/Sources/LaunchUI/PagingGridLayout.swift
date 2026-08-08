@@ -39,12 +39,23 @@ public final class PagingGridLayout: NSCollectionViewLayout {
         itemFrames = [:]
 
         let sectionCount = collectionView.numberOfSections
-        contentWidth = CGFloat(sectionCount) * bounds.width
+        // 页宽 = clip 可视宽度(不是文档 frame 宽度! 否则与 frame 断言互相放大)
+        let pageWidth = collectionView.enclosingScrollView?.contentView.bounds.width
+            ?? bounds.width
+        contentWidth = CGFloat(sectionCount) * pageWidth
         guard sectionCount > 0 else { return }
+
+        // 关键: 文档视图宽度必须等于内容宽度, 否则滚动范围只有一页。
+        // 通过 ClickableCollectionView 的宽度锁定执行(防 NSClipView 滚动约束)。
+        if let paged = collectionView as? ClickableCollectionView {
+            paged.lockDocumentWidth(contentWidth)
+        } else if collectionView.frame.width != contentWidth {
+            collectionView.frame.size.width = contentWidth
+        }
 
         let gridWidth = CGFloat(columns) * itemSize + CGFloat(columns - 1) * spacing
         let gridHeight = CGFloat(rows) * itemSize + CGFloat(rows - 1) * spacing
-        let startX = (bounds.width - gridWidth) / 2
+        let startX = (pageWidth - gridWidth) / 2
         let startY = (bounds.height - gridHeight) / 2
 
         for section in 0..<sectionCount {
@@ -52,7 +63,7 @@ public final class PagingGridLayout: NSCollectionViewLayout {
             for index in 0..<itemCount {
                 let col = index % columns
                 let row = index / columns
-                let x = CGFloat(section) * bounds.width + startX + CGFloat(col) * (itemSize + spacing)
+                let x = CGFloat(section) * pageWidth + startX + CGFloat(col) * (itemSize + spacing)
                 let y = startY + CGFloat(row) * (itemSize + spacing)
                 itemFrames[IndexPath(item: index, section: section)] = CGRect(
                     x: x, y: y, width: itemSize, height: itemSize

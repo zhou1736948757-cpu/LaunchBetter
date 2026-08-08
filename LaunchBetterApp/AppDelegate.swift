@@ -81,6 +81,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     next()
                 }
             }
+        } else if CommandLine.arguments.contains("--pagetest") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+                self?.runPageTest()
+            }
         } else if CommandLine.arguments.contains("--smoke") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
                 self?.runSmokeDiagnostics()
@@ -205,6 +209,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         finishSmoke(store: store)
+    }
+
+    private func runPageTest() {
+        guard let controller = container?.windowController else {
+            print("PAGETEST FAIL")
+            NSApp.terminate(nil)
+            return
+        }
+        // 翻页为动画(0.35s), 每步等待动画完成再读数
+        func step(_ action: () -> Void) {
+            action()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+        }
+        print("PAGETEST before: \(controller.pageTestScrollDiagnostics())")
+        _ = controller.pageTestGoTo(1)
+        let x1 = controller.pageTestScrollX()
+        _ = controller.pageTestGoTo(2)
+        let x2 = controller.pageTestScrollX()
+        _ = controller.pageTestGoTo(1)
+        let x3 = controller.pageTestScrollX()
+        print("PAGETEST x=\(Int(x1))->\(Int(x2))->\(Int(x3))")
+        print("PAGETEST after: \(controller.pageTestScrollDiagnostics())")
+        let moved = x2 > x1 && x3 < x2
+        print("PAGETEST \(moved ? "OK" : "FAIL")")
+        NSApp.terminate(nil)
     }
 
     private func finishSmoke(store: LauncherStore) {

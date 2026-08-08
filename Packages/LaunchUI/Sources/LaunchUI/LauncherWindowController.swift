@@ -265,6 +265,31 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         gridViewController?.allItems() ?? []
     }
 
+    /// 翻页测试 API(校验真实滚动位置)。
+    public func pageTestNext() -> Int {
+        gridViewController?.nextPage()
+        return gridViewController?.currentPageValue ?? -1
+    }
+
+    public func pageTestPrevious() -> Int {
+        gridViewController?.previousPage()
+        return gridViewController?.currentPageValue ?? -1
+    }
+
+    public func pageTestGoTo(_ page: Int) -> Int {
+        gridViewController?.goToPage(page, animated: false)
+        return gridViewController?.currentPageValue ?? -1
+    }
+
+    public func pageTestScrollX() -> Double {
+        let x = gridViewController?.collectionViewRef.enclosingScrollView?.contentView.bounds.origin.x ?? -1
+        return Double(x)
+    }
+
+    public func pageTestScrollDiagnostics() -> String {
+        gridViewController?.scrollDiagnostics() ?? "nil"
+    }
+
     public func dragTestBegin(item: DisplayModel.DisplayItem, at point: NSPoint) {
         gridViewController?.dragController?.beginDrag(item: item, at: point)
     }

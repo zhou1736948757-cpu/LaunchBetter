@@ -116,7 +116,7 @@ PYEOF
   local warn="false"
   if python3 -c "exit(0 if float('$pct') >= float('$CONTEXT_WARN_PCT') else 1)" 2>/dev/null; then
     warn="true"
-    log "CONTEXT WARN usage>=${CONTEXT_WARN_PCT}% (${pct}%) — 压缩安全提醒"
+    log "CONTEXT WARN usage>=${CONTEXT_WARN_PCT}% (${pct}%) — 尝试自动压缩"
     # 压缩前持久状态新鲜性检查
     if [ -f "$PROJECT_DIR/MEMORY.md" ]; then
       local mem_age
@@ -125,6 +125,8 @@ PYEOF
         log "CONTEXT WARN MEMORY.md 已 $mem_age 秒未更新 — 压缩可能丢失状态,需先更新 MEMORY"
       fi
     fi
+    # 自动压缩(最佳努力): 有 server 则执行 session.compact; 无则记录
+    node "$PROJECT_DIR/Scripts/compact-session.mjs" "$sid" >> "$LOG" 2>&1 || log "compact attempt failed/unsupported"
   fi
   write_state "\"context\": {\"session\": \"$sid\", \"estimatedTokens\": $tokens, \"limit\": $limit, \"usagePct\": $pct, \"warn50\": $warn}"
 }
