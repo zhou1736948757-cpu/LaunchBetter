@@ -23,6 +23,12 @@ public struct DisplayModel: Sendable, Equatable {
     /// 每页槽位容量(列 × 行),用于拖拽索引数学。
     public let pageCapacity: Int
 
+    /// 派生输入: 隐藏应用集(显示过滤器)。
+    public let hiddenAppIDs: Set<AppID>
+
+    /// 派生输入: 缺失应用集(墓碑,显示过滤器)。
+    public let missingAppIDs: Set<AppID>
+
     /// 从 Catalog + Layout + Configuration 派生。
     public init(catalog: CatalogSnapshot, layout: LayoutSnapshot, config: AppConfiguration) {
         let capacity = config.gridColumns * config.gridRows
@@ -30,6 +36,8 @@ public struct DisplayModel: Sendable, Equatable {
 
         let missing = Set(layout.missingApps.keys)
         let hidden = Set(config.hiddenAppIDs)
+        self.hiddenAppIDs = hidden
+        self.missingAppIDs = missing
         let isInvisible: (AppID) -> Bool = { missing.contains($0) || hidden.contains($0) }
 
         var derived: [DisplayItem] = []
@@ -53,9 +61,16 @@ public struct DisplayModel: Sendable, Equatable {
     }
 
     /// 直构已分页结构(引擎重分块 / 布局恢复 / 测试用)。
-    public init(pages: [[DisplayItem]], pageCapacity: Int) {
+    public init(
+        pages: [[DisplayItem]],
+        pageCapacity: Int,
+        hiddenAppIDs: Set<AppID> = [],
+        missingAppIDs: Set<AppID> = []
+    ) {
         self.pages = pages
         self.pageCapacity = max(1, pageCapacity)
+        self.hiddenAppIDs = hiddenAppIDs
+        self.missingAppIDs = missingAppIDs
     }
 
     private static func chunk(

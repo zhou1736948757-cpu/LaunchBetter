@@ -1,15 +1,6 @@
 import AppKit
 import LaunchCore
 
-/// 可点击集合视图: 把点击坐标(窗口坐标)路由出去。
-private final class ClickableCollectionView: NSCollectionView {
-    var onClick: ((NSPoint) -> Void)?
-
-    override func mouseDown(with event: NSEvent) {
-        onClick?(event.locationInWindow)
-    }
-}
-
 /// 网格视图控制器: NSCollectionView + DiffableDataSource + 分页导航。
 ///
 /// 两种模式:
@@ -29,6 +20,9 @@ final class GridViewController: NSViewController {
     private var currentPage = 0
     private var pageCount = 1
     private var searchMode = false
+
+    /// 点击文件夹时回调(打开文件夹视图)。
+    var onOpenFolder: ((FolderID) -> Void)?
 
     init(store: any LauncherStoring, iconProvider: (any IconImageProviding)?) {
         self.store = store
@@ -52,6 +46,9 @@ final class GridViewController: NSViewController {
         collectionView.register(AppCellView.self, forItemWithIdentifier: AppCellView.identifier)
         collectionView.onClick = { [weak self] point in
             self?.handleClick(at: point)
+        }
+        collectionView.onContextMenu = { [weak self] point in
+            self?.contextMenu(at: point)
         }
         container.addSubview(collectionView)
         collectionView.translatesAutoresizingMaskIntoConstraints = false
@@ -163,10 +160,105 @@ final class GridViewController: NSViewController {
         switch item {
         case .app(let id):
             store.launch(id)
-        case .folder:
-            // 文件夹展开属 Phase 5
-            break
+        case .folder(let id, _):
+            onOpenFolder?(id)
         }
+    }
+
+    // MARK: - 右键菜单(Phase 5)
+
+    func contextMenu(at point: NSPoint) -> NSMenu? {
+        let local = collectionView.convert(point, from: nil)
+        guard let indexPath = collectionView.indexPathForItem(at: local),
+              let item = dataSource.itemIdentifier(for: indexPath) else {
+            return nil
+        }
+        let menu = NSMenu()
+
+        switch item {
+        case .app(let id):
+            let addItem = NSMenuItem(title: "加入文件夹", action: nil, keyEquivalent: "")
+            let submenu = NSMenu()
+            let folders = store.folderNames()
+            if folders.isEmpty {
+                let empty = NSMenuItem(title: "(无文件夹)", action: nil, keyEquivalent: "")
+                empty.isEnabled = false
+                submenu.addItem(empty)
+            } else {
+                for (folderID, name) in folders.sorted(by: { $0.value < $1.value }) {
+                    let item = NSMenuItem(title: name, action: #selector(addToFolder(_:)), keyEquivalent: "")
+                    item.representedObject = FolderMenuItemPayload(appID: id, folderID: folderID)
+                    item.target = self
+                    submenu.addItem(item)
+                }
+            }
+            addItem.submenu = submenu
+            menu.addItem(addItem)
+
+            let newFolder = NSMenuItem(
+                title: "新建文件夹", action: #selector(createFolderWith(_:)), keyEquivalent: ""
+            )
+            newFolder.representedObject = id
+            newFolder.target = self
+            menu.addItem(newFolder)
+        case .folder(let id, _):
+            let rename = NSMenuItem(
+                title: "重命名…", action: #selector(renameFolder(_:)), keyEquivalent: ""
+            )
+            rename.representedObject = id
+            rename.target = self
+            menu.addItem(rename)
+
+            let dissolve = NSMenuItem(
+                title: "解散文件夹", action: #selector(dissolveFolder(_:)), keyEquivalent: ""
+            )
+            dissolve.representedObject = id
+            dissolve.target = self
+            menu.addItem(dissolve)
+        }
+        return menu
+    }
+
+    private struct FolderMenuItemPayload {
+        let appID: AppID
+        let folderID: FolderID
+    }
+
+    @objc private func addToFolder(_ sender: NSMenuItem) {
+        guard let payload = sender.representedObject as? FolderMenuItemPayload else { return }
+        store.addToFolder(app: payload.appID, folder: payload.folderID)
+    }
+
+    @objc private func createFolderWith(_ sender: NSMenuItem) {
+        guard let appID = sender.representedObject as? AppID else { return }
+        let name = promptForName(defaultValue: "新文件夹")
+        guard let name, !name.isEmpty else { return }
+        store.createFolder(name: name, appIDs: [appID])
+    }
+
+    @objc private func renameFolder(_ sender: NSMenuItem) {
+        guard let folderID = sender.representedObject as? FolderID else { return }
+        let current = store.folderName(for: folderID)
+        let name = promptForName(defaultValue: current)
+        guard let name, !name.isEmpty else { return }
+        store.renameFolder(folderID, to: name)
+    }
+
+    @objc private func dissolveFolder(_ sender: NSMenuItem) {
+        guard let folderID = sender.representedObject as? FolderID else { return }
+        store.dissolveFolder(folderID)
+    }
+
+    private func promptForName(defaultValue: String) -> String? {
+        let alert = NSAlert()
+        alert.messageText = defaultValue == "新文件夹" ? "新建文件夹" : "重命名"
+        alert.addButton(withTitle: "确定")
+        alert.addButton(withTitle: "取消")
+        let field = NSTextField(string: defaultValue)
+        field.frame = NSRect(x: 0, y: 0, width: 240, height: 24)
+        alert.accessoryView = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+        return field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     override func scrollWheel(with event: NSEvent) {

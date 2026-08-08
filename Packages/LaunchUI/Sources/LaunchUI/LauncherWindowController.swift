@@ -13,6 +13,7 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
     private let store: any LauncherStoring
     private let iconProvider: (any IconImageProviding)?
     private var gridViewController: GridViewController!
+    private var folderViewController: FolderViewController?
     private let searchField = NSSearchField()
 
     private var visible = false
@@ -48,6 +49,9 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         ])
 
         let grid = GridViewController(store: store, iconProvider: iconProvider)
+        grid.onOpenFolder = { [weak self] folderID in
+            self?.openFolder(folderID)
+        }
         gridViewController = grid
         root.addSubview(grid.view)
         grid.view.translatesAutoresizingMaskIntoConstraints = false
@@ -130,6 +134,32 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
     }
 
     public var isVisible: Bool { visible }
+
+    // MARK: - 文件夹视图
+
+    private func openFolder(_ folderID: FolderID) {
+        guard let window, let contentView = window.contentView else { return }
+        let folderView = FolderViewController(
+            store: store, iconProvider: iconProvider, folderID: folderID
+        )
+        folderView.onBack = { [weak self] in
+            self?.closeFolderView()
+        }
+        folderViewController = folderView
+        contentView.addSubview(folderView.view)
+        folderView.view.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            folderView.view.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            folderView.view.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+            folderView.view.topAnchor.constraint(equalTo: contentView.topAnchor),
+            folderView.view.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
+        ])
+    }
+
+    private func closeFolderView() {
+        folderViewController?.view.removeFromSuperview()
+        folderViewController = nil
+    }
 
     /// 确定性诊断(冒烟验证用)。
     public func diagnostics() -> String {

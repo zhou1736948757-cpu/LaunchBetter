@@ -75,4 +75,9 @@ public struct LayoutSnapshot: Codable, Sendable, Equatable {
         }
         return ids
     }
+
+    /// 页面槽位总数(文件夹算 1 个槽)。
+    public var flatCount: Int {
+        pages.reduce(0) { $0 + $1.count }
+    }
 }

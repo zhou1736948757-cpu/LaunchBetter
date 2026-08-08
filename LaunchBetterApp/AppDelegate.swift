@@ -1,4 +1,5 @@
 import AppKit
+import LaunchCore
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -61,6 +62,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         print("SMOKE window [\(windowController.diagnostics())]")
 
+        // 文件夹流程: 创建 → 重命名 → 加入 → 解散(链式, 经 LayoutStore 异步持久化)
+        if CommandLine.arguments.contains("--folders") {
+            let visible = display.flatSlots
+            let apps = visible.compactMap { item -> AppID? in
+                if case .app(let id) = item { return id }
+                return nil
+            }
+            if apps.count >= 2 {
+                var stage = 0
+                var folderID: FolderID?
+                let semaphore = DispatchSemaphore(value: 0)
+                store.onDataChange = { [weak store] in
+                    guard let store else { return }
+                    switch stage {
+                    case 0: // 创建完成
+                        folderID = store.folderNames().keys.first
+                        guard folderID != nil else { semaphore.signal(); return }
+                        stage = 1
+                        store.renameFolder(folderID!, to: "冒烟改名")
+                    case 1: // 重命名完成
+                        stage = 2
+                        store.addToFolder(app: apps[2], folder: folderID!)
+                    case 2: // 加入完成
+                        stage = 3
+                        store.dissolveFolder(folderID!)
+                    case 3: // 解散完成
+                        semaphore.signal()
+                    default:
+                        break
+                    }
+                }
+                store.createFolder(name: "冒烟文件夹", appIDs: [apps[0], apps[1]])
+                // 等待必须在后台队列(主线程 Task 需要跑, 不能阻塞主线程)
+                DispatchQueue.global().async { [weak self, weak store] in
+                    _ = semaphore.wait(timeout: .now() + 8)
+                    DispatchQueue.main.async {
+                        guard let store else { return }
+                        print("SMOKE folderOps=OK foldersNow=\(store.folderNames().count) flatAfter=\(store.displayModel().flatSlots.count)")
+                        self?.finishSmoke(store: store)
+                    }
+                }
+                return
+            } else {
+                print("SMOKE folderOps=SKIPPED apps<2")
+            }
+        }
+
+        finishSmoke(store: store)
+    }
+
+    private func finishSmoke(store: LauncherStore) {
         // 启动路径验证: 找 Chrome 并真实启动(无害)
         let chrome = store.displayModel().visibleAppIDs.first { $0.rawValue.contains("Chrome") }
         if let chrome {

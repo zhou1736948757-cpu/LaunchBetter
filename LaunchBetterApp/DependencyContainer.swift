@@ -26,9 +26,17 @@ public final class DependencyContainer {
         let catalogActor = AppCatalogActor(store: catalogStore, sources: sources)
         // 首帧同步恢复快照(损坏时由 actor.start() 在后台备份处理)
         let initialSnapshot = (try? catalogStore.load()) ?? CatalogSnapshot(apps: [])
+
+        // 布局存储: 首帧同步恢复(磁盘权威), 变更经 LayoutStore 持久化
+        let layoutStore = LayoutSnapshotStore(directory: supportDir)
+        let initialLayout = (try? layoutStore.load()) ?? LayoutSnapshot()
+        let layoutActor = LayoutStore(seed: initialLayout, persistence: layoutStore)
+
         let store = LauncherStore(
             catalogActor: catalogActor,
+            layoutStore: layoutActor,
             initialSnapshot: initialSnapshot,
+            initialLayout: initialLayout,
             settingsStore: settingsStore
         )
 

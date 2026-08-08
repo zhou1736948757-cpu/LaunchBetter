@@ -47,4 +47,24 @@ public protocol LauncherStoring: AnyObject {
 
     /// 启动应用。
     func launch(_ appID: AppID)
+
+    // MARK: - 文件夹/布局(Phase 5)
+
+    /// 创建文件夹(合并给定应用), 完成后触发 onDataChange。
+    func createFolder(name: String, appIDs: [AppID])
+
+    /// 重命名文件夹。
+    func renameFolder(_ id: FolderID, to name: String)
+
+    /// 解散文件夹(children 回到页面)。
+    func dissolveFolder(_ id: FolderID)
+
+    /// 把应用加入文件夹。
+    func addToFolder(app: AppID, folder: FolderID)
+
+    /// 现有文件夹(名称表, 供上下文菜单)。
+    func folderNames() -> [FolderID: String]
+
+    /// 文件夹可见子项(供文件夹视图)。
+    func folderChildren(_ id: FolderID) -> [AppID]?
 }

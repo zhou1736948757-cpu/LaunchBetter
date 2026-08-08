@@ -43,6 +43,7 @@ public struct LayoutTransaction {
         case reorder(item: DisplayModel.DisplayItem, toDisplayIndex: Int)
         case addToFolder(app: AppID, folder: FolderID, at: Int)
         case moveOutOfFolder(app: AppID, from: FolderID, toDisplayIndex: Int)
+        case renameFolder(FolderID, newName: String)
     }
 
     /// drop 结果: 新的显示模型 + 变更描述 + 需要结构更新的页。
@@ -218,7 +219,12 @@ public struct LayoutTransaction {
         mutation: LayoutMutation
     ) -> DropResult {
         let newPages = chunk(slots, capacity: display.pageCapacity)
-        let newDisplay = DisplayModel(pages: newPages, pageCapacity: display.pageCapacity)
+        let newDisplay = DisplayModel(
+            pages: newPages,
+            pageCapacity: display.pageCapacity,
+            hiddenAppIDs: display.hiddenAppIDs,
+            missingAppIDs: display.missingAppIDs
+        )
         let changed = changedPages(between: display.pages, and: newPages)
         return DropResult(display: newDisplay, mutation: mutation, changedPages: changed)
     }
