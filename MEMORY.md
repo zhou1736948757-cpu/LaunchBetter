@@ -130,9 +130,12 @@ main
 5. **可选**: Apple 签名/公证凭据 → 正式分发
 6. 打磨: 长名断行优化、文件夹图标区分、磁盘缓存上限策略、120Hz 复测
 
-## Watchdog 状态
+## Watchdog 状态(规则自检已启用)
 
-- 运行中(600s 周期), 状态 /tmp/launchbetter-watchdog/
+- 运行中(600s 周期; `--once` 可立即执行一轮), 状态 /tmp/launchbetter-watchdog/state.json
+- 检查项: 上下文使用率(≥50% 尝试 compact, 最佳努力) / MEMORY 新鲜度(新提交未同步即 STALE) /
+  MEMORY 必需章节结构(§24) / 违禁模式扫描(main.sync=0) / subagent 进程 / 构建卡死 / 网络
+- 实践记录: Watchdog 已成功拦截真实违规(章节改名、提交未同步 MEMORY), 规则自检有效
 - 上下文 ≥50% 自动 compact: **最佳努力** — session.compact 是 TUI 命令无 HTTP 端点,
   脚本探测 server 失败时仅记录建议(真实限制, 需人工或等上下文满自动压缩)
 

@@ -31,15 +31,20 @@ mkdir -p "$STATE_DIR"
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG"; }
 
 write_state() {
-  # $1 = JSON 片段
-  echo "{ $(date '+%s') $1 }" | python3 -c "
-import sys, json
-raw = sys.stdin.read()
-# 时间戳由 bash 注入,这里组装
-ts, rest = raw.split(' ', 1)
-state = json.loads(rest)
-state['timestamp'] = int(ts)
-with open('$STATE', 'w') as f:
+  # $1 = JSON 片段(形如 "key": {...}), 合并进 state.json(多检查共享一个文件)
+  FRAGMENT="$1" STATE_FILE="$STATE" python3 -c "
+import json, os, time
+path = os.environ['STATE_FILE']
+state = {}
+if os.path.exists(path):
+    try:
+        with open(path) as f:
+            state = json.load(f)
+    except Exception:
+        state = {}
+state.update(json.loads('{' + os.environ['FRAGMENT'] + '}'))
+state['timestamp'] = int(time.time())
+with open(path, 'w') as f:
     json.dump(state, f, ensure_ascii=False, indent=1)
 "
 }
@@ -285,8 +290,7 @@ print(int(row[0]) if row and row[0] else 0)
   write_state "\"heartbeat\": {\"lastCommitTs\": $last_commit, \"lastSessionActivityTs\": $last_activity, \"nowTs\": $now}"
 }
 
-log "WATCHDOG started interval=${INTERVAL}s pid=$$"
-while true; do
+run_all_checks() {
   check_heartbeat
   check_context
   check_memory_freshness
@@ -295,6 +299,17 @@ while true; do
   check_subagents
   check_builds
   check_network
+}
+
+log "WATCHDOG started interval=${INTERVAL}s pid=$$"
+if [ "${2:-}" = "--once" ]; then
+  # 立即执行一轮并退出(不等下一个周期)
+  run_all_checks
+  log "ONCE cycle done"
+  exit 0
+fi
+while true; do
+  run_all_checks
   log "CYCLE done"
   sleep "$INTERVAL"
 done
