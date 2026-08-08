@@ -516,8 +516,11 @@ final class GridViewController: NSViewController {
     /// 手势会话: 一次手势最多一页, momentum 不额外分页, 水平主导才翻页(Stage 1 §8)。
     private var pagingSession = PagingGestureSession()
 
-    /// 滚轮/双指滑动翻页: 横向滑动(deltaX)或纵向滚轮(deltaY)均翻页。
-    /// 惯性(momentum)阶段拦截(交给系统会滚动到任意非整页位置, 卡在两页中间, v0.1.4)。
+    /// 手势开始时的 clip 位置(跟手基准, v0.1.4)。
+    private var gestureBaseX: CGFloat = 0
+
+    /// 滚轮/双指滑动翻页: 横向跟手平移 + 松手吸附; 纵向滚轮一次一页。
+    /// 惯性(momentum)阶段拦截(交给系统会滚动到任意非整页位置, 卡在两页中间)。
     private func handlePageScroll(_ event: NSEvent) -> Bool {
         guard !searchMode else { return false }
 
@@ -532,28 +535,24 @@ final class GridViewController: NSViewController {
         switch event.phase {
         case .began:
             pagingSession.reset()
+            gestureBaseX = collectionView.enclosingScrollView?.contentView.bounds.origin.x ?? 0
         case .ended, .cancelled:
             pagingSession.feed(phase: .ended, deltaX: 0, deltaY: 0)
-            // 手势结束: 吸附到最近整页(动画被中途打断/位移不足时防卡中间)
+            // 手势结束: 吸附到最近整页(跟手后校准, 防卡两页中间)
             snapToNearestPage()
             return false
         default:
             break
         }
 
-        // 横向双指滑动(水平主导)→ 分页状态机(一次手势最多一页)
-        if abs(event.deltaX) > abs(event.deltaY), abs(event.deltaX) > 0.5 {
-            let committed = pagingSession.feed(
+        // 横向双指滑动(水平主导)→ 跟手平移(位移钳制在一页内), 松手吸附
+        if abs(event.deltaX) > abs(event.deltaY) * pagingSession.horizontalDominance,
+           abs(event.deltaX) > 0.5 {
+            _ = pagingSession.feed(
                 phase: event.phase == .changed ? .changed : .began,
-                deltaX: event.deltaX, deltaY: event.deltaY
+                deltaX: event.deltaX, deltaY: 0
             )
-            if committed {
-                if pagingSession.direction > 0 {
-                    nextPage()
-                } else {
-                    previousPage()
-                }
-            }
+            followFinger()
             return true
         }
 
@@ -576,19 +575,34 @@ final class GridViewController: NSViewController {
         return false
     }
 
-    /// 吸附到最近整页: 当前位置偏离整页时动画滚动回最近页(v0.1.4 防卡两页中间)。
+    /// 跟手: 页面随手指水平平移(累计位移钳制在一页宽内, 一次手势最多一页)。
+    private func followFinger() {
+        guard let scroll = collectionView.enclosingScrollView else { return }
+        let clip = scroll.contentView
+        let pageWidth = clip.bounds.width
+        guard pageWidth > 0 else { return }
+        // 左滑(deltaX<0, 累计为负)→ 内容左移 → offset 增加
+        let dx = -pagingSession.accumulatedDeltaX
+        let clamped = min(max(dx, -pageWidth), pageWidth)
+        let maxX = max(0, CGFloat(pageCount) * pageWidth - pageWidth)
+        let target = min(max(gestureBaseX + clamped, 0), maxX)
+        clip.scroll(to: NSPoint(x: target, y: 0))
+    }
+
+    /// 吸附到最近整页: 位移超过 35% 页宽则翻页, 否则弹回(v0.1.4 跟手吸附)。
     private func snapToNearestPage() {
         guard !searchMode else { return }
         guard let scroll = collectionView.enclosingScrollView else { return }
         let clip = scroll.contentView
         let pageWidth = clip.bounds.width > 0 ? clip.bounds.width : collectionView.bounds.width
         guard pageWidth > 0 else { return }
-        let nearest = Int((clip.bounds.origin.x / pageWidth).rounded())
-        let clamped = min(max(0, nearest), pageCount - 1)
-        let targetX = CGFloat(clamped) * pageWidth
-        guard abs(clip.bounds.origin.x - targetX) > 1 else { return }
-        currentPage = clamped
-        goToPage(clamped, animated: true)
+        let target = geometry.snapTarget(
+            currentOffsetX: clip.bounds.origin.x,
+            currentPage: currentPage,
+            pageCount: pageCount
+        )
+        currentPage = target
+        goToPage(target, animated: true)
     }
 
     /// 确定性诊断(冒烟验证用): 当前快照结构。

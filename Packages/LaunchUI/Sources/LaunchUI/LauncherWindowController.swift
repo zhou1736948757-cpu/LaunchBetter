@@ -155,7 +155,9 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
             context.duration = 0.12
             window.animator().alphaValue = 1
         }
-        window.makeFirstResponder(searchField)
+        // v0.1.4: 默认不聚焦搜索框(避免光标闪烁); 点击搜索框才聚焦。
+        // 键盘翻页/Return 经 window.keyDown 响应链仍可用。
+        window.makeFirstResponder(nil)
         if CommandLine.arguments.contains("--perf") {
             print("PERF show contentReadyMs=\(String(format: "%.1f", contentReady * 1000)) orderedFrontMs=\(String(format: "%.1f", orderedFront * 1000))")
         }

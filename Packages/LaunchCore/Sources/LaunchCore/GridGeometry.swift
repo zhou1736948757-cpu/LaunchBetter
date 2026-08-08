@@ -89,6 +89,28 @@ public struct GridGeometry: Sendable, Equatable {
         CGPoint(x: pageOriginX(page: page), y: 0)
     }
 
+    /// 吸附目标页(v0.1.4 跟手吸附): 当前水平偏移相对当前页,
+    /// 超过 threshold × 页宽则翻向该方向, 否则弹回当前页。结果钳制在页数内。
+    public func snapTarget(
+        currentOffsetX: CGFloat,
+        currentPage: Int,
+        pageCount: Int,
+        threshold: CGFloat = 0.35
+    ) -> Int {
+        guard pageWidth > 0 else { return min(max(0, currentPage), max(0, pageCount - 1)) }
+        let currentX = CGFloat(currentPage) * pageWidth
+        let offset = currentOffsetX - currentX
+        var target: Int
+        if offset > pageWidth * threshold {
+            target = currentPage + 1
+        } else if offset < -pageWidth * threshold {
+            target = currentPage - 1
+        } else {
+            target = currentPage
+        }
+        return min(max(0, target), max(0, pageCount - 1))
+    }
+
     /// 页 p 的文档坐标可视矩形。
     public func pageRect(page: Int) -> CGRect {
         CGRect(x: pageOriginX(page: page), y: 0, width: pageWidth, height: pageHeight)

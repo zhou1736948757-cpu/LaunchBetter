@@ -227,3 +227,40 @@ final class GridGeometryTests: XCTestCase {
         XCTAssertEqual(frame0.minX, frame7.minX)
     }
 }
+
+extension GridGeometryTests {
+    // MARK: - 吸附目标(v0.1.4)
+
+    func testSnapTargetStaysWhenSmallOffset() {
+        let g = makeGeometry(pageWidth: 1200)
+        // 20% 位移 → 弹回当前页
+        XCTAssertEqual(g.snapTarget(currentOffsetX: 1200 + 240, currentPage: 1, pageCount: 3), 1)
+        XCTAssertEqual(g.snapTarget(currentOffsetX: 1200 - 240, currentPage: 1, pageCount: 3), 1)
+    }
+
+    func testSnapTargetAdvancesWhenLargeOffset() {
+        let g = makeGeometry(pageWidth: 1200)
+        // 40% 位移 → 翻页
+        XCTAssertEqual(g.snapTarget(currentOffsetX: 1200 + 480, currentPage: 1, pageCount: 3), 2)
+        XCTAssertEqual(g.snapTarget(currentOffsetX: 1200 - 480, currentPage: 1, pageCount: 3), 0)
+    }
+
+    func testSnapTargetClampsAtBounds() {
+        let g = makeGeometry(pageWidth: 1200)
+        // 第 0 页向左 → 钳制回 0; 最后一页向右 → 钳制
+        XCTAssertEqual(g.snapTarget(currentOffsetX: -480, currentPage: 0, pageCount: 3), 0)
+        XCTAssertEqual(g.snapTarget(currentOffsetX: 2400 + 480, currentPage: 2, pageCount: 3), 2)
+    }
+
+    func testSnapTargetSinglePage() {
+        let g = makeGeometry(pageWidth: 1200)
+        XCTAssertEqual(g.snapTarget(currentOffsetX: 0, currentPage: 0, pageCount: 1), 0)
+        XCTAssertEqual(g.snapTarget(currentOffsetX: 999, currentPage: 0, pageCount: 1), 0)
+    }
+
+    func testSnapTargetExactPage() {
+        let g = makeGeometry(pageWidth: 1200)
+        XCTAssertEqual(g.snapTarget(currentOffsetX: 1200, currentPage: 1, pageCount: 3), 1)
+        XCTAssertEqual(g.snapTarget(currentOffsetX: 0, currentPage: 0, pageCount: 3), 0)
+    }
+}
