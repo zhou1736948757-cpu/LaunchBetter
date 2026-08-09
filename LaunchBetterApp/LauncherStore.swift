@@ -398,11 +398,14 @@ public final class LauncherStore: LauncherStoring, LayoutMutationCompleting, Set
     }
 
     private func drainExternalCatalogRefreshes() async {
+        var retry = RetryBackoff()
         while externalCatalogRefreshPending {
             externalCatalogRefreshPending = false
             let generation = await catalogActor.snapshotGeneration()
             guard let snapshot = await catalogActor.currentSnapshot(ifGeneration: generation) else {
+                // A newer catalog arrived while draining → fresh FS activity, restart backoff.
                 externalCatalogRefreshPending = true
+                retry.reset()
                 continue
             }
             let result = await layoutStore.reconcileWithResult(catalog: snapshot, now: Date())
@@ -412,7 +415,7 @@ public final class LauncherStore: LauncherStoring, LayoutMutationCompleting, Set
                 // no later filesystem callback arrives.
                 externalCatalogRefreshPending = true
                 do {
-                    try await Task.sleep(for: .milliseconds(250))
+                    try await Task.sleep(for: .milliseconds(retry.nextDelayMilliseconds()))
                 } catch {
                     break
                 }
@@ -422,8 +425,11 @@ public final class LauncherStore: LauncherStoring, LayoutMutationCompleting, Set
                 // A newer catalog arrived during layout persistence. Loop once more
                 // before publishing so the final disk/UI state is current.
                 externalCatalogRefreshPending = true
+                retry.reset()
                 continue
             }
+            // Successfully committed a current snapshot; next failure starts from 250ms.
+            retry.reset()
             catalogSnapshot = snapshot
             layout = result.layout
             rebuildSearchIndex()
