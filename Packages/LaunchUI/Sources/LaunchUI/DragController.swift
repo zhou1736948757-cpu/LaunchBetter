@@ -20,7 +20,14 @@ final class DragController {
         case dragging
     }
 
+    /// 拖拽输入源(Stage 2 §17): 一个 session 只有一个 owner。
+    enum DragInputSource {
+        case mouse
+        case threeFinger
+    }
+
     private(set) var state: State = .idle
+    private(set) var activeInputSource: DragInputSource?
 
     /// 弱引用打破与网格的强引用环(M4);网格由窗口控制器持有,生命周期更长。
     private weak var grid: GridViewController?
@@ -48,11 +55,17 @@ final class DragController {
 
     // MARK: - 拖拽生命周期
 
-    /// 开始拖拽(已通过阈值判定)。
-    func beginDrag(item: DisplayModel.DisplayItem, at point: NSPoint) {
-        guard state == .idle else { return }
+    /// 开始拖拽(已通过阈值判定)。inputSource 默认鼠标; 三指拖动显式传入(Stage 2 §17 互斥)。
+    func beginDrag(
+        item: DisplayModel.DisplayItem,
+        at point: NSPoint,
+        inputSource: DragInputSource = .mouse
+    ) {
+        // 已有一个拖动 session → 其他输入源不得二次 begin
+        guard state == .idle, activeInputSource == nil else { return }
         guard let grid, !grid.isSearchMode, let sourceIndex = grid.flatIndex(of: item) else { return }
         state = .dragging
+        activeInputSource = inputSource
         sourceItem = item
         self.sourceIndex = sourceIndex
         displayAtDragStart = store.displayModel()
@@ -91,14 +104,16 @@ final class DragController {
     }
 
     /// 拖拽移动(高频写入缓冲, 仅最新样本生效)。
-    func updateDrag(at point: NSPoint) {
-        guard state == .dragging else { return }
+    /// inputSource 必须与 session owner 一致, 否则拒绝(Stage 2 M5: 迟到事件不污染他源 session)。
+    func updateDrag(at point: NSPoint, inputSource: DragInputSource = .mouse) {
+        guard state == .dragging, activeInputSource == inputSource else { return }
         sampleBuffer.write(point, session: sessionID)
     }
 
     /// 结束拖拽: 计算 drop 并应用一次结构更新。
-    func endDrag(at point: NSPoint) {
-        guard state == .dragging, let item = sourceItem else {
+    /// inputSource 必须与 session owner 一致(Stage 2 M5), 否则不提交、直接取消。
+    func endDrag(at point: NSPoint, inputSource: DragInputSource = .mouse) {
+        guard state == .dragging, activeInputSource == inputSource, let item = sourceItem else {
             cancelDrag()
             return
         }
@@ -136,6 +151,7 @@ final class DragController {
 
     private func teardown() {
         state = .idle
+        activeInputSource = nil
         frameCoordinator?.stop()
         frameCoordinator = nil
         sampleBuffer.clear()

@@ -72,10 +72,10 @@ final class PagingTargetResolverTests: XCTestCase {
     }
 
     func testVelocityFling() {
-        // 位移不足阈值但速度够 → fling 翻页
+        // 位移不足阈值但速度够 → fling 翻页(位移 0.12 < 阈值 0.15)
         let target = PagingTargetResolver.resolve(
             currentPage: 1, pageCount: 3, pageWidth: pageWidth,
-            displacement: -pageWidth * 0.15, releaseVelocity: -1200
+            displacement: -pageWidth * 0.12, releaseVelocity: -1200
         )
         XCTAssertEqual(target, 2)
     }
@@ -83,7 +83,7 @@ final class PagingTargetResolverTests: XCTestCase {
     func testVelocityTooLowNoFling() {
         let target = PagingTargetResolver.resolve(
             currentPage: 1, pageCount: 3, pageWidth: pageWidth,
-            displacement: -pageWidth * 0.15, releaseVelocity: -200
+            displacement: -pageWidth * 0.12, releaseVelocity: -200
         )
         XCTAssertEqual(target, 1)
     }
