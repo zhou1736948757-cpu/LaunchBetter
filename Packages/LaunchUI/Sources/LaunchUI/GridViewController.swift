@@ -15,6 +15,19 @@ enum GridDragSourceIdentity: Equatable {
     }
 }
 
+/// 光标命中的拖拽目标语义分类(§A3): 每帧一次索引命中后, 文件夹悬停与
+/// App→App 建夹共用这一分类, 不再重复 indexPathForItem。
+enum DragHitTarget: Equatable {
+    case none
+    case app(AppID)
+    case folder(FolderID)
+
+    var pointedApp: AppID? {
+        if case .app(let id) = self { return id }
+        return nil
+    }
+}
+
 /// 网格视图控制器: NSCollectionView + DiffableDataSource + 分页导航。
 ///
 /// 两种模式:
@@ -857,6 +870,25 @@ final class GridViewController: NSViewController {
             return nil
         }
         return id
+    }
+
+    /// 拖拽命中诊断: dragHitTarget 被调用的次数(§A3 验证每帧单次分类)。
+    private(set) var dragHitTargetQueryCount = 0
+
+    /// 光标处的语义化拖拽目标。每帧只调用一次, 分类结果供文件夹悬停与建夹共用。
+    func dragHitTarget(at point: NSPoint) -> DragHitTarget {
+        dragHitTargetQueryCount += 1
+        let local = collectionView.convert(point, from: nil)
+        guard let indexPath = collectionView.indexPathForItem(at: local),
+              let item = dataSource.itemIdentifier(for: indexPath) else {
+            return .none
+        }
+        switch item {
+        case .app(let id):
+            return .app(id)
+        case .folder(let id, _):
+            return .folder(id)
+        }
     }
 
     /// 当前页内可见网格 rect(文档坐标, 边缘翻页判定用, Stage 1 §25)。

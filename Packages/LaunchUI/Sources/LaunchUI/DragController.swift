@@ -359,14 +359,22 @@ final class DragController {
         }
         let display = displayAtDragStart ?? store.displayModel()
         // mouseUp 可能恰好跨过 dwell 边界；必须用当前 point + 单调时钟重新决策。
-        let createFolderDecision = updateCreateFolderTarget(item: item, point: point)
+        // 单一 hit-test 分类: 文件夹悬停与 App→App 建夹共用一次索引命中(§A3)。
+        let hitTarget = grid?.dragHitTarget(at: point) ?? .none
+        let hoveredFolder: FolderID? = {
+            guard case .app = item, case .folder(let id) = hitTarget else { return nil }
+            return id
+        }()
+        let createFolderDecision = updateCreateFolderTarget(
+            item: item, pointedApp: hitTarget.pointedApp
+        )
         let destination = grid?.dragDestination(from: point)
             ?? LayoutTransaction.Destination(page: 0, slot: 0)
 
         // 文件夹悬停 → 移入文件夹；App 悬停达到 dwell → 两 App 建夹。
         // 正式存储提供最终持久化回执；在结果到达前冻结同一拖拽会话。
         if let completingStore = store as? any LayoutMutationCompleting {
-            if case .app(let appID) = item, let folder = grid?.hoveredFolder(at: point) {
+            if case .app(let appID) = item, let folder = hoveredFolder {
                 awaitRootDropResult(completion: completion) { result in
                     completingStore.addToFolder(app: appID, folder: folder, completion: result)
                 }
@@ -374,8 +382,7 @@ final class DragController {
             }
             if case .app(let appID) = item,
                case .active(let target) = createFolderDecision,
-               case .app(let pointedTarget)? = grid?.itemAt(point: point),
-               pointedTarget == target {
+               hitTarget.pointedApp == target {
                 awaitRootDropResult(completion: completion) { result in
                     completingStore.createFolder(
                         name: L10n.t(.newFolder),
@@ -401,12 +408,11 @@ final class DragController {
         }
 
         // 兼容不提供持久化回执的轻量测试/嵌入式存储。
-        if case .app(let appID) = item, let folder = grid?.hoveredFolder(at: point) {
+        if case .app(let appID) = item, let folder = hoveredFolder {
             store.addToFolder(app: appID, folder: folder)
         } else if case .app(let appID) = item,
                   case .active(let target) = createFolderDecision,
-                  case .app(let pointedTarget)? = grid?.itemAt(point: point),
-                  pointedTarget == target {
+                  hitTarget.pointedApp == target {
             store.createFolder(name: L10n.t(.newFolder), appIDs: [appID, target])
         } else if let drop = LayoutTransaction.drop(
             display: display,
@@ -569,9 +575,6 @@ final class DragController {
         guard state == .dragging, let item = sourceItem,
               let display = displayAtDragStart else { return }
 
-        // cell 可能在跨页后重新进入可视区；确保源图标始终只由 overlay 呈现。
-        grid?.setDragSourceHidden(true, for: item)
-
         // 外部目录/布局/配置变化 → 取消拖拽(陈旧 session 防护, 评审 M5)
         if store.displayRevision != dragStartRevision {
             cancelDrag()
@@ -589,14 +592,16 @@ final class DragController {
         // 边缘翻页(节流 0.4s; 静止悬停持续触发, M1)
         maybeAdvancePage(point)
 
-        // 文件夹悬停: 每帧只查一次(§43)
+        // 单一语义分类: 每帧一次 hit-test, 文件夹悬停与 App→App 建夹共用(§A3)。
         folderHitTestCount += 1
+        let hitTarget = grid?.dragHitTarget(at: point) ?? .none
         let hoveredFolder: FolderID? = {
-            guard case .app = item else { return nil }
-            return grid?.hoveredFolder(at: point)
+            guard case .app = item, case .folder(let id) = hitTarget else { return nil }
+            return id
         }()
-
-        let createFolderDecision = updateCreateFolderTarget(item: item, point: point)
+        let createFolderDecision = updateCreateFolderTarget(
+            item: item, pointedApp: hitTarget.pointedApp
+        )
 
         // Overlay 位置每帧更新(§40)
         if let grid {
@@ -708,12 +713,13 @@ final class DragController {
     }
 
     /// App→App 建夹需要稳定悬停，避免普通排序松手时误建文件夹。
+    /// pointedApp 来自每帧单次 dragHitTarget 分类, 不再重复做索引命中。
     private func updateCreateFolderTarget(
         item: DisplayModel.DisplayItem,
-        point: NSPoint
+        pointedApp: AppID?
     ) -> CreateFolderHoverDecision {
         guard case .app(let sourceApp) = item,
-              case .app(let target)? = grid?.itemAt(point: point),
+              let target = pointedApp,
               target != sourceApp else {
             createFolderCandidate = nil
             createFolderCandidateSince = 0
