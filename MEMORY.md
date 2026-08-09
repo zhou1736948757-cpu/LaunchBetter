@@ -21,7 +21,23 @@
 
 ## Current Phase
 
-**Stage 1 (fix/v0.1.3-grid-foundation) — 几何基础改造完成: 0 BLOCKER 0 MAJOR(评审通过)**
+**v0.1.6 — Interaction Quality + Performance Consolidation 完成(评审 0 BLOCKER, 2 MAJOR+4 MINOR 已修)**, 已安装 /Applications, tag v0.1.6
+
+## v0.1.6 关键成果(已验证)
+
+- **PagingInteractionController + PageSnapAnimator**(v0.1.6 PART A):
+  NSEvent → 状态机; CADisplayLink(NSView.displayLink)唯一 offset writer(每帧≤1 scroll);
+  precise scrollingDeltaX/Y; gesture-level axis lock; 位置无低通; 速度 O(1) EMA;
+  time-based 临界阻尼 spring(60/120Hz 一致); momentum 全拦截; 一次手势一次 settle 最多一页;
+  displacement+velocity fling target; 外边缘 rubber band(刚度+饱和); 禁用系统横向弹性
+- **Drag 优化**(PART C): lastDestination/lastGapIndex/currentTransforms/overlayVisual 缓存 +
+  transform diff; folder hit-test 每帧一次; cache 绑定几何指纹与 displayRevision
+- **Store**(PART D): commitLayoutChange 统一提交; SearchIndex 仅 catalog/customName 变化重建
+- 实测: swipe scroll=39≤frames=46; prepare 4→4(0 额外); drag 50帧 preview=1;
+  UI-only config searchRebuildDelta=0; custom name +1
+- 测试: 96 + 54(新增 21)全绿; build/smoke/pagetest/searchprobe/pagingprobe/dragcacheprobe OK
+- 报告: Docs/PhaseReports/stage-02-interaction-performance.md
+- 待实机手感验证(§76-80): 慢速跟手/吸附/fling/snap 反向抓取/高频切换
 
 ## Current Task
 
