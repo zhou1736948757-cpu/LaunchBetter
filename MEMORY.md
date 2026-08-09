@@ -21,7 +21,27 @@
 
 ## Current Phase
 
-**v0.2.1 — Stage 2 完成: Legacy Feature Parity Matrix + Three-Finger Drag(复用 DragController)**, 已安装 /Applications, tag v0.2.1
+**v0.2.3 hardening candidate — 自动化门禁完成，尚未发布。**
+
+- 基线: `v0.2.2` / `9ee1264`
+- 工作分支: `agent/v0.2.3-hardening`
+- 候选状态: Release 构建与 ad-hoc 签名验证通过；等待用户完成实体触控板 P0 验收
+- 发布约束: 人工 P0 验收前不创建 GitHub tag/release
+
+## v0.2.3 关键成果(自动化已验证)
+
+- 文件夹事务完整性: create/add/reorder/remove/dissolve 的 missing/hidden 映射、去重、孤儿槽位与
+  单子项自动解散规则统一；重启持久化使用明确 committed 结果，失败不提前发布 UI 状态
+- 拖拽状态机: root pending-drop 取消不会污染下一次拖拽；文件夹来源身份正确隐藏；真实文件夹缩略图
+  用作拖拽表示；3/6/9 与 4/5/7/8 尾槽几何有行为测试
+- 并发与持久化: AppCatalogActor 增量扫描全局串行且具 generation 防陈旧；LauncherStore 外部刷新
+  合并并在 reconcile 成功后发布；首次 no-op seed 也落盘
+- 诊断与本地化: 非交互诊断不弹权限阻塞；smoke/drag/folder/three-finger/cache/paging 探针强化；
+  en/zh-Hans/zh-Hant 文案与 accessibility 补齐
+- 自动化门禁: LaunchCore 119 Swift Testing + 66 XCTest；LaunchPlatform 91；LaunchUI 37；
+  Debug/Release build 通过；7 组 Release 候选诊断全部退出 0；最终 Luna 复审结果见本次收尾记录
+- `MANUAL_VERIFICATION_REQUIRED`: 鼠标与三指真实拖拽、App→App/文件夹、文件夹边界重排与拖出、
+  Escape/隐藏/关闭取消、跨页、重启持久化、三种语言即时切换
 
 ## Stage 2 关键成果(已验证)
 
@@ -56,18 +76,17 @@
 
 ## Current Task
 
-- 用户待办: ① 真实双指滑动翻页实测(Test A-E, §38); ② 图标/标签间距再加大一点;
-  ③ 设置界面入口(面板内加按钮); ④ 搜索栏具体问题待用户补充
-- 剩余: 正式签名分发(需 Apple 凭据, 可选); 长名断行/文件夹图标区分/磁盘缓存上限/120Hz 复测;
-  三指拖拽/垂直布局/LaunchHistory parity 属 Stage 2
+- 安装 v0.2.3 候选版并交给用户执行 P0 人工检查清单；通过后再创建正式 GitHub v0.2.3
+- 本阶段不扩展的 parity gap: 本地化应用名元数据、自定义来源完整流程、自定义热键录制器、
+  设置扩展、垂直布局
 
 ## Current Branch
 
-fix/v0.1.3-grid-foundation(Stage 1 完成, 待用户决定合并)
+agent/v0.2.3-hardening
 
 ## Last Known Good Commit
 
-d1696cd (Stage 1 报告 Docs/PhaseReports/stage-01-grid-foundation.md; 评审 8/8 PASS)
+9ee1264 (`v0.2.2` 发布基线；v0.2.3 候选改动尚未正式发布)
 
 ## Stage 1 关键成果(已验证)
 
@@ -174,19 +193,15 @@ d1696cd (Stage 1 报告 Docs/PhaseReports/stage-01-grid-foundation.md; 评审 8/
 ## GitHub / Release Status
 
 - 仓库: github.com/zhou1736948757-cpu/LaunchBetter (**PUBLIC**)
-- 版本: v0.1.0(首版) → v0.1.1(图标色块/标签/壁纸性能) → **v0.1.2(翻页修复, 268ab36)**
-- 预发布审计通过: secret scan 干净 / 无硬编码私密路径 / 182 测试全绿 / GPL-3.0 就位
-- 四指手势实测通过(用户验证), 触点帧开销 1-6μs/帧
+- 当前正式版本: **v0.2.2 (`9ee1264`)**
+- v0.2.3: 本地 hardening candidate；不得在人工 P0 验收前 push tag 或创建 release
 
 ## Next Actions
 
-1. 真实触控板双指滑动翻页实测(程序化已通过: 1470→2940→1470)
-2. 图标/标签间距: 方向已对(图标 64pt/66%, 单行标签, 间隙~16pt), 再加大一档定稿
-3. 设置界面: 面板内无入口(全屏置顶时菜单栏不可见) → 需在面板加设置按钮;
-   壁纸开关未真正接入 WallpaperProvider; 热键仅 5 预设; 语言切换后设置窗口不即时刷新
-4. 搜索栏具体问题待用户补充现象(当前: 结果单页列表, 顶部居中)
-5. **可选**: Apple 签名/公证凭据 → 正式分发
-6. 打磨: 长名断行优化、文件夹图标区分、磁盘缓存上限策略、120Hz 复测
+1. 用户执行 v0.2.3 P0 人工检查: 鼠标/三指重排、建文件夹、加入/重排/拖出/自动解散、取消、跨页
+2. 重启确认文件夹、顺序和重命名持久化；切换 en/zh-Hans/zh-Hant 检查即时刷新
+3. 人工门禁通过后创建并推送正式 v0.2.3 tag/release；此前只保留本地候选提交
+4. 后续版本再处理 parity gap: 本地化应用名、自定义来源、热键录制、设置扩展、垂直布局
 
 ## Watchdog 状态(规则自检已启用)
 
@@ -199,4 +214,4 @@ d1696cd (Stage 1 报告 Docs/PhaseReports/stage-01-grid-foundation.md; 评审 8/
 
 ## Last Updated
 
-2026-08-08
+2026-08-10
