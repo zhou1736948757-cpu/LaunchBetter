@@ -10,6 +10,10 @@ import LaunchCore
 /// 几何唯一真值: GridGeometry(PagingGridLayout 的 currentGeometry/liveGeometry),
 /// 本控制器不再维护 pageWidth/itemSize/slotStep 等硬编码(Stage 1, P0)。
 ///
+/// 分页交互(v0.1.6 PART A): NSEvent/手势状态/速度/spring 全部在
+/// PagingInteractionController + PageSnapAnimator, 本控制器只做集合/数据源/
+/// 搜索/页点/网格集成与唯一 scroll write 注入(§11)。
+///
 /// 结构变化(目录变化/搜索切换/drop 完成)才应用 snapshot(§83),
 /// 禁止逐帧应用 snapshot(§132)。
 @MainActor
@@ -28,6 +32,9 @@ final class GridViewController: NSViewController {
 
     /// 页数(诊断)。
     var pageCountValue: Int { pageCount }
+
+    /// 分页交互控制器(v0.1.6): 手势状态 + 唯一 offset writer。
+    private let paging = PagingInteractionController()
 
     /// 当前几何(拖拽/槽位计算用; 未 prepare 时用实时参数推算)。
     var geometry: GridGeometry {
@@ -139,11 +146,15 @@ final class GridViewController: NSViewController {
         scrollView.hasHorizontalScroller = false
         scrollView.hasVerticalScroller = false
         scrollView.autohidesScrollers = true
+        // v0.1.6 §19: 禁用系统横向橡皮筋(避免与 LaunchBetter rubber band 双重作用);
+        // 搜索模式垂直滚动不受影响。
+        scrollView.horizontalScrollElasticity = .none
         scrollView.documentView = collectionView
         // 关键: 关闭文档视图 autoresizing, 否则滚动视图会把它拉回可视宽度
         collectionView.autoresizingMask = []
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(scrollView)
+
         NSLayoutConstraint.activate([
             scrollView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
@@ -155,6 +166,8 @@ final class GridViewController: NSViewController {
 
         configureDataSource()
         view = container
+        // 必须在 view 赋值之后接线(linkView 访问 self.view 会触发 loadView 递归)
+        setupPagingController()
     }
 
     override func viewDidLayout() {
@@ -262,6 +275,7 @@ final class GridViewController: NSViewController {
     private func enterSearchMode(with results: [Item]) {
         let wasPagedMode = !searchMode
         searchMode = true
+        paging.isEnabled = false
         if wasPagedMode {
             pagedPageBeforeSearch = currentPage
         }
@@ -286,6 +300,7 @@ final class GridViewController: NSViewController {
     private func exitSearchMode() {
         guard searchMode else { return }
         searchMode = false
+        paging.isEnabled = true
         gridLayout.mode = .paged
         gridLayout.invalidateLayout()
         scrollView.hasVerticalScroller = false
@@ -335,13 +350,40 @@ final class GridViewController: NSViewController {
 
     func goToPage(_ page: Int, animated: Bool = true) {
         guard !searchMode else { return }
-        currentPage = min(max(0, page), pageCount - 1)
-        collectionView.scrollToPage(currentPage, animated: animated)
-        updatePageDots()
+        let clamped = min(max(0, page), pageCount - 1)
+        if animated {
+            // 动画翻页统一经 PageSnapAnimator(time-based spring, v0.1.6 §23/§31)
+            paging.startSettle(toPage: clamped)
+        } else {
+            currentPage = clamped
+            paging.jumpTo(page: clamped)
+            updatePageDots()
+        }
+        prewarmAdjacentPages(clamped)
     }
 
     func nextPage() { goToPage(currentPage + 1) }
     func previousPage() { goToPage(currentPage - 1) }
+
+    /// 相邻页图标预热(v0.1.6 §36-37): 只维护 current±1 working set, 不全量预加载。
+    private func prewarmAdjacentPages(_ page: Int) {
+        guard let iconProvider else { return }
+        let display = store.displayModel()
+        let scale = Int(view.window?.backingScaleFactor ?? 2)
+        let pointSize = Int(iconSize)
+        for p in [page - 1, page + 1] where p >= 0 && p < display.pages.count {
+            let apps = display.pages[p].compactMap { item -> AppID? in
+                if case .app(let id) = item { return id }
+                return nil
+            }
+            for id in apps {
+                // 异步预热入内存缓存(已命中者 O(1); 未命中走存储库管道, 不阻塞主线程)
+                Task(priority: .utility) { [weak iconProvider] in
+                    _ = await iconProvider?.icon(for: id, pointSize: pointSize, scale: scale)
+                }
+            }
+        }
+    }
 
     // MARK: - 点击启动
 
@@ -506,103 +548,65 @@ final class GridViewController: NSViewController {
         return field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    // MARK: - 分页交互(v0.1.6 PART A)
+
+    /// 接线 PagingInteractionController 到本网格(唯一 offset writer 注入)。
+    private func setupPagingController() {
+        paging.linkView = view
+        paging.onReadCurrentOffset = { [weak self] in
+            guard let self else { return 0 }
+            return self.collectionView.enclosingScrollView?.contentView.bounds.origin.x ?? 0
+        }
+        paging.onReadPageWidth = { [weak self] in
+            guard let self else { return 0 }
+            let clip = self.collectionView.enclosingScrollView?.contentView
+            return clip?.bounds.width ?? self.collectionView.bounds.width
+        }
+        paging.onReadPageCount = { [weak self] in
+            self?.pageCount ?? 1
+        }
+        paging.onScroll = { [weak self] offset in
+            guard let self, let scroll = self.collectionView.enclosingScrollView else { return }
+            scroll.contentView.scroll(to: NSPoint(x: offset, y: 0))
+        }
+        paging.onSettleTargetPage = { [weak self] page in
+            guard let self else { return }
+            self.currentPage = page
+            self.updatePageDots()
+            self.prewarmAdjacentPages(page)
+        }
+        paging.onSettleComplete = { [weak self] in
+            // 可在此追加 settle 完成后的低优先级工作(如图标预热)
+        }
+    }
+
     override func scrollWheel(with event: NSEvent) {
         // 已迁移到集合视图层(ClickableCollectionView.onPageScroll)
         super.scrollWheel(with: event)
     }
 
-    // MARK: - 双指滑动分页状态机
-
-    /// 手势会话: 一次手势最多一页, momentum 不额外分页, 水平主导才翻页(Stage 1 §8)。
-    private var pagingSession = PagingGestureSession()
-
-    /// 手势开始时的 clip 位置(跟手基准, v0.1.4)。
-    private var gestureBaseX: CGFloat = 0
-
-    /// 滚轮/双指滑动翻页: 横向跟手平移 + 松手吸附; 纵向滚轮一次一页。
-    /// 惯性(momentum)阶段拦截(交给系统会滚动到任意非整页位置, 卡在两页中间)。
+    /// 滚轮/双指滑动: 委托给 PagingInteractionController(状态机 + DisplayLink 唯一 writer)。
     private func handlePageScroll(_ event: NSEvent) -> Bool {
         guard !searchMode else { return false }
-
-        // momentum/惯性: 全部拦截(防系统自由滚动), 惯性结束时吸附到最近页
-        if event.momentumPhase != [] {
-            if event.momentumPhase == .ended {
-                snapToNearestPage()
-            }
-            return true
-        }
-
-        switch event.phase {
-        case .began:
-            pagingSession.reset()
-            gestureBaseX = collectionView.enclosingScrollView?.contentView.bounds.origin.x ?? 0
-        case .ended, .cancelled:
-            pagingSession.feed(phase: .ended, deltaX: 0, deltaY: 0)
-            // 手势结束: 吸附到最近整页(跟手后校准, 防卡两页中间)
-            snapToNearestPage()
-            return false
-        default:
-            break
-        }
-
-        // 横向双指滑动(水平主导)→ 跟手平移(位移钳制在一页内), 松手吸附
-        if abs(event.deltaX) > abs(event.deltaY) * pagingSession.horizontalDominance,
-           abs(event.deltaX) > 0.5 {
-            _ = pagingSession.feed(
-                phase: event.phase == .changed ? .changed : .began,
-                deltaX: event.deltaX, deltaY: 0
-            )
-            followFinger()
-            return true
-        }
-
-        // 纵向输入: 触控板连续手势也经会话状态机(一次手势最多一页, 评审 M4);
-        // 离散鼠标滚轮(无 phase)保留每格一页
-        if abs(event.deltaY) > 0.5 {
-            let committed = pagingSession.feed(
-                phase: event.phase == .changed ? .changed : .began,
-                deltaX: event.deltaY, deltaY: 0
-            )
-            if committed {
-                if pagingSession.direction > 0 {
-                    nextPage()
-                } else {
-                    previousPage()
-                }
-            }
-            return true
-        }
-        return false
+        paging.isEnabled = true
+        return paging.handleWheel(event)
     }
 
-    /// 跟手: 页面随手指水平平移(累计位移钳制在一页宽内, 一次手势最多一页)。
-    private func followFinger() {
-        guard let scroll = collectionView.enclosingScrollView else { return }
-        let clip = scroll.contentView
-        let pageWidth = clip.bounds.width
-        guard pageWidth > 0 else { return }
-        // 左滑(deltaX<0, 累计为负)→ 内容左移 → offset 增加
-        let dx = -pagingSession.accumulatedDeltaX
-        let clamped = min(max(dx, -pageWidth), pageWidth)
-        let maxX = max(0, CGFloat(pageCount) * pageWidth - pageWidth)
-        let target = min(max(gestureBaseX + clamped, 0), maxX)
-        clip.scroll(to: NSPoint(x: target, y: 0))
+    /// 分页交互诊断(v0.1.6 §63)。
+    var pagingDiagnostics: String { paging.diagnostics() }
+
+    /// 分页探针: 合成 NSEvent 驱动分页交互(性能测量, §63/§82)。
+    func pagingProbeFeed(_ event: NSEvent) {
+        if event.phase == .began {
+            paging.resetCounters()
+        }
+        _ = paging.handleWheel(event)
     }
 
-    /// 吸附到最近整页: 位移超过 35% 页宽则翻页, 否则弹回(v0.1.4 跟手吸附)。
-    private func snapToNearestPage() {
-        guard !searchMode else { return }
-        guard let scroll = collectionView.enclosingScrollView else { return }
-        let clip = scroll.contentView
-        let pageWidth = clip.bounds.width > 0 ? clip.bounds.width : collectionView.bounds.width
-        guard pageWidth > 0 else { return }
-        let target = geometry.snapTarget(
-            currentOffsetX: clip.bounds.origin.x,
-            currentPage: currentPage,
-            pageCount: pageCount
-        )
-        currentPage = target
-        goToPage(target, animated: true)
+    /// 布局诊断(§56/§83): 一次交互中 prepare / attribute query 计数。
+    var layoutDiagnostics: String {
+        let layout = collectionView.collectionViewLayout as? PagingGridLayout
+        return "prepare=\(layout?.prepareCount ?? 0) attributeQueries=\(layout?.attributeQueryCount ?? 0)"
     }
 
     /// 确定性诊断(冒烟验证用): 当前快照结构。
@@ -737,31 +741,19 @@ final class GridViewController: NSViewController {
 }
 
 private extension NSCollectionView {
-    /// 翻页: 页步长 = clip 可见宽度(非文档宽度)。
+    /// 翻页(非动画, 初始化/结构刷新/测试用): 页步长 = clip 可见宽度(非文档宽度)。
+    /// 动画翻页统一走 PagingInteractionController → PageSnapAnimator(v0.1.6 §23),
+    /// 不再使用 clip.animator / NSAnimationContext。
     func scrollToPage(_ page: Int, animated: Bool) {
+        guard !animated else { return }
         guard let scroll = enclosingScrollView else { return }
         let clip = scroll.contentView
         let clipWidth = clip.bounds.width > 0 ? clip.bounds.width : bounds.width
         let x = CGFloat(page) * clipWidth
-        if animated {
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.35
-                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-                clip.animator().setBoundsOrigin(NSPoint(x: x, y: 0))
-            } completionHandler: {
-                // 动画被中途打断时校准回整页(v0.1.4 防卡两页中间)
-                MainActor.assumeIsolated {
-                    if abs(clip.bounds.origin.x - x) > 1 {
-                        clip.scroll(to: NSPoint(x: x, y: 0))
-                    }
-                }
-            }
-        } else {
-            // NSClipView.scroll(to:) 是文档化的编程滚动 API
-            clip.scroll(to: NSPoint(x: x, y: 0))
-            if CommandLine.arguments.contains("--pagetest") {
-                print("PAGETEST scrollToPage x=\(Int(x)) now=\(Int(clip.bounds.origin.x))")
-            }
+        // NSClipView.scroll(to:) 是文档化的编程滚动 API
+        clip.scroll(to: NSPoint(x: x, y: 0))
+        if CommandLine.arguments.contains("--pagetest") {
+            print("PAGETEST scrollToPage x=\(Int(x)) now=\(Int(clip.bounds.origin.x))")
         }
     }
 }

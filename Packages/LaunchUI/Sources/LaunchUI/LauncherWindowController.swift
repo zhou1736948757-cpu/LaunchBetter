@@ -279,6 +279,17 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         gridViewController?.collectionViewRef.visibleItems().count ?? 0
     }
 
+    /// 诊断: 手动驱动一帧(无 display link 环境, v0.1.6 §69)。
+    public func dragProbeTick(_ point: NSPoint) {
+        gridViewController?.dragController?.probeProcessTick(point)
+    }
+
+    /// 拖拽缓存诊断(v0.1.6 §64): 同 destination 停留时 preview/transform 写应不增长。
+    public func dragCacheDiagnostics() -> String {
+        guard let grid = gridViewController, let drag = grid.dragController else { return "nil" }
+        return "frames=\(drag.dragFrameCount) destChanges=\(drag.destinationChangeCount) previews=\(drag.previewCalculationCount) transformWrites=\(drag.transformWriteCount) folderHit=\(drag.folderHitTestCount) overlayWrites=\(drag.overlayVisualWriteCount)"
+    }
+
     /// 冒烟诊断: 拖拽测试 API(公开, 数据均为 LaunchCore 公开类型)。
     public func dragTestItems() -> [DisplayModel.DisplayItem] {
         gridViewController?.allItems() ?? []
@@ -343,6 +354,17 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
 
     public func pageTestCurrentPage() -> Int {
         gridViewController?.currentPageValue ?? -1
+    }
+
+    /// 分页探针(性能测量, v0.1.6 §63): 合成 NSEvent 驱动分页交互。
+    public func pagingProbeFeed(_ event: NSEvent) {
+        gridViewController?.pagingProbeFeed(event)
+    }
+
+    public func pagingProbeDiagnostics() -> String {
+        let paging = gridViewController?.pagingDiagnostics ?? "nil"
+        let layout = gridViewController?.layoutDiagnostics ?? "nil"
+        return "paging[\(paging)] layout[\(layout)]"
     }
 
     public func pageTestPageCount() -> Int {

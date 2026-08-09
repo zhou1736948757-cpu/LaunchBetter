@@ -28,6 +28,8 @@ final class FrameCoordinator {
     func start() {
         guard displayLink == nil, let view else { return }
         let link = view.displayLink(target: self, selector: #selector(tick(_:)))
+        // macOS 14+ NSView.displayLink 返回可能为 paused; 显式启动
+        link.isPaused = false
         link.add(to: .main, forMode: .common)
         displayLink = link
     }

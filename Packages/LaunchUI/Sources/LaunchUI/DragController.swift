@@ -32,7 +32,6 @@ final class DragController {
     private var sourceItem: DisplayModel.DisplayItem?
     private var sourceIndex = 0
     private var displayAtDragStart: DisplayModel?
-    private var transformedPaths: Set<IndexPath> = []
     private var lastEdgeAdvance: CFTimeInterval = 0
     private var lastKnownPoint: CGPoint?
     private var sessionID = UUID()
@@ -82,6 +81,13 @@ final class DragController {
         frameCoordinator = coordinator
         coordinator.start()
         sampleBuffer.write(point, session: sessionID)
+    }
+
+    /// 诊断: 手动驱动一帧(无 display link 环境验证缓存, v0.1.6 §69)。
+    func probeProcessTick(_ point: NSPoint) {
+        guard state == .dragging else { return }
+        lastKnownPoint = point
+        processTick(point)
     }
 
     /// 拖拽移动(高频写入缓冲, 仅最新样本生效)。
@@ -134,6 +140,17 @@ final class DragController {
         frameCoordinator = nil
         sampleBuffer.clear()
         resetTransforms()
+        dragFrameCount = 0
+        destinationChangeCount = 0
+        previewCalculationCount = 0
+        transformWriteCount = 0
+        folderHitTestCount = 0
+        overlayVisualWriteCount = 0
+        // 清拖拽缓存(v0.1.6 §89: teardown 必须 reset 所有 cache)
+        lastDestination = nil
+        lastGapIndex = nil
+        currentTransforms.removeAll()
+        lastOverlayVisual = nil
         grid?.removeOverlayLayer(overlay.layer)
         sourceItem = nil
         displayAtDragStart = nil
@@ -152,9 +169,31 @@ final class DragController {
 
     // MARK: - 每帧处理(仅 layer 变换)
 
+    /// 拖拽缓存(v0.1.6 §39-45): 同 slot 停留时避免重复 preview/transform 写。
+    private var lastDestination: LayoutTransaction.Destination?
+    private var lastGapIndex: Int?
+    private var currentTransforms: [IndexPath: CATransform3D] = [:]
+    private var lastOverlayVisual: OverlayVisual?
+    /// 缓存绑定的几何指纹(页宽; 变化时清缓存重算, v0.1.6 M5)。
+    private var cachedPageWidth: CGFloat = 0
+
+    // 诊断计数(v0.1.6 §64)
+    private(set) var dragFrameCount = 0
+    private(set) var destinationChangeCount = 0
+    private(set) var previewCalculationCount = 0
+    private(set) var transformWriteCount = 0
+    private(set) var folderHitTestCount = 0
+    private(set) var overlayVisualWriteCount = 0
+
+    private enum OverlayVisual: Equatable {
+        case plain(String)
+        case folderTarget(FolderID)
+    }
+
     /// 每帧(display link): 静止时也持续处理最后样本(M1)。
     private func tick() {
         guard state == .dragging else { return }
+        dragFrameCount += 1
         if let point = frameCoordinator?.readLatestSample() {
             lastKnownPoint = point
         }
@@ -166,36 +205,77 @@ final class DragController {
         guard state == .dragging, let item = sourceItem,
               let display = displayAtDragStart else { return }
 
+        // 外部目录/布局/配置变化 → 取消拖拽(陈旧 session 防护, 评审 M5)
+        if store.displayRevision != dragStartRevision {
+            cancelDrag()
+            return
+        }
+        // 几何(页宽)变化 → 清 preview 缓存, 下次按新几何重算(评审 M5)
+        let currentPageWidth = grid?.geometry.pageWidth ?? 0
+        if cachedPageWidth > 0, currentPageWidth != cachedPageWidth {
+            clearTransformsIfNeeded()
+            lastDestination = nil
+            lastGapIndex = nil
+        }
+        cachedPageWidth = currentPageWidth
+
         // 边缘翻页(节流 0.4s; 静止悬停持续触发, M1)
         maybeAdvancePage(point)
 
-        // 文件夹悬停反馈
-        let isFolderTarget = (grid?.hoveredFolder(at: point)) != nil && {
-            if case .app = item { return true }
-            return false
+        // 文件夹悬停: 每帧只查一次(§43)
+        folderHitTestCount += 1
+        let hoveredFolder: FolderID? = {
+            guard case .app = item else { return nil }
+            return grid?.hoveredFolder(at: point)
         }()
 
-        // 所有分支统一更新 overlay 位置(m1 修复); 父视图 = 网格容器(视口坐标)
+        // Overlay 位置每帧更新(§40)
         if let grid {
             overlay.move(to: point, in: grid.view)
         }
 
-        if isFolderTarget, let folder = grid?.hoveredFolder(at: point) {
-            overlay.showFolderTarget(folder, store: store)
-            resetTransforms()
+        if let folder = hoveredFolder {
+            setOverlayVisual(.folderTarget(folder))
+            clearTransformsIfNeeded()
+            lastDestination = nil
+            lastGapIndex = nil
             return
         }
-        overlay.showPlain(label: plainLabel)
+        setOverlayVisual(.plain(plainLabel))
 
-        let destination = grid?.dragDestination(from: point)
-            ?? LayoutTransaction.Destination(page: 0, slot: 0)
-        guard let preview = LayoutTransaction.preview(
-            display: display, source: source(from: item), destination: destination
-        ) else {
-            resetTransforms()
+        // Destination 没变 → 不重新 preview / 不重写 transform(§40-41)
+        guard let destination = grid?.dragDestination(from: point) else {
+            clearTransformsIfNeeded()
+            lastDestination = nil
+            lastGapIndex = nil
             return
         }
-        applyPreviewTransforms(gapIndex: preview.gapIndex)
+        guard destination != lastDestination else { return }
+        destinationChangeCount += 1
+        lastDestination = destination
+        lastGapIndex = nil
+        if let preview = LayoutTransaction.preview(
+            display: display, source: source(from: item), destination: destination
+        ) {
+            previewCalculationCount += 1
+            applyPreviewTransforms(gapIndex: preview.gapIndex)
+            lastGapIndex = preview.gapIndex
+        } else {
+            clearTransformsIfNeeded()
+        }
+    }
+
+    /// Overlay 视觉状态缓存: 相同则不重复写 layer/string(§44)。
+    private func setOverlayVisual(_ visual: OverlayVisual) {
+        guard lastOverlayVisual != visual else { return }
+        switch visual {
+        case .plain(let label):
+            overlay.showPlain(label: label)
+        case .folderTarget(let folder):
+            overlay.showFolderTarget(folder, store: store)
+        }
+        overlayVisualWriteCount += 1
+        lastOverlayVisual = visual
     }
 
     /// 边缘翻页: 使用当前可视页 rect(非文档宽度), 并考虑当前页边界(Stage 1 §25)。
@@ -211,53 +291,86 @@ final class DragController {
         guard now - lastEdgeAdvance > 0.4 else { return }
         let atLeftEdge = local.x >= pageRect.minX && local.x < pageRect.minX + edge
         let atRightEdge = local.x <= pageRect.maxX && local.x > pageRect.maxX - edge
-        if atLeftEdge {
+        // v0.1.6 m4: 首/尾页不再启动 no-op settle
+        if atLeftEdge, grid.currentPageValue > 0 {
             grid.previousPage()
             lastEdgeAdvance = now
-        } else if atRightEdge {
+        } else if atRightEdge, grid.currentPageValue < grid.pageCountValue - 1 {
             grid.nextPage()
             lastEdgeAdvance = now
         }
     }
 
     /// 预览变换: 源项与 gap 之间的项整体移动一个槽位。
-    /// 二维实现: 每项从当前 frame 移到相邻槽位 frame, dx/dy 由几何差值给出
-    /// (跨行/跨页正确, Stage 1 §20-21)。
-    /// 预览变换: 源项与 gap 之间的项整体移动一个槽位。
+    /// 二维 diff 实现(v0.1.6 §42): 只写视觉结果真正变化的 layer。
     /// 区间 = [min(source, gap), max(source, gap) - 1](评审 M5: 含 gap 处被挤动项)。
     private func applyPreviewTransforms(gapIndex: Int) {
-        resetTransforms()
-        guard sourceIndex != gapIndex else { return }
-        let lower = min(sourceIndex, gapIndex)
-        let upper = max(sourceIndex, gapIndex) - 1
-        guard lower <= upper, let grid else { return }
-        let step: Int = sourceIndex < gapIndex ? -1 : 1
-
-        for index in lower...upper {
-            guard let path = grid.indexPath(atFlatIndex: index),
-                  let cell = grid.cellView(at: path) else { continue }
-            let target = index + step
-            guard target >= 0 else { continue }
-            let sourceFrame = grid.frame(atFlatIndex: index)
-            let targetFrame = grid.frame(atFlatIndex: target)
-            let dx = targetFrame.minX - sourceFrame.minX
-            let dy = targetFrame.minY - sourceFrame.minY
-            guard dx != 0 || dy != 0 else { continue }
-            cell.view.layer?.transform = CATransform3DMakeTranslation(dx, dy, 0)
-            transformedPaths.insert(path)
+        var next: [IndexPath: CATransform3D] = [:]
+        if sourceIndex != gapIndex {
+            let lower = min(sourceIndex, gapIndex)
+            let upper = max(sourceIndex, gapIndex) - 1
+            let step: Int = sourceIndex < gapIndex ? -1 : 1
+            if lower <= upper, let grid {
+                for index in lower...upper {
+                    guard let path = grid.indexPath(atFlatIndex: index),
+                          let cell = grid.cellView(at: path) else { continue }
+                    let target = index + step
+                    guard target >= 0 else { continue }
+                    let sourceFrame = grid.frame(atFlatIndex: index)
+                    let targetFrame = grid.frame(atFlatIndex: target)
+                    let dx = targetFrame.minX - sourceFrame.minX
+                    let dy = targetFrame.minY - sourceFrame.minY
+                    guard dx != 0 || dy != 0 else { continue }
+                    next[path] = CATransform3DMakeTranslation(dx, dy, 0)
+                }
+            }
         }
+        applyTransformDiff(next)
+    }
+
+    /// 目标状态 diff: old-only → identity; changed/new → 新变换; unchanged → 0 写。
+    private func applyTransformDiff(_ next: [IndexPath: CATransform3D]) {
+        guard let grid else {
+            currentTransforms = next
+            return
+        }
+        for (path, old) in currentTransforms where next[path] == nil {
+            guard let cell = grid.cellView(at: path) else { continue }
+            cell.view.layer?.transform = CATransform3DIdentity
+            transformWriteCount += 1
+        }
+        for (path, newTransform) in next {
+            let isChange: Bool
+            if let old = currentTransforms[path] {
+                isChange = !CATransform3DEqualToTransform(old, newTransform)
+            } else {
+                isChange = true
+            }
+            guard isChange, let cell = grid.cellView(at: path) else { continue }
+            cell.view.layer?.transform = newTransform
+            transformWriteCount += 1
+        }
+        currentTransforms = next
+    }
+
+    /// 清空预览变换(仅当有需要时写 identity)。
+    private func clearTransformsIfNeeded() {
+        guard !currentTransforms.isEmpty else { return }
+        applyTransformDiff([:])
     }
 
     private func resetTransforms() {
         guard let grid else {
-            transformedPaths.removeAll()
+            currentTransforms.removeAll()
             return
         }
-        for path in transformedPaths {
+        // v0.1.6 M4 修复: 预览位移写回 identity(currentTransforms 为目标状态源,
+        // 不再依赖已废弃的 transformedPaths, 否则取消/结束时 layer 残留非 identity)
+        for path in currentTransforms.keys {
             guard let cell = grid.cellView(at: path) else { continue }
             cell.view.layer?.transform = CATransform3DIdentity
         }
-        transformedPaths.removeAll()
+        currentTransforms.removeAll()
     }
 }
 
