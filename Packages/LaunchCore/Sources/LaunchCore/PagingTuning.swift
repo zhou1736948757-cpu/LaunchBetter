@@ -15,8 +15,8 @@ public enum PagingTuning {
 
     /// 跟手阻尼/灵敏度: 页面位移 = 手指位移 × 该系数。
     /// 1.0 = 1:1; >1 = 页面比手指移动更多(更轻松); <1 = 页面比手指慢(阻尼感强)。
-    /// v0.1.11: 用户实测 → 1.15(更轻松)。
-    public static let followSensitivity: CGFloat = 1.15
+    /// v0.1.12: 用户实测"划不动" → 1.3(同样手指距离页面移动更多)。
+    public static let followSensitivity: CGFloat = 1.3
 
     /// 松手吸附: 位移达到页宽的该比例即翻页。
     /// v0.1.11: 用户实机调参, 0.18 → 0.15。
@@ -26,7 +26,8 @@ public enum PagingTuning {
     public static let flingMinimumDisplacementPages: CGFloat = 0.12
 
     /// 松手吸附: fling 速度阈值(pt/s)。
-    public static let flingVelocityThreshold: CGFloat = 900
+    /// v0.1.12: 900 → 650(中等速度一甩即翻, 缓解"划不动")。
+    public static let flingVelocityThreshold: CGFloat = 650
 
     /// 速度 EMA 平滑系数(0~1, 越大越跟手)。
     public static let velocityEMAPerSecond: CGFloat = 12
