@@ -4,6 +4,22 @@ import LaunchCore
 import LaunchPlatform
 import LaunchUI
 
+@MainActor
+private final class LayoutMutationCompletionGate {
+    private let completion: ((Bool) -> Void)?
+    private var didComplete = false
+
+    init(_ completion: ((Bool) -> Void)?) {
+        self.completion = completion
+    }
+
+    func finish(_ result: Bool) {
+        guard !didComplete else { return }
+        didComplete = true
+        completion?(result)
+    }
+}
+
 /// 启动器存储(MainActor): 组装 Catalog + Layout + Config → DisplayModel。
 ///
 /// 职责(§65 启动契约):
@@ -16,6 +32,7 @@ import LaunchUI
 @MainActor
 public final class LauncherStore: LauncherStoring, SettingsHandling {
     public var onDataChange: (() -> Void)?
+    private var dataObservers: [UUID: () -> Void] = [:]
 
     /// 配置变更回调(热键/语言/热角即时生效接线)。
     public var onConfigChange: ((AppConfiguration) -> Void)?
@@ -27,6 +44,8 @@ public final class LauncherStore: LauncherStoring, SettingsHandling {
     private var layout: LayoutSnapshot
     public private(set) var config: AppConfiguration
     private var searchIndex = SearchIndex()
+    /// 结构变更一次只允许一个 in-flight，避免旧 display 索引应用到更新后的 actor layout。
+    private var layoutMutationInFlight = false
 
     public var searchQuery = "" {
         didSet {
@@ -55,6 +74,10 @@ public final class LauncherStore: LauncherStoring, SettingsHandling {
     private func notifyDataChange() {
         notifyCount += 1
         onDataChange?()
+        // 允许文件夹覆盖层订阅而不覆盖 LauncherWindowController 的主网格回调。
+        for observer in Array(dataObservers.values) {
+            observer()
+        }
     }
 
     public init(
@@ -129,12 +152,19 @@ public final class LauncherStore: LauncherStoring, SettingsHandling {
 
     /// 布局变更统一提交(v0.1.6 §49): 一次 currentLayout + 按需 rebuild + revision + notify。
     /// 普通布局变更(reorder/文件夹)不重建 SearchIndex(§47-48)。
-    private func commitLayoutChange(searchMetadataChanged: Bool = false) async {
+    private func commitLayoutChange(
+        searchMetadataChanged: Bool = false,
+        releaseMutationLock: Bool = false
+    ) async {
         layout = await layoutStore.currentLayout()
         if searchMetadataChanged {
             rebuildSearchIndex()
         }
         bumpRevision()
+        if releaseMutationLock {
+            // 缓存已同步到 actor 最新布局；通知回调现在可以安全提交下一次 mutation。
+            layoutMutationInFlight = false
+        }
         notifyDataChange()
     }
 
@@ -142,11 +172,35 @@ public final class LauncherStore: LauncherStoring, SettingsHandling {
     private func performLayoutMutation(
         _ mutation: LayoutTransaction.LayoutMutation
     ) {
+        performSerializedLayoutChange { [layoutStore] display in
+            await layoutStore.apply(mutation, display: display)
+        }
+    }
+
+    private func performSerializedLayoutChange(
+        _ operation: @escaping @MainActor (DisplayModel) async -> Bool,
+        completion: ((Bool) -> Void)? = nil
+    ) {
+        let completionGate = LayoutMutationCompletionGate(completion)
+        guard !layoutMutationInFlight else {
+            completionGate.finish(false)
+            return
+        }
+        layoutMutationInFlight = true
         let display = displayModel()
         Task { [weak self] in
-            guard let self else { return }
-            if await layoutStore.apply(mutation, display: display) {
-                await self.commitLayoutChange()
+            guard let self else {
+                completionGate.finish(false)
+                return
+            }
+            let changed = await operation(display)
+            if changed {
+                await self.commitLayoutChange(releaseMutationLock: true)
+                // commitLayoutChange 已同步缓存、修订号及所有数据观察者。
+                completionGate.finish(true)
+            } else {
+                self.layoutMutationInFlight = false
+                completionGate.finish(false)
             }
         }
     }
@@ -165,6 +219,17 @@ public final class LauncherStore: LauncherStoring, SettingsHandling {
     }
 
     // MARK: - LauncherStoring
+
+    @discardableResult
+    public func addDataObserver(_ observer: @escaping () -> Void) -> UUID {
+        let token = UUID()
+        dataObservers[token] = observer
+        return token
+    }
+
+    public func removeDataObserver(_ token: UUID) {
+        dataObservers.removeValue(forKey: token)
+    }
 
     public func displayModel() -> DisplayModel {
         DisplayModel(
@@ -201,36 +266,50 @@ public final class LauncherStore: LauncherStoring, SettingsHandling {
 
     public func createFolder(name: String, appIDs: [AppID]) {
         guard !appIDs.isEmpty else { return }
-        let display = displayModel()
-        Task { [weak self] in
-            guard let self else { return }
-            if await layoutStore.createFolder(display: display, name: name, appIDs: appIDs) != nil {
-                await self.commitLayoutChange()
-            }
+        performSerializedLayoutChange { [layoutStore] display in
+            await layoutStore.createFolder(
+                display: display, name: name, appIDs: appIDs
+            ) != nil
         }
     }
 
     public func renameFolder(_ id: FolderID, to name: String) {
-        Task { [weak self] in
-            guard let self else { return }
-            if await layoutStore.renameFolder(id, to: name) {
-                await self.commitLayoutChange()
-            }
+        performSerializedLayoutChange { [layoutStore] _ in
+            await layoutStore.renameFolder(id, to: name)
         }
     }
 
     public func dissolveFolder(_ id: FolderID) {
-        let display = displayModel()
-        Task { [weak self] in
-            guard let self else { return }
-            if await layoutStore.dissolveFolder(display: display, id: id) {
-                await self.commitLayoutChange()
-            }
+        performSerializedLayoutChange { [layoutStore] display in
+            await layoutStore.dissolveFolder(display: display, id: id)
         }
     }
 
     public func addToFolder(app: AppID, folder: FolderID) {
         performLayoutMutation(.addToFolder(app: app, folder: folder, at: Int.max))
+    }
+
+    public func moveOutOfFolder(
+        app: AppID,
+        from folder: FolderID,
+        toDisplayIndex: Int,
+        completion: @escaping (Bool) -> Void
+    ) {
+        performSerializedLayoutChange(
+            { [layoutStore] display in
+                await layoutStore.apply(
+                    .moveOutOfFolder(app: app, from: folder, toDisplayIndex: toDisplayIndex),
+                    display: display
+                )
+            },
+            completion: completion
+        )
+    }
+
+    public func reorderFolderApp(app: AppID, in folder: FolderID, toIndex: Int) {
+        performLayoutMutation(
+            .reorderInFolder(app: app, folder: folder, toIndex: toIndex)
+        )
     }
 
     public func folderNames() -> [FolderID: String] {

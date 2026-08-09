@@ -119,6 +119,32 @@ struct LayoutStoreTests {
         #expect(await actor.currentLayout() == layout)
     }
 
+    @Test("持久化失败: mutation 返回 false 且内存布局回滚")
+    func persistenceFailureRollsBack() async throws {
+        let dir = try tempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        // 让 persistence 的“目录”实际指向普通文件，createDirectory/save 必然失败。
+        let blocked = dir.appendingPathComponent("not-a-directory")
+        try Data("blocked".utf8).write(to: blocked)
+        let persistence = LayoutSnapshotStore(directory: blocked)
+        let ids = apps(3)
+        let initial = LayoutSnapshot(pages: [ids.map(LayoutItem.app)])
+        let actor = LayoutStore(seed: initial, persistence: persistence)
+        let display = DisplayModel(
+            catalog: CatalogSnapshot(apps: []),
+            layout: initial,
+            config: config(columns: 4, rows: 3)
+        )
+
+        let ok = await actor.apply(
+            .reorder(item: .app(ids[0]), toDisplayIndex: 2), display: display
+        )
+
+        #expect(!ok)
+        #expect(await actor.currentLayout() == initial)
+        #expect(await actor.lastPersistErrorDescription != nil)
+    }
+
     @Test("文件夹操作: 创建/重命名/解散, 持久化")
     func folderOperations() async throws {
         let dir = try tempDirectory()

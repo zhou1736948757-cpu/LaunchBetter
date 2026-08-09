@@ -178,8 +178,8 @@ struct LayoutReconcilerTests {
             now: firstSeen.addingTimeInterval(30 * 86_400 + 1)
         )
 
-        let folder = try #require(result.folders[folderID])
-        #expect(folder.children == [staying])
+        #expect(result.pages == [[.app(staying)]])
+        #expect(result.folders[folderID] == nil)
         #expect(result.missingApps.isEmpty)
     }
 
@@ -200,8 +200,8 @@ struct LayoutReconcilerTests {
         let result = LayoutReconciler.reconcile(catalog: catalog, layout: layout, now: now)
 
         #expect(result.folders[emptyFolder] == nil)
-        #expect(result.folders[fullFolder] != nil)
-        #expect(result.pages[0] == [.folder(fullFolder)])
+        #expect(result.folders[fullFolder] == nil)
+        #expect(result.pages[0] == [.app(app)])
     }
 
     @Test("孤儿文件夹项(引用不存在的 FolderID)被移除")
@@ -216,8 +216,8 @@ struct LayoutReconcilerTests {
         #expect(result.pages[0] == [.app(app)])
     }
 
-    @Test("文件夹中的应用不算新应用")
-    func appInFolderIsNotNew() throws {
+    @Test("单 child 文件夹解散且应用不会重复追加")
+    func singleChildFolderDissolvedWithoutDuplicateAppend() throws {
         let app = try #require(AppID("/Applications/A.app"))
         let folderID = try #require(FolderID("F"))
         let catalog = try catalog("/Applications/A.app")
@@ -228,8 +228,82 @@ struct LayoutReconcilerTests {
 
         let result = LayoutReconciler.reconcile(catalog: catalog, layout: layout, now: now)
 
-        #expect(result.pages[0] == [.folder(folderID)])
-        #expect(result.folders[folderID]?.children == [app])
+        #expect(result.pages == [[.app(app)]])
+        #expect(result.folders[folderID] == nil)
+        #expect(result.pages.flatMap { $0 }.filter { $0 == .app(app) }.count == 1)
+    }
+
+    @Test("同页多个单 child 文件夹按槽位顺序原子解散")
+    func multipleSingleChildFoldersDissolveInPageOrder() throws {
+        let first = try #require(AppID("/Applications/First.app"))
+        let middle = try #require(AppID("/Applications/Middle.app"))
+        let last = try #require(AppID("/Applications/Last.app"))
+        let firstFolder = try #require(FolderID("First"))
+        let lastFolder = try #require(FolderID("Last"))
+        let catalog = try catalog(
+            "/Applications/First.app",
+            "/Applications/Middle.app",
+            "/Applications/Last.app"
+        )
+        let layout = layout(
+            pages: [[.folder(firstFolder), .app(middle), .folder(lastFolder)]],
+            folders: [
+                firstFolder: FolderRecord(id: firstFolder, name: "First", children: [first]),
+                lastFolder: FolderRecord(id: lastFolder, name: "Last", children: [last]),
+            ]
+        )
+
+        let result = LayoutReconciler.reconcile(catalog: catalog, layout: layout, now: now)
+
+        #expect(result.pages == [[.app(first), .app(middle), .app(last)]])
+        #expect(result.folders.isEmpty)
+    }
+
+    @Test("至少两个 child 的文件夹保留")
+    func folderWithAtLeastTwoChildrenRemains() throws {
+        let first = try #require(AppID("/Applications/First.app"))
+        let second = try #require(AppID("/Applications/Second.app"))
+        let folderID = try #require(FolderID("Retained"))
+        let catalog = try catalog("/Applications/First.app", "/Applications/Second.app")
+        let layout = layout(
+            pages: [[.folder(folderID)]],
+            folders: [folderID: FolderRecord(
+                id: folderID, name: "Retained", children: [first, second]
+            )]
+        )
+
+        let result = LayoutReconciler.reconcile(catalog: catalog, layout: layout, now: now)
+
+        #expect(result.pages == [[.folder(folderID)]])
+        #expect(result.folders[folderID]?.children == [first, second])
+    }
+
+    @Test("孤儿与重复文件夹引用不会产生重复应用")
+    func orphanAndDuplicateFolderReferencesDoNotDuplicateApps() throws {
+        let app = try #require(AppID("/Applications/A.app"))
+        let orphan = try #require(FolderID("Orphan"))
+        let firstFolder = try #require(FolderID("First"))
+        let secondFolder = try #require(FolderID("Second"))
+        let catalog = try catalog("/Applications/A.app")
+        let layout = layout(
+            pages: [[
+                .folder(orphan),
+                .folder(firstFolder),
+                .folder(firstFolder),
+                .folder(secondFolder),
+                .app(app),
+            ]],
+            folders: [
+                firstFolder: FolderRecord(id: firstFolder, name: "First", children: [app]),
+                secondFolder: FolderRecord(id: secondFolder, name: "Second", children: [app]),
+            ]
+        )
+
+        let result = LayoutReconciler.reconcile(catalog: catalog, layout: layout, now: now)
+
+        #expect(result.pages == [[.app(app)]])
+        #expect(result.folders.isEmpty)
+        #expect(result.pages.flatMap { $0 }.filter { $0 == .app(app) }.count == 1)
     }
 
     @Test("隐藏应用与对账无关: 布局引用即保留")

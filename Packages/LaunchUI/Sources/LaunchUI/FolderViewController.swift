@@ -1,14 +1,41 @@
 import AppKit
 import LaunchCore
 
-/// 文件夹视图: 显示文件夹内应用(单页网格)+ 返回按钮。
+/// 文件夹视图: 显示文件夹内应用(单页网格),并承接文件夹内的局部操作。
 @MainActor
 final class FolderViewController: NSViewController {
+    private let panelMetrics = FolderPanelMetrics.self
     private let store: any LauncherStoring
     private let iconProvider: (any IconImageProviding)?
     private let folderID: FolderID
 
     var onBack: (() -> Void)?
+    /// 文件夹拖拽越过卡片后交给窗口控制器, 后续事件仍来自同一 mouse session。
+    var onDragExit: ((AppID, FolderID, CGImage?, NSPoint) -> Bool)?
+    var onDragExitMove: ((NSPoint) -> Void)?
+    var onDragExitEnd: ((NSPoint, @escaping (Bool) -> Void) -> Void)?
+
+    private var rootView: FolderRootView!
+    private var cardShadowView: NSView!
+    private var visualCardView: NSVisualEffectView!
+    private var titleLabel: NSTextField!
+    private var collectionView: ClickableCollectionView!
+    private var scrollView: NSScrollView!
+    private var dataSource: NSCollectionViewDiffableDataSource<Int, DisplayModel.DisplayItem>!
+    private var displayedChildren: [AppID] = []
+
+    private var dataObserverToken: UUID?
+    private var orderOutObserver: NSObjectProtocol?
+    private var isClosing = false
+
+    // 文件夹覆盖层自己的鼠标拖拽状态; 不进入 LauncherStore 持久状态。
+    private var draggingApp: AppID?
+    private var draggingSourceIndex: Int?
+    private var draggingOutside = false
+    private var folderExitLifecycle = FolderExitDragLifecycle()
+    private var folderExitHandedOff: Bool { folderExitLifecycle.isActive }
+    private let dragOverlay = DragOverlayLayer()
+    private let insertionIndicator = InsertionIndicatorLayer()
 
     init(store: any LauncherStoring, iconProvider: (any IconImageProviding)?, folderID: FolderID) {
         self.store = store
@@ -22,56 +49,137 @@ final class FolderViewController: NSViewController {
     }
 
     override func loadView() {
-        let root = NSView()
+        let root = FolderRootView()
+        root.wantsLayer = true
+        root.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.18).cgColor
+        root.onWindowChange = { [weak self] in
+            self?.folderRootWindowDidChange()
+        }
+        root.onOutsideClick = { [weak self] in
+            self?.closeFolder()
+        }
+        rootView = root
 
-        let backButton = NSButton(title: "← 返回", target: self, action: #selector(backTapped))
-        backButton.bezelStyle = .rounded
-        root.addSubview(backButton)
-        backButton.translatesAutoresizingMaskIntoConstraints = false
+        let cardShadowView = NSView()
+        cardShadowView.wantsLayer = true
+        cardShadowView.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.08).cgColor
+        cardShadowView.layer?.cornerRadius = 24
+        cardShadowView.layer?.shadowColor = NSColor.black.cgColor
+        cardShadowView.layer?.shadowOpacity = 0.28
+        cardShadowView.layer?.shadowRadius = 18
+        cardShadowView.layer?.shadowOffset = NSSize(width: 0, height: -8)
+        cardShadowView.setAccessibilityRole(.group)
+        root.addSubview(cardShadowView)
+        cardShadowView.translatesAutoresizingMaskIntoConstraints = false
+        self.cardShadowView = cardShadowView
+
+        let targetWidth = cardShadowView.widthAnchor.constraint(equalToConstant: panelMetrics.cardSize.width)
+        targetWidth.priority = .defaultHigh
+        let targetHeight = cardShadowView.heightAnchor.constraint(equalToConstant: panelMetrics.cardSize.height)
+        targetHeight.priority = .defaultHigh
         NSLayoutConstraint.activate([
-            backButton.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 20),
-            backButton.topAnchor.constraint(equalTo: root.topAnchor, constant: 20),
+            cardShadowView.centerXAnchor.constraint(equalTo: root.centerXAnchor),
+            cardShadowView.centerYAnchor.constraint(equalTo: root.centerYAnchor),
+            cardShadowView.leadingAnchor.constraint(greaterThanOrEqualTo: root.leadingAnchor, constant: 24),
+            cardShadowView.trailingAnchor.constraint(lessThanOrEqualTo: root.trailingAnchor, constant: -24),
+            cardShadowView.topAnchor.constraint(greaterThanOrEqualTo: root.topAnchor, constant: 24),
+            cardShadowView.bottomAnchor.constraint(lessThanOrEqualTo: root.bottomAnchor, constant: -24),
+            cardShadowView.widthAnchor.constraint(lessThanOrEqualTo: root.widthAnchor, constant: -48),
+            cardShadowView.heightAnchor.constraint(lessThanOrEqualTo: root.heightAnchor, constant: -48),
+            targetWidth,
+            targetHeight,
         ])
 
-        let titleLabel = NSTextField(labelWithString: store.folderName(for: folderID))
+        let card = NSVisualEffectView()
+        card.material = .hudWindow
+        card.blendingMode = .withinWindow
+        card.state = .active
+        card.wantsLayer = true
+        card.layer?.cornerRadius = 24
+        card.layer?.masksToBounds = true
+        card.setAccessibilityRole(.group)
+        card.setAccessibilityLabel("文件夹 \(store.folderName(for: folderID))")
+        card.setAccessibilityHelp("文件夹内容和操作")
+        cardShadowView.addSubview(card)
+        card.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            card.leadingAnchor.constraint(equalTo: cardShadowView.leadingAnchor),
+            card.trailingAnchor.constraint(equalTo: cardShadowView.trailingAnchor),
+            card.topAnchor.constraint(equalTo: cardShadowView.topAnchor),
+            card.bottomAnchor.constraint(equalTo: cardShadowView.bottomAnchor),
+        ])
+        visualCardView = card
+        root.cardView = cardShadowView
+
+        let dissolveButton = NSButton(
+            title: L10n.t(.dissolveFolder), target: self, action: #selector(dissolveTapped)
+        )
+        dissolveButton.bezelStyle = .rounded
+        dissolveButton.setAccessibilityHelp("解散文件夹")
+        card.addSubview(dissolveButton)
+        dissolveButton.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            dissolveButton.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -24),
+            dissolveButton.topAnchor.constraint(equalTo: card.topAnchor, constant: 20),
+        ])
+
+        let renameButton = NSButton(
+            title: L10n.t(.rename), target: self, action: #selector(renameTapped)
+        )
+        renameButton.bezelStyle = .rounded
+        renameButton.setAccessibilityHelp("重命名文件夹")
+        card.addSubview(renameButton)
+        renameButton.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            renameButton.trailingAnchor.constraint(equalTo: dissolveButton.leadingAnchor, constant: -8),
+            renameButton.topAnchor.constraint(equalTo: card.topAnchor, constant: 20),
+        ])
+
+        titleLabel = NSTextField(labelWithString: store.folderName(for: folderID))
         titleLabel.font = .boldSystemFont(ofSize: 24)
         titleLabel.alignment = .center
-        root.addSubview(titleLabel)
+        titleLabel.lineBreakMode = .byTruncatingTail
+        titleLabel.setAccessibilityLabel(store.folderName(for: folderID))
+        card.addSubview(titleLabel)
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
-            titleLabel.topAnchor.constraint(equalTo: root.topAnchor, constant: 24),
-            titleLabel.centerXAnchor.constraint(equalTo: root.centerXAnchor),
+            titleLabel.topAnchor.constraint(equalTo: card.topAnchor, constant: 24),
+            titleLabel.centerXAnchor.constraint(equalTo: card.centerXAnchor),
+            titleLabel.leadingAnchor.constraint(greaterThanOrEqualTo: card.leadingAnchor, constant: 24),
+            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: renameButton.leadingAnchor, constant: -16),
         ])
 
-        // 子项网格: 单页, 支持点击启动(同样包 NSScrollView, 与主网格一致)
-        let collectionView = ClickableCollectionView()
-        collectionView.collectionViewLayout = PagingGridLayout(
-            columns: store.gridColumns, rows: store.gridRows,
-            cellSize: 96, iconSize: CGFloat(store.iconSize),
-            horizontalSpacing: 28, verticalSpacing: 28
+        // 子项网格: 可垂直滚动,左右保留安全边距,避免子项超出容量或操作栏重叠。
+        collectionView = ClickableCollectionView()
+        let folderLayout = PagingGridLayout(
+            columns: panelMetrics.columns, rows: panelMetrics.rows,
+            cellSize: panelMetrics.cellSize, iconSize: CGFloat(folderIconSize),
+            horizontalSpacing: panelMetrics.spacing, verticalSpacing: panelMetrics.spacing
         )
+        folderLayout.mode = .search
+        collectionView.collectionViewLayout = folderLayout
         collectionView.backgroundColors = [.clear]
         collectionView.isSelectable = false
         collectionView.register(AppCellView.self, forItemWithIdentifier: AppCellView.identifier)
-        let scrollView = NSScrollView()
+
+        scrollView = NSScrollView()
         scrollView.drawsBackground = false
         scrollView.hasHorizontalScroller = false
-        scrollView.hasVerticalScroller = false
+        scrollView.hasVerticalScroller = true
         scrollView.autohidesScrollers = true
         scrollView.documentView = collectionView
-        // 关键: 关闭文档视图 autoresizing, 否则滚动视图会把它拉回可视宽度
+        // 关键: 关闭文档视图 autoresizing,否则分页布局会被拉回可视宽度。
         collectionView.autoresizingMask = []
         scrollView.translatesAutoresizingMaskIntoConstraints = false
-        root.addSubview(scrollView)
+        card.addSubview(scrollView)
         NSLayoutConstraint.activate([
-            scrollView.leadingAnchor.constraint(equalTo: root.leadingAnchor),
-            scrollView.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-            scrollView.topAnchor.constraint(equalTo: root.topAnchor, constant: 80),
-            scrollView.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+            scrollView.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 28),
+            scrollView.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -28),
+            scrollView.topAnchor.constraint(equalTo: card.topAnchor, constant: 56),
+            scrollView.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -8),
         ])
 
-        // Diffable: 单 section 子项
-        let dataSource = NSCollectionViewDiffableDataSource<Int, DisplayModel.DisplayItem>(
+        dataSource = NSCollectionViewDiffableDataSource<Int, DisplayModel.DisplayItem>(
             collectionView: collectionView
         ) { [weak self] _, indexPath, item in
             guard let self else { return nil }
@@ -86,7 +194,7 @@ final class FolderViewController: NSViewController {
                     colorIndex: stableColorIndex(id.rawValue),
                     accessibilityHint: "点击启动 \(store.displayName(for: id))",
                     appID: id,
-                    pointSize: store.iconSize,
+                    pointSize: folderIconSize,
                     iconProvider: iconProvider
                 )
             case .folder:
@@ -94,31 +202,424 @@ final class FolderViewController: NSViewController {
             }
             return cell
         }
-        var snapshot = NSDiffableDataSourceSnapshot<Int, DisplayModel.DisplayItem>()
-        snapshot.appendSections([0])
-        snapshot.appendItems(
-            (store.folderChildren(folderID) ?? []).map(DisplayModel.DisplayItem.app),
-            toSection: 0
-        )
-        dataSource.apply(snapshot, animatingDifferences: false)
 
         collectionView.onClick = { [weak self] point in
-            guard let self else { return }
-            let local = collectionView.convert(point, from: nil)
-            guard let indexPath = collectionView.indexPathForItem(at: local),
-                  let item = dataSource.itemIdentifier(for: indexPath),
+            guard let self,
+                  let local = self.collectionView?.convert(point, from: nil),
+                  let indexPath = self.collectionView?.indexPathForItem(at: local),
+                  let item = self.dataSource?.itemIdentifier(for: indexPath),
                   case .app(let id) = item else { return }
-            store.launch(id)
+            self.store.launch(id)
+        }
+        collectionView.onDragBegin = { [weak self] point in
+            self?.beginDrag(at: point)
+        }
+        collectionView.onDragMove = { [weak self] point in
+            self?.updateDrag(at: point)
+        }
+        collectionView.onDragEnd = { [weak self] point in
+            self?.endDrag(at: point)
         }
 
         view = root
+        refresh()
+    }
+
+    override func viewDidLayout() {
+        super.viewDidLayout()
+        updateDocumentFrame()
+    }
+
+    private func folderRootWindowDidChange() {
+        removeObservers()
+        guard let window = view.window else { return }
+
+        dataObserverToken = store.addDataObserver { [weak self] in
+            self?.storeDidChange()
+        }
+        orderOutObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didResignKeyNotification,
+            object: window,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard NSApp.modalWindow == nil, window.attachedSheet == nil else { return }
+                self?.closeFolder()
+            }
+        }
+    }
+
+    private func removeObservers() {
+        if let dataObserverToken {
+            store.removeDataObserver(dataObserverToken)
+            self.dataObserverToken = nil
+        }
+        if let orderOutObserver {
+            NotificationCenter.default.removeObserver(orderOutObserver)
+            self.orderOutObserver = nil
+        }
+    }
+
+    private func storeDidChange() {
+        guard !isClosing else { return }
+        refresh()
+    }
+
+    private func refresh() {
+        guard isViewLoaded, !folderExitHandedOff else { return }
+        guard let children = store.folderChildren(folderID) else {
+            closeFolder()
+            return
+        }
+
+        titleLabel.stringValue = store.folderName(for: folderID)
+        visualCardView?.setAccessibilityLabel("文件夹 \(store.folderName(for: folderID))")
+        displayedChildren = children
+
+        var snapshot = NSDiffableDataSourceSnapshot<Int, DisplayModel.DisplayItem>()
+        snapshot.appendSections([0])
+        snapshot.appendItems(children.map(DisplayModel.DisplayItem.app), toSection: 0)
+        dataSource.apply(snapshot, animatingDifferences: false)
+        // 结构变化后显式落定文档高度;同 ID 项也可能只改变名称/图标,同时刷新 cell。
+        view.layoutSubtreeIfNeeded()
+        updateDocumentFrame()
+        collectionView.reloadData()
+        resetDrag()
+    }
+
+    private func updateDocumentFrame() {
+        guard let layout = collectionView.collectionViewLayout as? PagingGridLayout else { return }
+        let size = layout.collectionViewContentSize
+        guard size.width > 0, size.height > 0 else { return }
+        if collectionView.frame.size != size {
+            collectionView.setDocumentSize(size)
+        }
+    }
+
+    private func beginDrag(at point: NSPoint) {
+        guard !isClosing, !folderExitHandedOff else { return }
+        let local = collectionView.convert(point, from: nil)
+        guard let indexPath = collectionView.indexPathForItem(at: local),
+              let item = dataSource.itemIdentifier(for: indexPath),
+              case .app(let app) = item,
+              let sourceIndex = displayedChildren.firstIndex(of: app) else {
+            resetDrag()
+            return
+        }
+        draggingApp = app
+        draggingSourceIndex = sourceIndex
+        draggingOutside = !folderInteractionRect.contains(view.convert(point, from: nil))
+        dragOverlay.configure(
+            label: store.displayName(for: app),
+            sourceImage: (collectionView.item(at: indexPath) as? AppCellView)?.visibleIconImage
+        )
+        view.layer?.addSublayer(dragOverlay.layer)
+        view.layer?.addSublayer(insertionIndicator.layer)
+        (collectionView.item(at: indexPath) as? AppCellView)?.setDragSourceHidden(true)
+        dragOverlay.move(to: point, in: view)
+        updateInsertionIndicator(at: point)
+    }
+
+    private func updateDrag(at point: NSPoint) {
+        if folderExitHandedOff {
+            onDragExitMove?(point)
+            return
+        }
+        guard let app = draggingApp else { return }
+        draggingOutside = !folderInteractionRect.contains(view.convert(point, from: nil))
+        if draggingOutside {
+            handoffFolderDrag(at: point)
+            onDragExitMove?(point)
+            return
+        }
+        dragOverlay.move(to: point, in: view)
+        setSourceHidden(true, app: app)
+        updateInsertionIndicator(at: point)
+    }
+
+    private func endDrag(at point: NSPoint) {
+        if folderExitHandedOff {
+            requestFolderExitDrop(at: point)
+            return
+        }
+        guard let app = draggingApp, let sourceIndex = draggingSourceIndex else {
+            resetDrag()
+            return
+        }
+        let outside = draggingOutside
+            || !folderInteractionRect.contains(view.convert(point, from: nil))
+
+        if outside {
+            handoffFolderDrag(at: point)
+            guard folderExitHandedOff else { return }
+            requestFolderExitDrop(at: point)
+            return
+        }
+
+        resetDrag()
+        guard let gap = folderDropGap(at: point) else { return }
+        // gap 是原列表索引;源项移除后,其后的 gap 要左移一位。
+        let destination = gap > sourceIndex ? gap - 1 : gap
+        guard destination != sourceIndex else { return }
+        store.reorderFolderApp(app: app, in: folderID, toIndex: destination)
+    }
+
+    /// mouseUp 只发起 moveOutOfFolder；Store 回执到达前保持隐藏 chrome 和专用 session。
+    private func requestFolderExitDrop(at point: NSPoint) {
+        guard folderExitLifecycle.awaitResult() else { return }
+        let completion: (Bool) -> Void = { [weak self] committed in
+            self?.completeFolderExit(committed)
+        }
+        guard let onDragExitEnd else {
+            completion(false)
+            return
+        }
+        onDragExitEnd(point, completion)
+    }
+
+    private func completeFolderExit(_ committed: Bool) {
+        guard folderExitLifecycle.resolve(committed) else { return }
+        resetDrag()
+        if committed {
+            closeFolder()
+        } else {
+            // 回执失败: 保留文件夹、恢复 chrome/源图标，并重新接收交互。
+            setFolderChromeVisible(true)
+            refresh()
+        }
+    }
+
+    /// 文件夹卡片的交互边界。越过卡片后保持 folder-exit session 直到 mouseUp。
+    private var folderInteractionRect: NSRect {
+        guard let cardShadowView else { return view.bounds }
+        return cardShadowView.convert(cardShadowView.bounds, to: view)
+    }
+
+    private var folderIconSize: Int {
+        panelMetrics.iconPointSize(for: store.iconSize)
+    }
+
+    /// 清理文件夹局部 layer, 但不提交 store 变更。
+    private func clearLocalDragVisuals() {
+        if let app = draggingApp {
+            setSourceHidden(false, app: app)
+        }
+        dragOverlay.layer.removeFromSuperlayer()
+        insertionIndicator.hide()
+        insertionIndicator.layer.removeFromSuperlayer()
+        draggingApp = nil
+        draggingSourceIndex = nil
+    }
+
+    /// 只隐藏文件夹 chrome, 保留根视图接收原 mouse session 的后续事件。
+    private func setFolderChromeVisible(_ visible: Bool) {
+        // 不能在 mouseDown -> mouseUp 的同一拖拽会话中隐藏 cardShadowView：
+        // collectionView 是它的子视图，祖先 isHidden 后 AppKit 会中断原事件接收链，
+        // mouseUp 无法到达，主网格 overlay/插入线会永久停留，看起来像应用卡死。
+        // 保持视图层级参与事件分发，仅将视觉透明；提交成功后再由 closeFolderView 移除。
+        cardShadowView?.isHidden = false
+        cardShadowView?.alphaValue = visible ? 1 : 0
+        rootView?.layer?.backgroundColor = visible
+            ? NSColor.black.withAlphaComponent(0.18).cgColor
+            : NSColor.clear.cgColor
+    }
+
+    private func handoffFolderDrag(at point: NSPoint) {
+        guard !folderExitHandedOff,
+              let app = draggingApp,
+              folderExitLifecycle.begin() else { return }
+        let sourceImage = (collectionView.item(
+            at: IndexPath(item: draggingSourceIndex ?? 0, section: 0)
+        ) as? AppCellView)?.visibleIconImage
+        clearLocalDragVisuals()
+        draggingOutside = true
+        setFolderChromeVisible(false)
+        let started = onDragExit?(app, folderID, sourceImage, point) ?? false
+        guard started else {
+            folderExitLifecycle.cancel()
+            setFolderChromeVisible(true)
+            refresh()
+            return
+        }
+    }
+
+    /// 将鼠标点映射到当前可见子项的 gap,支持单元格之间和末尾空槽。
+    private func folderDropGap(at point: NSPoint) -> Int? {
+        guard !displayedChildren.isEmpty,
+              let layout = collectionView.collectionViewLayout as? PagingGridLayout else {
+            return nil
+        }
+        let local = collectionView.convert(point, from: nil)
+        guard collectionView.bounds.contains(local) else { return nil }
+
+        // 搜索式布局可以有任意行数;用实际 attributes 而不是固定 rows 几何定位最近项。
+        var nearestIndex: Int?
+        var nearestDistance = CGFloat.greatestFiniteMagnitude
+        var nearestFrame = NSRect.zero
+        for index in displayedChildren.indices {
+            guard let attributes = layout.layoutAttributesForItem(
+                at: IndexPath(item: index, section: 0)
+            ) else { continue }
+            let frame = attributes.frame
+            let dx = local.x - frame.midX
+            let dy = local.y - frame.midY
+            let distance = dx * dx + dy * dy
+            if distance < nearestDistance {
+                nearestIndex = index
+                nearestDistance = distance
+                nearestFrame = frame
+            }
+        }
+        guard let nearestIndex else { return nil }
+        let horizontalDistance = abs(local.x - nearestFrame.midX)
+        let verticalDistance = abs(local.y - nearestFrame.midY)
+        let after: Bool
+        if verticalDistance > horizontalDistance {
+            after = local.y > nearestFrame.midY
+        } else {
+            after = local.x > nearestFrame.midX
+        }
+        return after ? nearestIndex + 1 : nearestIndex
+    }
+
+    private func resetDrag() {
+        clearLocalDragVisuals()
+        draggingOutside = false
+        folderExitLifecycle.cancel()
+    }
+
+    /// 由窗口控制器在主拖拽 session 取消/teardown 后调用, 恢复文件夹视觉。
+    func restoreFolderAfterDragCancellation() {
+        guard folderExitHandedOff else { return }
+        resetDrag()
+        setFolderChromeVisible(true)
+        refresh()
+    }
+
+    /// 关闭文件夹前取消其局部或已 handoff 的视觉 session。
+    func cancelActiveDrag() {
+        let wasHandedOff = folderExitHandedOff
+        resetDrag()
+        if wasHandedOff {
+            setFolderChromeVisible(true)
+        }
+    }
+
+    private func setSourceHidden(_ hidden: Bool, app: AppID) {
+        guard let index = displayedChildren.firstIndex(of: app),
+              let cell = collectionView.item(at: IndexPath(item: index, section: 0)) as? AppCellView else {
+            return
+        }
+        cell.setDragSourceHidden(hidden)
+    }
+
+    private func updateInsertionIndicator(at point: NSPoint) {
+        guard let gap = folderDropGap(at: point),
+              let frame = insertionSlotFrame(forGap: gap) else {
+            insertionIndicator.hide()
+            return
+        }
+        insertionIndicator.show(at: view.convert(frame, from: collectionView))
+    }
+
+    private func insertionSlotFrame(forGap gap: Int) -> NSRect? {
+        guard !displayedChildren.isEmpty,
+              let layout = collectionView.collectionViewLayout as? PagingGridLayout else {
+            return nil
+        }
+        let bounded = min(max(0, gap), displayedChildren.count)
+        if bounded < displayedChildren.count {
+            return layout.layoutAttributesForItem(
+                at: IndexPath(item: bounded, section: 0)
+            )?.frame
+        }
+        guard let last = layout.layoutAttributesForItem(
+            at: IndexPath(item: displayedChildren.count - 1, section: 0)
+        )?.frame else { return nil }
+        return last.offsetBy(dx: last.width + layout.horizontalSpacing, dy: 0)
+    }
+
+    private func closeFolder() {
+        // folder-exit mouseUp 在回执前不能走普通关闭路径。
+        guard !isClosing, !folderExitLifecycle.isAwaitingResult else { return }
+        isClosing = true
+        resetDrag()
+        onBack?()
+    }
+
+    @objc private func renameTapped() {
+        guard store.folderChildren(folderID) != nil else {
+            closeFolder()
+            return
+        }
+
+        let alert = NSAlert()
+        alert.messageText = L10n.t(.rename)
+        alert.informativeText = store.folderName(for: folderID)
+        let field = NSTextField(string: store.folderName(for: folderID))
+        field.frame = NSRect(x: 0, y: 0, width: 280, height: 24)
+        alert.accessoryView = field
+        alert.addButton(withTitle: L10n.t(.ok))
+        alert.addButton(withTitle: L10n.t(.cancel))
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return }
+        store.renameFolder(folderID, to: name)
+        titleLabel.stringValue = name
+        visualCardView?.setAccessibilityLabel("文件夹 \(name)")
+    }
+
+    @objc private func dissolveTapped() {
+        guard store.folderChildren(folderID) != nil else {
+            closeFolder()
+            return
+        }
+
+        let alert = NSAlert()
+        alert.messageText = L10n.t(.dissolveFolder)
+        alert.informativeText = store.folderName(for: folderID)
+        alert.addButton(withTitle: L10n.t(.ok))
+        alert.addButton(withTitle: L10n.t(.cancel))
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        store.dissolveFolder(folderID)
+        closeFolder()
     }
 
     private func stableColorIndex(_ key: String) -> Int {
         abs(key.unicodeScalars.reduce(0) { $0 &+ Int($1.value) }) % 12
     }
+}
 
-    @objc private func backTapped() {
-        onBack?()
+/// 文件夹面板的固定几何契约, 与主网格配置解耦。
+struct FolderPanelMetrics: Equatable {
+    static let cardSize = CGSize(width: 420, height: 440)
+    static let columns = 3
+    static let rows = 3
+    static let cellSize: CGFloat = 96
+    static let spacing: CGFloat = 20
+    static let iconSizeLimit = 80
+
+    static func iconPointSize(for configuredSize: Int) -> Int {
+        min(max(16, configuredSize), iconSizeLimit)
+    }
+}
+
+private final class FolderRootView: NSView {
+    var onWindowChange: (() -> Void)?
+    var onOutsideClick: (() -> Void)?
+    weak var cardView: NSView?
+
+    override func mouseDown(with event: NSEvent) {
+        guard let cardView else { return }
+        let point = cardView.convert(event.locationInWindow, from: nil)
+        guard !cardView.bounds.contains(point) else { return }
+        onOutsideClick?()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        onWindowChange?()
     }
 }

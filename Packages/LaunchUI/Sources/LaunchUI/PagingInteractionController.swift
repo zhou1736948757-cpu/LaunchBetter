@@ -157,7 +157,7 @@ final class PagingInteractionController {
         displacement = min(max(displacement + applied, -maxDisp), maxDisp)
         // 方向: 手指左滑(deltaX 负, 自然滚动)→ 内容左移 → offset 增加
         latestDesiredOffset = baseOffset - displacement
-        velocity.update(position: -displacement, timestamp: CACurrentMediaTime())
+        _ = velocity.update(position: -displacement, timestamp: CACurrentMediaTime())
         ensureDisplayLink()
     }
 

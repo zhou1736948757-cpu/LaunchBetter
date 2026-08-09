@@ -133,8 +133,88 @@ struct LayoutEditorTests {
         #expect(LayoutEditor.apply(mutation, to: layout, display: display) == nil)
     }
 
-    @Test("moveOutOfFolder: 插入指定显示索引")
+    @Test("reorderInFolder: 按可见 gap 重排")
+    func reorderInFolder() throws {
+        let ids = apps(5)
+        let folderID = folderID("F")
+        let layout = layout(
+            pages: [[.app(ids[0]), .folder(folderID), .app(ids[4])]],
+            folders: [folderID: FolderRecord(
+                id: folderID, name: "F", children: [ids[1], ids[2], ids[3]]
+            )]
+        )
+        let display = makeDisplay(layout: layout)
+        // 移除 1 后剩余 [2, 3], gap@2 = 末尾 → [2, 3, 1]
+        let mutation = LayoutTransaction.LayoutMutation.reorderInFolder(
+            app: ids[1], folder: folderID, toIndex: 2
+        )
+        let result = try #require(LayoutEditor.apply(mutation, to: layout, display: display))
+        #expect(result.folders[folderID]?.children == [ids[2], ids[3], ids[1]])
+        #expect(result.pages == layout.pages)
+    }
+
+    @Test("reorderInFolder: 隐藏子项保持在 children 中")
+    func reorderInFolderKeepsHiddenChildren() throws {
+        let ids = apps(5)
+        let folderID = folderID("F")
+        let layout = layout(
+            pages: [[.folder(folderID)]],
+            folders: [folderID: FolderRecord(
+                id: folderID, name: "F", children: [ids[1], ids[2], ids[3]]
+            )]
+        )
+        let display = makeDisplay(layout: layout, hidden: [ids[2]])
+        // 可见列表 [1, 3], 将 3 移到可见 gap@0, 隐藏项 2 仍保留。
+        let mutation = LayoutTransaction.LayoutMutation.reorderInFolder(
+            app: ids[3], folder: folderID, toIndex: 0
+        )
+        let result = try #require(LayoutEditor.apply(mutation, to: layout, display: display))
+        #expect(result.folders[folderID]?.children == [ids[3], ids[1], ids[2]])
+    }
+
+    @Test("reorderInFolder: 未知文件夹或不可见应用 → nil")
+    func reorderInFolderInvalid() throws {
+        let ids = apps(3)
+        let f = folderID("F")
+        let layout = layout(
+            pages: [[.folder(f)]],
+            folders: [f: FolderRecord(id: f, name: "F", children: [ids[1]])]
+        )
+        let display = makeDisplay(layout: layout)
+        #expect(LayoutEditor.apply(
+            .reorderInFolder(app: ids[0], folder: f, toIndex: 0),
+            to: layout,
+            display: display
+        ) == nil)
+        #expect(LayoutEditor.apply(
+            .reorderInFolder(app: ids[1], folder: folderID("Ghost"), toIndex: 0),
+            to: layout,
+            display: display
+        ) == nil)
+    }
+
+    @Test("moveOutOfFolder: 移出后仍有至少两个 child 时保留文件夹")
     func moveOutOfFolder() throws {
+        let ids = apps(5)
+        let folderID = folderID("F")
+        let layout = layout(
+            pages: [[.app(ids[0]), .folder(folderID), .app(ids[4])]],
+            folders: [folderID: FolderRecord(
+                id: folderID, name: "F", children: [ids[1], ids[2], ids[3]]
+            )]
+        )
+        let display = makeDisplay(layout: layout)
+        // 显示: [0, F, 4]; 把 3 移到显示索引 0,剩余 children [1, 2]
+        let mutation = LayoutTransaction.LayoutMutation.moveOutOfFolder(
+            app: ids[3], from: folderID, toDisplayIndex: 0
+        )
+        let result = try #require(LayoutEditor.apply(mutation, to: layout, display: display))
+        #expect(result.folders[folderID]?.children == [ids[1], ids[2]])
+        #expect(result.pages[0] == [.app(ids[3]), .app(ids[0]), .folder(folderID), .app(ids[4])])
+    }
+
+    @Test("moveOutOfFolder: 单 child 时在一次 mutation 中解散并覆盖前后附近目标")
+    func moveOutDissolvesSingleChildAtNearbyTargets() throws {
         let ids = apps(4)
         let folderID = folderID("F")
         let layout = layout(
@@ -142,13 +222,41 @@ struct LayoutEditorTests {
             folders: [folderID: FolderRecord(id: folderID, name: "F", children: [ids[1], ids[2]])]
         )
         let display = makeDisplay(layout: layout)
-        // 显示: [0, F, 3]; 把 2 移到显示索引 0
-        let mutation = LayoutTransaction.LayoutMutation.moveOutOfFolder(
-            app: ids[2], from: folderID, toDisplayIndex: 0
+        let cases: [(target: Int, page: [LayoutItem])] = [
+            (0, [.app(ids[2]), .app(ids[0]), .app(ids[1]), .app(ids[3])]),
+            (1, [.app(ids[0]), .app(ids[2]), .app(ids[1]), .app(ids[3])]),
+            (2, [.app(ids[0]), .app(ids[1]), .app(ids[2]), .app(ids[3])]),
+            (3, [.app(ids[0]), .app(ids[1]), .app(ids[3]), .app(ids[2])]),
+        ]
+
+        for testCase in cases {
+            let mutation = LayoutTransaction.LayoutMutation.moveOutOfFolder(
+                app: ids[2], from: folderID, toDisplayIndex: testCase.target
+            )
+            let result = try #require(LayoutEditor.apply(mutation, to: layout, display: display))
+            #expect(result.folders[folderID] == nil)
+            #expect(result.pages == [testCase.page])
+            #expect(result.referencedAppIDs == layout.referencedAppIDs)
+        }
+    }
+
+    @Test("moveOutOfFolder: 按持久 children 数量解散,隐藏剩余 app 仍回原槽位")
+    func moveOutDissolvesUsingPersistentChildrenCount() throws {
+        let ids = apps(4)
+        let folderID = folderID("F")
+        let layout = layout(
+            pages: [[.app(ids[0]), .folder(folderID), .app(ids[3])]],
+            folders: [folderID: FolderRecord(id: folderID, name: "F", children: [ids[1], ids[2]])]
         )
+        let display = makeDisplay(layout: layout, hidden: [ids[1]])
+        let mutation = LayoutTransaction.LayoutMutation.moveOutOfFolder(
+            app: ids[2], from: folderID, toDisplayIndex: 1
+        )
+
         let result = try #require(LayoutEditor.apply(mutation, to: layout, display: display))
-        #expect(result.folders[folderID]?.children == [ids[1]])
-        #expect(result.pages[0] == [.app(ids[2]), .app(ids[0]), .folder(folderID), .app(ids[3])])
+        #expect(result.folders[folderID] == nil)
+        #expect(result.pages == [[.app(ids[0]), .app(ids[1]), .app(ids[2]), .app(ids[3])]])
+        #expect(result.referencedAppIDs == layout.referencedAppIDs)
     }
 
     @Test("renameFolder")

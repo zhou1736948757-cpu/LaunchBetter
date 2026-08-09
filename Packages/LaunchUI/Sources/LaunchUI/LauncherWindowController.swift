@@ -79,6 +79,9 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         // 拖拽引擎: 网格鼠标事件 → DragController(经样本缓冲/帧协调器)
         let dragController = DragController(grid: grid, store: store)
         self.dragController = dragController
+        dragController.onFolderExitDragCancelled = { [weak self] in
+            self?.folderViewController?.restoreFolderAfterDragCancellation()
+        }
         grid.dragController = dragController
         if let collectionView = grid.collectionViewRef as? ClickableCollectionView {
             collectionView.onDragBegin = { [weak dragController] point in
@@ -131,7 +134,11 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
 
     public func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
         if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
-            hide()
+            if folderViewController != nil {
+                closeFolderView()
+            } else {
+                hide()
+            }
             return true
         }
         return false
@@ -218,6 +225,8 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         onVisibilityChange?(false)
         // M4: 隐藏时终止拖拽(display link/overlay 清理)
         dragController?.shutdown()
+        // 文件夹是临时覆盖层；隐藏/Escape 后重开必须回到主网格。
+        closeFolderView()
         iconProvider?.trimMemoryForHidden()
         guard let window else { return }
         store.searchQuery = ""
@@ -245,11 +254,31 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
 
     private func openFolder(_ folderID: FolderID) {
         guard let window, let contentView = window.contentView else { return }
+        closeFolderView()
+        // 文件夹是覆盖主网格与搜索栏的临时 overlay;底层内容保持可见,由 overlay 暗化。
         let folderView = FolderViewController(
             store: store, iconProvider: iconProvider, folderID: folderID
         )
         folderView.onBack = { [weak self] in
             self?.closeFolderView()
+        }
+        folderView.onDragExit = { [weak self] app, folder, sourceImage, point in
+            self?.dragController?.beginFolderExitDrag(
+                app: app,
+                from: folder,
+                sourceImage: sourceImage,
+                at: point
+            ) ?? false
+        }
+        folderView.onDragExitMove = { [weak self] point in
+            self?.dragController?.updateDrag(at: point)
+        }
+        folderView.onDragExitEnd = { [weak self] point, completion in
+            guard let dragController = self?.dragController else {
+                completion(false)
+                return
+            }
+            dragController.endDrag(at: point, completion: completion)
         }
         folderViewController = folderView
         contentView.addSubview(folderView.view)
@@ -263,8 +292,17 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
     }
 
     private func closeFolderView() {
-        folderViewController?.view.removeFromSuperview()
-        folderViewController = nil
+        guard let folderViewController else { return }
+        folderViewController.cancelActiveDrag()
+        if dragController?.isDragging == true {
+            dragController?.cancelDrag()
+        }
+        folderViewController.onBack = nil
+        folderViewController.onDragExit = nil
+        folderViewController.onDragExitMove = nil
+        folderViewController.onDragExitEnd = nil
+        folderViewController.view.removeFromSuperview()
+        self.folderViewController = nil
     }
 
     /// 确定性诊断(冒烟验证用)。
@@ -297,24 +335,33 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
     /// 三指拖动: 反查指针下图标并开始拖拽(Stage 2)。返回是否成功开始。
     /// 位置语义与旧 LaunchHistory 一致: 用 NSEvent.mouseLocation(指针), 非触点中心。
     public func threeFingerDragBegin() -> Bool {
+        // 文件夹覆盖层存在时不可命中其后的主网格；文件夹子项由文件夹控制器接管。
+        guard folderViewController == nil else { return false }
         guard let grid = gridViewController, let drag = dragController else { return false }
-        guard let window else { return false }
-        let windowPoint = window.convertPoint(fromScreen: NSEvent.mouseLocation)
+        guard let windowPoint = currentPointerInWindow() else { return false }
         guard let item = grid.itemAt(point: windowPoint) else { return false }
         drag.beginDrag(item: item, at: windowPoint, inputSource: .threeFinger)
         return drag.isDragging
     }
 
     public func threeFingerDragUpdate() {
-        guard let drag = dragController, let window else { return }
-        let windowPoint = window.convertPoint(fromScreen: NSEvent.mouseLocation)
+        guard let drag = dragController, let windowPoint = currentPointerInWindow() else { return }
         drag.updateDrag(at: windowPoint, inputSource: .threeFinger)
     }
 
     public func threeFingerDragEnd() {
-        guard let drag = dragController, let window else { return }
-        let windowPoint = window.convertPoint(fromScreen: NSEvent.mouseLocation)
-        drag.endDrag(at: windowPoint, inputSource: .threeFinger)
+        guard let drag = dragController, let windowPoint = currentPointerInWindow() else { return }
+        let leftMouseButtonPressed = (NSEvent.pressedMouseButtons & 1) != 0
+        drag.endDrag(
+            at: windowPoint,
+            inputSource: .threeFinger,
+            leftMouseButtonPressed: leftMouseButtonPressed
+        )
+    }
+
+    /// 三指路径统一使用窗口基坐标，避免多处 screen→window 转换产生契约漂移。
+    private func currentPointerInWindow() -> NSPoint? {
+        window?.mouseLocationOutsideOfEventStream
     }
 
     public func threeFingerDragCancel() {
@@ -437,7 +484,11 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
     public func handleKeyDown(_ event: NSEvent) {
         switch event.keyCode {
         case 53: // Escape
-            hide()
+            if folderViewController != nil {
+                closeFolderView()
+            } else {
+                hide()
+            }
         case 123, 33: // Left, PageUp
             gridViewController.previousPage()
         case 124, 34: // Right, PageDown

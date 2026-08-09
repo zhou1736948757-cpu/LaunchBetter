@@ -42,6 +42,8 @@ public struct LayoutTransaction {
     public enum LayoutMutation: Sendable, Equatable {
         case reorder(item: DisplayModel.DisplayItem, toDisplayIndex: Int)
         case addToFolder(app: AppID, folder: FolderID, at: Int)
+        /// 文件夹内可见子项重排。`toIndex` 是移除源项后的可见 gap 索引。
+        case reorderInFolder(app: AppID, folder: FolderID, toIndex: Int)
         case moveOutOfFolder(app: AppID, from: FolderID, toDisplayIndex: Int)
         case renameFolder(FolderID, newName: String)
     }

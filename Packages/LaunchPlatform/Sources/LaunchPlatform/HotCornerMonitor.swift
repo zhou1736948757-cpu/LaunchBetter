@@ -62,7 +62,7 @@ public final class HotCornerMonitor: @unchecked Sendable {
             dwellStart = nil
             return
         }
-        guard detected != .none else {
+        guard let detected, detected != HotCornerAction.none else {
             dwellStart = nil
             return
         }
@@ -76,6 +76,6 @@ public final class HotCornerMonitor: @unchecked Sendable {
         if let last = lastActionAt, Date().timeIntervalSince(last) < 1.0 { return }
         lastActionAt = Date()
         dwellStart = nil
-        onAction?(detected!)
+        onAction?(detected)
     }
 }

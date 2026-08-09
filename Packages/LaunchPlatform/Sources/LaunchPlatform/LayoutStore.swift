@@ -25,7 +25,7 @@ public actor LayoutStore {
 
     private let persistence: LayoutSnapshotStore
     private var layout: LayoutSnapshot
-    /// 最近一次持久化失败描述(nil = 正常);持久化失败不阻断内存操作。
+    /// 最近一次持久化失败描述(nil = 正常)。结构变更只有落盘成功才提交内存状态。
     public private(set) var lastPersistErrorDescription: String?
 
     public init(seed: LayoutSnapshot = LayoutSnapshot(), persistence: LayoutSnapshotStore) {
@@ -55,8 +55,8 @@ public actor LayoutStore {
 
     /// 与 Catalog 对账(新应用/墓碑/回归),并持久化。
     public func reconcile(catalog: CatalogSnapshot, now: Date) -> LayoutSnapshot {
-        layout = LayoutReconciler.reconcile(catalog: catalog, layout: layout, now: now)
-        persist()
+        let candidate = LayoutReconciler.reconcile(catalog: catalog, layout: layout, now: now)
+        _ = commit(candidate)
         return layout
     }
 
@@ -68,9 +68,7 @@ public actor LayoutStore {
         guard let result = LayoutEditor.apply(mutation, to: layout, display: display) else {
             return false
         }
-        layout = result
-        persist()
-        return true
+        return commit(result)
     }
 
     /// 创建文件夹(合并 ≥1 个应用)。返回新 FolderID,nil = 无效。
@@ -84,8 +82,7 @@ public actor LayoutStore {
         ) else {
             return nil
         }
-        layout = result.layout
-        persist()
+        guard commit(result.layout) else { return nil }
         return result.folderID
     }
 
@@ -94,9 +91,7 @@ public actor LayoutStore {
         guard let result = LayoutEditor.dissolveFolder(in: layout, display: display, id: id) else {
             return false
         }
-        layout = result
-        persist()
-        return true
+        return commit(result)
     }
 
     /// 重命名文件夹。
@@ -106,21 +101,23 @@ public actor LayoutStore {
         ) else {
             return false
         }
-        layout = result
-        persist()
-        return true
+        return commit(result)
     }
 
     private func currentDisplayPlaceholder() -> DisplayModel {
         DisplayModel(pages: [], pageCapacity: 42)
     }
 
-    private func persist() {
+    /// 原子落盘成功后才发布候选布局；失败时保留原布局，避免 UI/磁盘分叉。
+    private func commit(_ candidate: LayoutSnapshot) -> Bool {
         do {
-            try persistence.save(layout)
+            try persistence.save(candidate)
+            layout = candidate
             lastPersistErrorDescription = nil
+            return true
         } catch {
             lastPersistErrorDescription = String(describing: error)
+            return false
         }
     }
 }

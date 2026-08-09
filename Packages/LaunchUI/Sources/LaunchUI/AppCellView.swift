@@ -1,7 +1,7 @@
 import AppKit
 import LaunchCore
 
-/// 应用单元格: 图标(CALayer contents)+ 标签。
+/// 应用/文件夹单元格: 图标或文件夹缩略图 + 标签。
 ///
 /// 图标加载(§85 复用竞态防护):
 /// - `representedAppID` + `iconRequestTask`
@@ -15,21 +15,35 @@ import LaunchCore
 final class AppCellView: NSCollectionViewItem {
     static let identifier = NSUserInterfaceItemIdentifier("AppCellView")
 
+    private enum CreateFolderTargetHighlight: Equatable {
+        case none
+        case waiting
+        case active
+    }
+
     /// 标签高度(pt)。
     private static let labelHeight: CGFloat = 13
+    private static let maxFolderIconCount = 9
 
     private let iconLayer = CALayer()
+    private let folderThumbnailView = FolderThumbnailView()
     private let label = NSTextField(labelWithString: "")
     private let letterLayer = CATextLayer()
     private var labelBottomConstraint: NSLayoutConstraint?
 
     private var representedAppID: AppID?
+    private var representedFolderID: FolderID?
+    private var folderChildAppIDs: [AppID] = []
     private var iconRequestTask: Task<Void, Never>?
+    private var folderIconRequestTasks: [Task<Void, Never>] = []
     private var iconProvider: (any IconImageProviding)?
+    private var requestGeneration: UInt64 = 0
 
     /// 当前配置的图标点尺寸(与 IconKey 请求一致)。
     private var iconPointSize: Int = 80
     private var lastRequestedScale = 0
+    private var isDragSourceHidden = false
+    private var createFolderTargetHighlight: CreateFolderTargetHighlight = .none
 
     /// 源单元格当前显示的图标(拖拽 overlay 复用, 零磁盘 IO)。
     var visibleIconImage: CGImage? {
@@ -37,11 +51,56 @@ final class AppCellView: NSCollectionViewItem {
         let ref = contents as CFTypeRef
         // 类型校验后强转, 消除对任意 contents 的裸 force-cast crash point(v0.1.6 §53)
         guard CFGetTypeID(ref) == CGImage.typeID else { return nil }
-        return ref as! CGImage
+        return (ref as! CGImage)
     }
 
     /// 诊断: 是否已显示真实图标(contents 非空)。
     var hasRealIcon: Bool { iconLayer.contents != nil }
+
+    /// 拖拽期间隐藏源单元格，overlay 成为唯一的源图标。
+    /// 只写 layer opacity，避免触发 collection view 结构更新。
+    func setDragSourceHidden(_ hidden: Bool) {
+        guard hidden != isDragSourceHidden else { return }
+        isDragSourceHidden = hidden
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        view.layer?.opacity = hidden ? 0 : 1
+        CATransaction.commit()
+    }
+
+    /// App B 建夹目标高亮。只变换普通 App 的 iconLayer，避免与写入
+    /// cell.view.layer.transform 的 reorder preview 相互覆盖。
+    func setCreateFolderTargetHighlighted(_ highlighted: Bool, active: Bool) {
+        guard representedAppID != nil, representedFolderID == nil, !iconLayer.isHidden else {
+            return
+        }
+        let nextHighlight: CreateFolderTargetHighlight
+        if !highlighted {
+            nextHighlight = .none
+        } else {
+            nextHighlight = active ? .active : .waiting
+        }
+        guard nextHighlight != createFolderTargetHighlight else { return }
+        createFolderTargetHighlight = nextHighlight
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        switch nextHighlight {
+        case .none:
+            iconLayer.transform = CATransform3DIdentity
+            iconLayer.borderWidth = 0
+            iconLayer.borderColor = nil
+        case .waiting:
+            iconLayer.transform = CATransform3DMakeScale(1.05, 1.05, 1)
+            iconLayer.borderWidth = 2
+            iconLayer.borderColor = NSColor.white.withAlphaComponent(0.72).cgColor
+        case .active:
+            iconLayer.transform = CATransform3DMakeScale(1.10, 1.10, 1)
+            iconLayer.borderWidth = 3
+            iconLayer.borderColor = NSColor.systemBlue.cgColor
+        }
+        CATransaction.commit()
+    }
 
     override func loadView() {
         let root = CellRootView()
@@ -55,6 +114,9 @@ final class AppCellView: NSCollectionViewItem {
         iconLayer.cornerRadius = 16
         iconLayer.masksToBounds = true
         root.layer?.addSublayer(iconLayer)
+
+        folderThumbnailView.isHidden = true
+        root.addSubview(folderThumbnailView)
 
         letterLayer.fontSize = 36
         letterLayer.alignmentMode = .center
@@ -99,10 +161,17 @@ final class AppCellView: NSCollectionViewItem {
         var iconFrame = bounds
         iconFrame.size.height = size
         iconFrame.origin.y = bounds.height - size
-        iconLayer.frame = iconFrame
+        // frame 在非 identity transform 下是派生值；改写 bounds/position 可保证
+        // App B 高亮缩放期间重新布局仍稳定。
+        iconLayer.bounds = CGRect(origin: .zero, size: iconFrame.size)
+        iconLayer.position = CGPoint(x: iconFrame.midX, y: iconFrame.midY)
         letterLayer.frame = iconFrame
+        folderThumbnailView.frame = iconFrame
+        folderThumbnailView.updateLayout()
+        let scale = view.window?.backingScaleFactor ?? 2
+        iconLayer.contentsScale = scale
         letterLayer.fontSize = size * 0.5
-        letterLayer.contentsScale = view.window?.backingScaleFactor ?? 2
+        letterLayer.contentsScale = scale
 
         let gap = max(6, (bounds.height - size) / 4)
         labelBottomConstraint?.constant = -gap
@@ -110,14 +179,23 @@ final class AppCellView: NSCollectionViewItem {
 
     override func prepareForReuse() {
         super.prepareForReuse()
-        iconRequestTask?.cancel()
-        iconRequestTask = nil
+        invalidateIconRequests()
         representedAppID = nil
+        representedFolderID = nil
+        folderChildAppIDs = []
+        iconProvider = nil
+        folderThumbnailView.reset()
+        resetCreateFolderTargetHighlight()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         iconLayer.contents = nil
+        iconLayer.backgroundColor = nil
+        iconLayer.isHidden = false
+        letterLayer.isHidden = false
         // M3: 复用强制恢复 identity(防止拖拽预览变换污染)
         view.layer?.transform = CATransform3DIdentity
+        view.layer?.opacity = 1
+        isDragSourceHidden = false
         CATransaction.commit()
     }
 
@@ -130,9 +208,11 @@ final class AppCellView: NSCollectionViewItem {
         pointSize: Int,
         iconProvider: (any IconImageProviding)?
     ) {
+        beginConfiguration()
         iconPointSize = max(16, pointSize)
         letterLayer.string = String(displayName.prefix(1)).uppercased()
         letterLayer.isHidden = false
+        iconLayer.isHidden = false
 
         let hue = CGFloat(colorIndex % 12) / 12
         iconLayer.backgroundColor = NSColor(
@@ -146,56 +226,173 @@ final class AppCellView: NSCollectionViewItem {
         view.setAccessibilityLabel(displayName)
         view.setAccessibilityHelp(accessibilityHint)
 
-        guard let appID, let iconProvider else {
+        self.iconProvider = iconProvider
+        let scale = currentBackingScale
+        lastRequestedScale = scale
+        guard let appID else {
             representedAppID = nil
             return
         }
 
-        // 启动异步图标加载(消费者任务;取消不杀死共享任务)
         representedAppID = appID
-        let expectedID = appID
-        iconRequestTask?.cancel()
-        let scale = Int(view.window?.backingScaleFactor ?? 2)
+        guard let iconProvider else { return }
+        startAppIconRequest(appID, provider: iconProvider, scale: scale)
+    }
+
+    /// 配置文件夹单元格。文件夹自身不使用普通 App 的色块/首字母占位，
+    /// 只显示透明磨砂容器及其可用的真实子应用图标。
+    func configureFolder(
+        displayName: String,
+        accessibilityHint: String,
+        folderID: FolderID,
+        children: [AppID],
+        pointSize: Int,
+        iconProvider: (any IconImageProviding)?
+    ) {
+        beginConfiguration()
+        iconPointSize = max(16, pointSize)
+        label.stringValue = displayName
+        view.setAccessibilityElement(true)
+        view.setAccessibilityRole(.button)
+        view.setAccessibilityLabel(displayName)
+        view.setAccessibilityHelp(accessibilityHint)
+
+        iconLayer.contents = nil
+        iconLayer.backgroundColor = nil
+        iconLayer.isHidden = true
+        letterLayer.string = ""
+        letterLayer.isHidden = true
+
+        let visibleChildren = Array(children.prefix(Self.maxFolderIconCount))
+        folderChildAppIDs = visibleChildren
+        representedFolderID = folderID
+        self.iconProvider = iconProvider
+
+        let scale = currentBackingScale
         lastRequestedScale = scale
-        let task = Task { [weak self] in
-            guard !Task.isCancelled else { return }
-            let image = await iconProvider.icon(
-                for: expectedID, pointSize: pointSize, scale: scale
-            )
-            guard !Task.isCancelled, let self, self.representedAppID == expectedID else { return }
-            self.applyIcon(image)
-        }
-        iconRequestTask = task
+        folderThumbnailView.configure(
+            iconCount: visibleChildren.count,
+            scale: CGFloat(scale)
+        )
+        guard let iconProvider else { return }
+        startFolderIconRequests(
+            folderID: folderID,
+            children: visibleChildren,
+            provider: iconProvider,
+            scale: scale
+        )
     }
 
     /// 窗口显示器变更(backing scale 变化)→ 以新 scale 重新请求图标(Stage 1 §32)。
     private func reRequestIconIfScaleChanged() {
-        guard let window = view.window, let appID = representedAppID, let iconProvider else { return }
-        let scale = Int(window.backingScaleFactor)
-        guard scale != lastRequestedScale, iconRequestTask != nil else { return }
-        iconRequestTask?.cancel()
-        let expectedID = appID
+        guard view.window != nil else { return }
+        let scale = currentBackingScale
+        guard scale != lastRequestedScale else { return }
         lastRequestedScale = scale
-        let provider = iconProvider
+        invalidateIconRequests()
+
+        if let appID = representedAppID, let iconProvider {
+            startAppIconRequest(appID, provider: iconProvider, scale: scale)
+        } else if let folderID = representedFolderID, let iconProvider {
+            folderThumbnailView.updateScale(CGFloat(scale))
+            folderThumbnailView.clearIconContents()
+            startFolderIconRequests(
+                folderID: folderID,
+                children: folderChildAppIDs,
+                provider: iconProvider,
+                scale: scale
+            )
+        }
+    }
+
+    private var currentBackingScale: Int {
+        let scale = view.window?.backingScaleFactor
+            ?? NSScreen.main?.backingScaleFactor
+            ?? 2
+        return max(1, Int(scale.rounded()))
+    }
+
+    private func beginConfiguration() {
+        invalidateIconRequests()
+        resetCreateFolderTargetHighlight()
+        representedAppID = nil
+        representedFolderID = nil
+        folderChildAppIDs = []
+        iconProvider = nil
+        folderThumbnailView.reset()
+        iconLayer.isHidden = false
+    }
+
+    private func resetCreateFolderTargetHighlight() {
+        createFolderTargetHighlight = .none
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        iconLayer.transform = CATransform3DIdentity
+        iconLayer.borderWidth = 0
+        iconLayer.borderColor = nil
+        CATransaction.commit()
+    }
+
+    private func invalidateIconRequests() {
+        requestGeneration &+= 1
+        iconRequestTask?.cancel()
+        iconRequestTask = nil
+        for task in folderIconRequestTasks {
+            task.cancel()
+        }
+        folderIconRequestTasks.removeAll(keepingCapacity: true)
+    }
+
+    /// 启动普通 App 图标请求(消费者任务;取消不杀死共享图标任务)。
+    private func startAppIconRequest(
+        _ appID: AppID,
+        provider: any IconImageProviding,
+        scale: Int
+    ) {
+        let expectedGeneration = requestGeneration
         let size = iconPointSize
         let task = Task { [weak self] in
             guard !Task.isCancelled else { return }
-            let image = await provider.icon(
-                for: expectedID, pointSize: size, scale: scale
-            )
-            guard !Task.isCancelled, let self, self.representedAppID == expectedID else { return }
-            self.applyIcon(image)
+            let image = await provider.icon(for: appID, pointSize: size, scale: scale)
+            guard !Task.isCancelled,
+                  let self,
+                  self.representedAppID == appID,
+                  self.requestGeneration == expectedGeneration else { return }
+            self.applyIcon(image, scale: scale)
         }
         iconRequestTask = task
     }
 
-    private func applyIcon(_ image: CGImage?) {
+    /// 启动文件夹子图标请求。每个子项都是可取消的消费者任务，最多 9 个。
+    private func startFolderIconRequests(
+        folderID: FolderID,
+        children: [AppID],
+        provider: any IconImageProviding,
+        scale: Int
+    ) {
+        let expectedGeneration = requestGeneration
+        let size = iconPointSize
+        folderIconRequestTasks = children.prefix(Self.maxFolderIconCount).enumerated().map {
+            index, appID in
+            Task { [weak self] in
+                guard !Task.isCancelled else { return }
+                let image = await provider.icon(for: appID, pointSize: size, scale: scale)
+                guard !Task.isCancelled,
+                      let self,
+                      self.representedFolderID == folderID,
+                      self.requestGeneration == expectedGeneration else { return }
+                self.folderThumbnailView.setIcon(image, at: index, scale: CGFloat(scale))
+            }
+        }
+    }
+
+    private func applyIcon(_ image: CGImage?, scale: Int) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         if let image {
             iconLayer.contents = image
             iconLayer.contentsGravity = .resizeAspect
-            iconLayer.contentsScale = view.window?.backingScaleFactor ?? 2
+            iconLayer.contentsScale = CGFloat(scale)
             // 移除占位色块(图标直接显示在壁纸上)
             iconLayer.backgroundColor = nil
             letterLayer.isHidden = true
@@ -205,6 +402,133 @@ final class AppCellView: NSCollectionViewItem {
             letterLayer.isHidden = false
         }
         CATransaction.commit()
+    }
+}
+
+/// 主网格文件夹缩略图: AppKit 磨砂背景承载最多 3x3 个真实图标。
+///
+/// 未拿到图标时对应位置保持透明，不绘制首字母或色块占位，避免把文件夹
+/// 缩略图误认为普通 App 单元格。所有尺寸都按当前 cell 的 point/Retina scale
+/// 重新计算，图标 layer 不跨 cell 共享。
+private final class FolderThumbnailView: NSVisualEffectView {
+    private static let maxIconCount = 9
+
+    private let iconContainerLayer = CALayer()
+    private let sheenLayer = CAGradientLayer()
+    private var iconLayers: [CALayer] = []
+    private var iconCount = 0
+    private var backingScale: CGFloat = 2
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        material = .hudWindow
+        blendingMode = .withinWindow
+        state = .active
+        wantsLayer = true
+
+        iconContainerLayer.masksToBounds = true
+        sheenLayer.colors = [
+            NSColor.white.withAlphaComponent(0.18).cgColor,
+            NSColor.white.withAlphaComponent(0.02).cgColor,
+        ]
+        sheenLayer.startPoint = CGPoint(x: 0.2, y: 1)
+        sheenLayer.endPoint = CGPoint(x: 0.8, y: 0)
+        iconContainerLayer.addSublayer(sheenLayer)
+
+        for _ in 0..<Self.maxIconCount {
+            let iconLayer = CALayer()
+            iconLayer.contentsGravity = .resizeAspect
+            iconLayer.masksToBounds = true
+            iconLayer.isHidden = true
+            iconLayers.append(iconLayer)
+            iconContainerLayer.addSublayer(iconLayer)
+        }
+
+        if let layer {
+            layer.backgroundColor = NSColor.white.withAlphaComponent(0.08).cgColor
+            layer.borderColor = NSColor.white.withAlphaComponent(0.38).cgColor
+            layer.borderWidth = 1 / backingScale
+            layer.masksToBounds = true
+            layer.addSublayer(iconContainerLayer)
+        }
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func configure(iconCount: Int, scale: CGFloat) {
+        self.iconCount = min(max(0, iconCount), Self.maxIconCount)
+        updateScale(scale)
+        for iconLayer in iconLayers {
+            iconLayer.contents = nil
+            // 子图标异步到达前保持透明；不绘制任何伪占位。
+            iconLayer.isHidden = true
+        }
+        isHidden = false
+        updateLayout()
+    }
+
+    func reset() {
+        iconCount = 0
+        for iconLayer in iconLayers {
+            iconLayer.contents = nil
+            iconLayer.isHidden = true
+        }
+        isHidden = true
+    }
+
+    func clearIconContents() {
+        for iconLayer in iconLayers {
+            iconLayer.contents = nil
+            iconLayer.isHidden = true
+        }
+    }
+
+    func updateScale(_ scale: CGFloat) {
+        backingScale = max(1, scale)
+        layer?.contentsScale = backingScale
+        iconContainerLayer.contentsScale = backingScale
+        sheenLayer.contentsScale = backingScale
+        layer?.borderWidth = 1 / backingScale
+        for iconLayer in iconLayers {
+            iconLayer.contentsScale = backingScale
+        }
+    }
+
+    func updateLayout() {
+        guard bounds.width > 0, bounds.height > 0 else { return }
+        let side = min(bounds.width, bounds.height)
+        let radius = min(18, max(10, side * 0.2))
+        layer?.cornerRadius = radius
+        iconContainerLayer.frame = bounds
+        iconContainerLayer.cornerRadius = radius
+        sheenLayer.frame = bounds
+        sheenLayer.cornerRadius = radius
+
+        let padding = max(5, side * 0.11)
+        let gap = max(2, side * 0.025)
+        let iconSide = max(1, (side - (padding * 2) - (gap * 2)) / 3)
+        for (index, iconLayer) in iconLayers.enumerated() {
+            let row = index / 3
+            let column = index % 3
+            iconLayer.frame = CGRect(
+                x: padding + CGFloat(column) * (iconSide + gap),
+                y: bounds.height - padding - CGFloat(row + 1) * iconSide
+                    - CGFloat(row) * gap,
+                width: iconSide,
+                height: iconSide
+            )
+            iconLayer.cornerRadius = min(5, max(2, iconSide * 0.16))
+        }
+    }
+
+    func setIcon(_ image: CGImage?, at index: Int, scale: CGFloat) {
+        guard iconLayers.indices.contains(index), index < iconCount else { return }
+        updateScale(scale)
+        let iconLayer = iconLayers[index]
+        iconLayer.contents = image
+        iconLayer.isHidden = image == nil
     }
 }
 

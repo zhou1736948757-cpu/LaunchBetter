@@ -78,6 +78,10 @@ final class GridViewController: NSViewController {
     /// 拖拽控制(由窗口控制器注入)。
     var dragController: DragController?
 
+    /// 当前 App B 建夹目标。cell 离屏/reuse 后由 configure 恢复。
+    private var createFolderTargetAppID: AppID?
+    private var createFolderTargetIsActive = false
+
     /// 集合视图(拖拽/诊断用)。首次访问触发 view 加载。
     var collectionViewRef: NSCollectionView {
         if collectionView == nil {
@@ -214,14 +218,18 @@ final class GridViewController: NSViewController {
                 pointSize: pointSize,
                 iconProvider: iconProvider
             )
+            if createFolderTargetAppID == id {
+                cell.setCreateFolderTargetHighlighted(true, active: createFolderTargetIsActive)
+            }
         case .folder(let id, _):
-            cell.configure(
+            let children = store.folderChildren(id) ?? []
+            cell.configureFolder(
                 displayName: store.folderName(for: id),
-                colorIndex: stableColorIndex("folder:" + id.rawValue),
                 accessibilityHint: "文件夹 \(store.folderName(for: id))",
-                appID: nil,
+                folderID: id,
+                children: children,
                 pointSize: pointSize,
-                iconProvider: nil
+                iconProvider: iconProvider
             )
         }
     }
@@ -575,9 +583,6 @@ final class GridViewController: NSViewController {
             self.updatePageDots()
             self.prewarmAdjacentPages(page)
         }
-        paging.onSettleComplete = { [weak self] in
-            // 可在此追加 settle 完成后的低优先级工作(如图标预热)
-        }
     }
 
     override func scrollWheel(with event: NSEvent) {
@@ -689,6 +694,53 @@ final class GridViewController: NSViewController {
         return cell.visibleIconImage
     }
 
+    /// 拖拽源单元格显示状态。源项滚出可视区时为 no-op；重新可见后由每帧处理再次隐藏。
+    func setDragSourceHidden(_ hidden: Bool, for item: Item) {
+        guard let index = flatIndex(of: item), let path = indexPath(atFlatIndex: index),
+              let cell = cellView(at: path) as? AppCellView else { return }
+        cell.setDragSourceHidden(hidden)
+    }
+
+    /// 设置 App B 建夹目标高亮。切换目标时清理旧 cell；离屏目标仅更新记录，
+    /// 待 collection view 重新配置 cell 时恢复。
+    func setCreateFolderTargetHighlight(appID: AppID?, active: Bool) {
+        let normalizedActive = appID == nil ? false : active
+        guard createFolderTargetAppID != appID
+                || createFolderTargetIsActive != normalizedActive else { return }
+
+        let previousAppID = createFolderTargetAppID
+        createFolderTargetAppID = appID
+        createFolderTargetIsActive = normalizedActive
+
+        if let previousAppID, previousAppID != appID {
+            applyCreateFolderTargetHighlight(
+                appID: previousAppID, highlighted: false, active: false
+            )
+        }
+        if let appID {
+            applyCreateFolderTargetHighlight(
+                appID: appID, highlighted: true, active: normalizedActive
+            )
+        }
+    }
+
+    private func applyCreateFolderTargetHighlight(
+        appID: AppID,
+        highlighted: Bool,
+        active: Bool
+    ) {
+        guard isViewLoaded, collectionView != nil, dataSource != nil,
+              let index = flatIndex(of: .app(appID)),
+              let path = indexPath(atFlatIndex: index),
+              let cell = cellView(at: path) as? AppCellView else { return }
+        cell.setCreateFolderTargetHighlighted(highlighted, active: active)
+    }
+
+    /// 文档坐标中的槽位 frame 转为 overlay 容器坐标。
+    func overlayFrame(forFlatIndex index: Int) -> CGRect {
+        view.convert(frame(atFlatIndex: index), from: collectionView)
+    }
+
     /// 光标 → 拖拽目的地(显示空间 page/slot)。
     /// 坐标系: 窗口点 → 文档坐标 → GridGeometry(页宽 = clip 可视宽, 非文档宽, Stage 1 §5)。
     func dragDestination(from point: NSPoint) -> LayoutTransaction.Destination {
@@ -697,6 +749,16 @@ final class GridViewController: NSViewController {
         guard g.pageWidth > 0 else { return LayoutTransaction.Destination(page: 0, slot: 0) }
         let (page, slot) = g.pageAndSlot(forDocumentPoint: local, pageCount: pageCount)
         return LayoutTransaction.Destination(page: page, slot: slot)
+    }
+
+    /// 将已计算好的主网格 page/slot 转成显示空间索引, 供 folder-exit drop 使用。
+    /// 指针到目的地的计算仍唯一由 dragDestination(from:) 完成。
+    func displayIndex(for destination: LayoutTransaction.Destination) -> Int {
+        FolderExitDragPlacement.displayIndex(
+            for: destination,
+            pageCapacity: geometry.pageCapacity,
+            pageCount: pageCount
+        )
     }
 
     /// 光标处的显示项(拖拽源/文件夹悬停)。

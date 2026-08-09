@@ -11,7 +11,8 @@ import Foundation
 ///   目标越界 → 追加到最后一页末尾;应用后按 pageCapacity 重分块
 /// - addToFolder: 从页面移除应用,按可见子项位置插入文件夹 children
 ///   (隐藏/缺失子项保持原位)
-/// - moveOutOfFolder: 从 children 移除,插入页面指定显示索引
+/// - reorderInFolder: 在可见子项空间内重排,隐藏/缺失子项保持布局引用
+/// - moveOutOfFolder: 从 children 移除,插入页面指定显示索引;若实际只剩一个 child 则原子解散文件夹
 /// - renameFolder: 更新文件夹名称
 public enum LayoutEditor {
     /// 应用一个变更。无效时返回 nil(状态不变)。
@@ -25,6 +26,11 @@ public enum LayoutEditor {
             return reorder(item, toDisplayIndex: toDisplayIndex, layout: layout, display: display)
         case .addToFolder(let app, let folder, let at):
             return addToFolder(app: app, folder: folder, at: at, layout: layout, display: display)
+        case .reorderInFolder(let app, let folder, let toIndex):
+            return reorderInFolder(
+                app: app, folder: folder, toIndex: toIndex,
+                layout: layout, display: display
+            )
         case .moveOutOfFolder(let app, let folder, let toDisplayIndex):
             return moveOutOfFolder(
                 app: app, folder: folder, toDisplayIndex: toDisplayIndex,
@@ -223,6 +229,49 @@ public enum LayoutEditor {
         return result
     }
 
+    private static func reorderInFolder(
+        app: AppID,
+        folder: FolderID,
+        toIndex: Int,
+        layout: LayoutSnapshot,
+        display: DisplayModel
+    ) -> LayoutSnapshot? {
+        guard var folderRecord = layout.folders[folder] else { return nil }
+        // 只能重排当前显示中的可见子项;隐藏/缺失项不应由 UI 的可见索引误移动。
+        guard let visibleChildren = display.folderVisibleChildren(folder),
+              visibleChildren.contains(app),
+              let sourceIndex = folderRecord.children.firstIndex(of: app) else {
+            return nil
+        }
+
+        folderRecord.children.remove(at: sourceIndex)
+        let remainingVisible = folderRecord.children.filter {
+            isVisible($0, layout: layout, display: display)
+        }
+        let clampedAt = min(max(0, toIndex), remainingVisible.count)
+
+        // 将可见 gap 索引映射回持久化 children 索引,保留不可见子项。
+        var insertIndex = folderRecord.children.count
+        var seenVisible = 0
+        for (index, child) in folderRecord.children.enumerated() {
+            guard isVisible(child, layout: layout, display: display) else { continue }
+            if seenVisible == clampedAt {
+                insertIndex = index
+                break
+            }
+            seenVisible += 1
+        }
+        folderRecord.children.insert(app, at: insertIndex)
+
+        var folders = layout.folders
+        folders[folder] = folderRecord
+        return LayoutSnapshot(
+            pages: layout.pages,
+            folders: folders,
+            missingApps: layout.missingApps
+        )
+    }
+
     private static func moveOutOfFolder(
         app: AppID,
         folder: FolderID,
@@ -234,14 +283,43 @@ public enum LayoutEditor {
         guard let childIndex = folderRecord.children.firstIndex(of: app) else { return nil }
         folderRecord.children.remove(at: childIndex)
 
+        var pages = layout.pages
         var folders = layout.folders
-        folders[folder] = folderRecord
-        let withoutChild = LayoutSnapshot(pages: layout.pages, folders: folders, missingApps: layout.missingApps)
+        var remainingOrder = displayLayoutOrder(display).filter { $0 != .app(app) }
+
+        if folderRecord.children.count == 1 {
+            // 文件夹不能在一次 move-out 后短暂保留为单 App 文件夹:
+            // 剩余 child 直接占据原文件夹槽位,并在同一候选快照中删除记录。
+            guard let remainingApp = folderRecord.children.first else { return nil }
+            var replacedFolder = false
+            outer: for page in 0..<pages.count {
+                for itemIndex in 0..<pages[page].count {
+                    guard pages[page][itemIndex] == .folder(folder) else { continue }
+                    pages[page][itemIndex] = .app(remainingApp)
+                    replacedFolder = true
+                    break outer
+                }
+            }
+            guard replacedFolder else { return nil }
+
+            folders.removeValue(forKey: folder)
+
+            // 目标索引来自原显示空间。若剩余 app 可见,它继承 folder 的显示槽;
+            // 若它隐藏/缺失,该持久槽位不进入显示空间,但仍留在 pages 原位置。
+            if let folderDisplayIndex = remainingOrder.firstIndex(of: .folder(folder)) {
+                if isVisible(remainingApp, layout: layout, display: display) {
+                    remainingOrder[folderDisplayIndex] = .app(remainingApp)
+                } else {
+                    remainingOrder.remove(at: folderDisplayIndex)
+                }
+            }
+        } else {
+            folders[folder] = folderRecord
+        }
 
         // 应用成为新页面槽位,插入指定显示索引
-        let remainingOrder = displayLayoutOrder(display).filter { $0 != .app(app) }
         let target = min(max(0, toDisplayIndex), remainingOrder.count)
-        let pages = insert(.app(app), atDisplayPosition: target, remainingOrder: remainingOrder, pages: withoutChild.pages)
+        pages = insert(.app(app), atDisplayPosition: target, remainingOrder: remainingOrder, pages: pages)
 
         var result = LayoutSnapshot(pages: pages, folders: folders, missingApps: layout.missingApps)
         result = rechunk(result, capacity: display.pageCapacity)

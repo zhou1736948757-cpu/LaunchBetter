@@ -9,7 +9,7 @@ import Foundation
 /// - 应用回归: 清除墓碑,恢复原位置(引用本就在布局中)
 /// - 过期墓碑(超宽限期): 从页面与文件夹子项移除
 /// - 孤儿文件夹项: 从页面移除
-/// - 空文件夹: 确定性解散
+/// - 空/单应用文件夹: 确定性解散
 public enum LayoutReconciler {
     public static let defaultGracePeriod: TimeInterval = 30 * 24 * 60 * 60
 
@@ -123,6 +123,40 @@ public enum LayoutReconciler {
             for id in emptyFolderIDs {
                 folders.removeValue(forKey: id)
             }
+        }
+
+        // 单应用文件夹: 基于当前 folders 快照原子解散,以唯一 child 替换页面槽。
+        // 页面按原顺序扫描;重复的页面 AppID 只保留首次引用,避免解散后产生重复应用。
+        let singleChildApps = folders.reduce(into: [FolderID: AppID]()) { result, entry in
+            guard entry.value.children.count == 1,
+                  let child = entry.value.children.first else {
+                return
+            }
+            result[entry.key] = child
+        }
+
+        var seenPageApps = Set<AppID>()
+        pages = pages.compactMap { page in
+            let rewritten = page.compactMap { item -> LayoutItem? in
+                switch item {
+                case .app(let id):
+                    guard seenPageApps.insert(id).inserted else { return nil }
+                    return .app(id)
+                case .folder(let id):
+                    if let child = singleChildApps[id] {
+                        guard seenPageApps.insert(child).inserted else { return nil }
+                        return .app(child)
+                    }
+                    // 防御性处理: 页面中若仍有不存在的文件夹引用,不让它进入结果。
+                    guard folders[id] != nil else { return nil }
+                    return .folder(id)
+                }
+            }
+            return rewritten.isEmpty ? nil : rewritten
+        }
+
+        for id in singleChildApps.keys {
+            folders.removeValue(forKey: id)
         }
 
         return LayoutSnapshot(

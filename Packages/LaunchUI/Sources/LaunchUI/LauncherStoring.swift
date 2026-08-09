@@ -24,6 +24,13 @@ public protocol LauncherStoring: AnyObject {
     /// 数据变化回调(UI 刷新入口)。
     var onDataChange: (() -> Void)? { get set }
 
+    /// 添加独立数据观察者,不覆盖主网格的 onDataChange 回调。
+    @discardableResult
+    func addDataObserver(_ observer: @escaping () -> Void) -> UUID
+
+    /// 移除由 addDataObserver 返回的观察者。
+    func removeDataObserver(_ token: UUID)
+
     /// 当前搜索词(由 UI 写入)。
     var searchQuery: String { get set }
 
@@ -67,6 +74,19 @@ public protocol LauncherStoring: AnyObject {
 
     /// 把应用加入文件夹。
     func addToFolder(app: AppID, folder: FolderID)
+
+    /// 从文件夹移到主页面显示空间。
+    /// completion 在 mutation 被拒绝或持久化失败时回调 false;
+    /// 仅在布局缓存与数据通知同步完成后回调 true。
+    func moveOutOfFolder(
+        app: AppID,
+        from folder: FolderID,
+        toDisplayIndex: Int,
+        completion: @escaping (Bool) -> Void
+    )
+
+    /// 在文件夹可见子项中重排。toIndex 是移除源项后的可见 gap 索引。
+    func reorderFolderApp(app: AppID, in folder: FolderID, toIndex: Int)
 
     /// 现有文件夹(名称表, 供上下文菜单)。
     func folderNames() -> [FolderID: String]

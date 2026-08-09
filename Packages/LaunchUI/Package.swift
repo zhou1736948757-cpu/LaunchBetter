@@ -18,5 +18,10 @@ let package = Package(
             dependencies: ["LaunchCore"],
             path: "Sources/LaunchUI"
         ),
+        .testTarget(
+            name: "LaunchUITests",
+            dependencies: ["LaunchUI"],
+            path: "Tests/LaunchUITests"
+        ),
     ]
 )

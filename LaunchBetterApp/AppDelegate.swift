@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import LaunchCore
 import LaunchUI
 
@@ -173,18 +174,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// 拖拽缓存探针(v0.1.6 §69): 同 destination 停留 20 帧, preview/transform 写应≈1。
     private func runDragCacheProbe() {
-        guard let controller = container?.windowController, let store = container?.store else {
-            print("DRAGCACHE FAIL")
-            NSApp.terminate(nil)
-            return
+        guard let controller = container?.windowController else {
+            finishProbe("DRAGCACHE", ok: false, detail: "container not ready")
         }
         guard let first = controller.dragTestItems().first else {
-            print("DRAGCACHE FAIL empty")
-            NSApp.terminate(nil)
-            return
+            finishProbe("DRAGCACHE", ok: false, detail: "empty drag-test items")
         }
         let p = NSPoint(x: 900, y: 400)
         controller.dragTestBegin(item: first, at: p)
+        guard controller.hasActiveDrag() else {
+            finishProbe("DRAGCACHE", ok: false, detail: "drag begin rejected")
+        }
         // 停留同一位置 20 帧(手动驱动, 无 display link 环境)
         for _ in 0..<20 {
             controller.dragProbeTick(p)
@@ -197,18 +197,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let c2 = controller.dragCacheDiagnostics()
         print("DRAGCACHE after20: \(c1)")
         print("DRAGCACHE after50: \(c2)")
+        let exercised = ["previews", "transformWrites"].allSatisfy { key in
+            (diagnosticCounter(key, in: c1) ?? 0) > 0
+        }
+        let stable = ["previews", "transformWrites"].allSatisfy { key in
+            guard let before = diagnosticCounter(key, in: c1),
+                  let after = diagnosticCounter(key, in: c2) else {
+                return false
+            }
+            return before == after
+        }
         controller.dragTestEnd(at: p)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
             MainActor.assumeIsolated {
-                _ = store.searchResults()
-                self?.finishProbe("DRAGCACHE", ok: true)
+                guard let self else { return }
+                let ok = exercised && stable && !controller.hasActiveDrag()
+                self.finishProbe("DRAGCACHE", ok: ok, detail: "exercised=\(exercised) stableCounters=\(stable) activeDrag=\(controller.hasActiveDrag())")
             }
         }
     }
 
-    private func finishProbe(_ name: String, ok: Bool) {
-        print("\(name) \(ok ? "OK" : "FAIL")")
-        NSApp.terminate(nil)
+    private func diagnosticCounter(_ key: String, in diagnostics: String) -> Int? {
+        for token in diagnostics.split(separator: " ") {
+            let parts = token.split(separator: "=", maxSplits: 1)
+            guard parts.count == 2, String(parts[0]) == key else { continue }
+            return Int(parts[1])
+        }
+        return nil
+    }
+
+    private func finishProbe(_ name: String, ok: Bool, detail: String? = nil) -> Never {
+        if let detail {
+            print("\(name) \(ok ? "OK" : "FAIL") \(detail)")
+        } else {
+            print("\(name) \(ok ? "OK" : "FAIL")")
+        }
+        terminateDiagnostic(success: ok)
+    }
+
+    private func terminateDiagnostic(success: Bool) -> Never {
+        fflush(stdout)
+        fflush(stderr)
+        exit(success ? 0 : 1)
     }
 
     /// 分页性能探针(v0.1.6 §63/§82): 合成触控板 swipe + momentum, 测量计数器。
@@ -240,7 +270,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         controller.pagingProbeFeed(makeScroll(dx: -80, phase: 0, momentum: 2)!)
         controller.pagingProbeFeed(makeScroll(dx: 0, phase: 0, momentum: 4)!)
         // 等 settle 完成
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
             MainActor.assumeIsolated {
                 let page = controller.pageTestCurrentPage()
                 print("PAGINGPROBE after: \(controller.pagingProbeDiagnostics()) page=\(page) scrollX=\(Int(controller.pageTestScrollX()))")
@@ -275,7 +305,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         test.gridRows = gRows
         test.iconSize = gIconSize
         store.save(test)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
             MainActor.assumeIsolated {
                 windowController.refreshGrid()
                 let display = store.displayModel()
@@ -316,8 +346,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func runSmokeDiagnostics() {
         guard let store = container?.store, let windowController = container?.windowController else {
             print("SMOKE FAIL container not ready")
-            NSApp.terminate(nil)
-            return
+            terminateDiagnostic(success: false)
         }
         let display = store.displayModel()
         print("SMOKE catalogApps=\(store.diagnosticCatalogAppCount())")
@@ -332,30 +361,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 拖拽引擎: 程序化驱动 beginDrag → updateDrag ×N → endDrag(真实代码路径)
         if CommandLine.arguments.contains("--dragtest") {
-            let semaphore = DispatchSemaphore(value: 0)
-            store.onDataChange = { semaphore.signal() }
             let items = windowController.dragTestItems()
             guard let first = items.first else {
-                print("SMOKE dragtest=SKIPPED empty")
-                finishSmoke(store: store)
-                return
+                finishSmoke(store: store, ok: false, detail: "dragtest has no visible items")
             }
-            let orderBefore = store.displayModel().flatSlots.map(String.init(describing:))
+            let orderBefore = store.displayModel().flatSlots
+            guard Set(orderBefore).count == orderBefore.count else {
+                finishSmoke(store: store, ok: false, detail: "dragtest baseline contains duplicate display items")
+            }
+            let previousOnDataChange = store.onDataChange
+            var completed = false
+            func finishDrag(_ ok: Bool, detail: String) {
+                guard !completed else { return }
+                completed = true
+                store.onDataChange = previousOnDataChange
+                print("SMOKE dragtest \(ok ? "OK" : "FAIL") \(detail)")
+                finishSmoke(store: store, ok: ok, detail: detail)
+            }
+            store.onDataChange = { [weak store] in
+                previousOnDataChange?()
+                guard let store, !completed else { return }
+                let orderAfter = store.displayModel().flatSlots
+                guard orderAfter != orderBefore else { return }
+                let unique = Set(orderAfter).count == orderAfter.count
+                let activeDrag = windowController.hasActiveDrag()
+                finishDrag(
+                    unique && !activeDrag,
+                    detail: "changed=true unique=\(unique) activeDrag=\(activeDrag) items=\(orderAfter.count)"
+                )
+            }
             // 目标点: 窗口中心偏右(模拟拖到末尾)
             let targetPoint = NSPoint(x: 900, y: 400)
             windowController.dragTestBegin(item: first, at: targetPoint)
-            for i in 0..<20 {
-                windowController.dragTestUpdate(at: NSPoint(x: 700 + CGFloat(i) * 15, y: 400))
+            guard windowController.hasActiveDrag() else {
+                finishDrag(false, detail: "drag begin rejected")
+                return
             }
-            windowController.dragTestEnd(at: targetPoint)
-            DispatchQueue.global().async { [weak self, weak store] in
-                _ = semaphore.wait(timeout: .now() + 5)
-                DispatchQueue.main.async {
-                    guard let store else { return }
-                    let orderAfter = store.displayModel().flatSlots.map(String.init(describing:))
-                    let changed = orderBefore != orderAfter
-                    print("SMOKE dragtest=OK changed=\(changed) items=\(orderAfter.count)")
-                    self?.finishSmoke(store: store)
+            var lastPoint = targetPoint
+            for i in 0..<20 {
+                lastPoint = NSPoint(x: 700 + CGFloat(i) * 15, y: 400)
+                windowController.dragTestUpdate(at: lastPoint)
+                windowController.dragProbeTick(lastPoint)
+            }
+            windowController.dragTestEnd(at: lastPoint)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
+                MainActor.assumeIsolated {
+                    guard !completed else { return }
+                    finishDrag(false, detail: "timeout waiting for a changed, unique layout")
                 }
             }
             return
@@ -367,44 +419,98 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if case .app(let id) = item { return id }
                 return nil
             }
-            if apps.count >= 2 {
-                var stage = 0
-                var folderID: FolderID?
-                let semaphore = DispatchSemaphore(value: 0)
-                store.onDataChange = { [weak store] in
-                    guard let store else { return }
-                    switch stage {
-                    case 0: // 创建完成
-                        folderID = store.folderNames().keys.first
-                        guard folderID != nil else { semaphore.signal(); return }
-                        stage = 1
-                        store.renameFolder(folderID!, to: "冒烟改名")
-                    case 1: // 重命名完成
-                        stage = 2
-                        store.addToFolder(app: apps[2], folder: folderID!)
-                    case 2: // 加入完成
-                        stage = 3
-                        store.dissolveFolder(folderID!)
-                    case 3: // 解散完成
-                        semaphore.signal()
-                    default:
-                        break
-                    }
-                }
-                store.createFolder(name: "冒烟文件夹", appIDs: [apps[0], apps[1]])
-                // 等待必须在后台队列(主线程 Task 需要跑, 不能阻塞主线程)
-                DispatchQueue.global().async { [weak self, weak store] in
-                    _ = semaphore.wait(timeout: .now() + 8)
-                    DispatchQueue.main.async {
-                        guard let store else { return }
-                        print("SMOKE folderOps=OK foldersNow=\(store.folderNames().count) flatAfter=\(store.displayModel().flatSlots.count)")
-                        self?.finishSmoke(store: store)
-                    }
-                }
-                return
-            } else {
-                print("SMOKE folderOps=SKIPPED apps<2")
+            guard apps.count >= 3 else {
+                finishSmoke(store: store, ok: false, detail: "folder probe requires at least 3 visible app slots; found \(apps.count)")
             }
+            let baselineFlatSlots = visible
+            guard Set(baselineFlatSlots).count == baselineFlatSlots.count else {
+                finishSmoke(store: store, ok: false, detail: "folder probe baseline contains duplicate display items")
+            }
+            let baselineFolderIDs = Set(store.folderNames().keys)
+            let previousOnDataChange = store.onDataChange
+            var stage = 0
+            var folderID: FolderID?
+            var completed = false
+            let stepNames = ["create", "rename", "add", "dissolve"]
+
+            func finishFolder(_ ok: Bool, detail: String) {
+                guard !completed else { return }
+                completed = true
+                store.onDataChange = previousOnDataChange
+                print("SMOKE folderOps=\(ok ? "OK" : "FAIL") \(detail)")
+                finishSmoke(store: store, ok: ok, detail: detail)
+            }
+
+            store.onDataChange = { [weak store] in
+                previousOnDataChange?()
+                guard let store, !completed else { return }
+                switch stage {
+                case 0: // 创建完成
+                    let newIDs = Set(store.folderNames().keys).subtracting(baselineFolderIDs)
+                    if newIDs.count > 1 {
+                        finishFolder(false, detail: "create produced \(newIDs.count) new folders")
+                        return
+                    }
+                    guard let id = newIDs.first else { return }
+                    guard store.folderNames()[id] == "冒烟文件夹",
+                          store.folderChildren(id) == [apps[0], apps[1]] else { return }
+                    let current = store.displayModel().flatSlots
+                    guard current.count == baselineFlatSlots.count - 1,
+                          Set(current).count == current.count,
+                          current.contains(.folder(id, visibleChildren: [apps[0], apps[1]])) else {
+                        finishFolder(false, detail: "create state did not match expected folder and flat-slot count")
+                        return
+                    }
+                    folderID = id
+                    print("SMOKE folder step=create OK")
+                    stage = 1
+                    store.renameFolder(id, to: "冒烟改名")
+                case 1: // 重命名完成
+                    guard let id = folderID,
+                          store.folderNames()[id] == "冒烟改名",
+                          store.folderChildren(id) == [apps[0], apps[1]] else { return }
+                    print("SMOKE folder step=rename OK")
+                    stage = 2
+                    store.addToFolder(app: apps[2], folder: id)
+                case 2: // 加入完成
+                    guard let id = folderID,
+                          store.folderChildren(id) == [apps[0], apps[1], apps[2]] else { return }
+                    let current = store.displayModel().flatSlots
+                    guard current.count == baselineFlatSlots.count - 2,
+                          Set(current).count == current.count,
+                          !current.contains(.app(apps[2])),
+                          current.contains(.folder(id, visibleChildren: [apps[0], apps[1], apps[2]])) else {
+                        finishFolder(false, detail: "add state did not contain all three folder children")
+                        return
+                    }
+                    print("SMOKE folder step=add OK")
+                    stage = 3
+                    store.dissolveFolder(id)
+                case 3: // 解散完成
+                    guard let id = folderID,
+                          store.folderNames()[id] == nil,
+                          store.folderChildren(id) == nil else { return }
+                    let current = store.displayModel().flatSlots
+                    guard current == baselineFlatSlots,
+                          Set(current).count == current.count else {
+                        finishFolder(false, detail: "dissolve state did not restore the baseline display")
+                        return
+                    }
+                    print("SMOKE folder step=dissolve OK")
+                    finishFolder(true, detail: "all async folder steps verified")
+                default:
+                    break
+                }
+            }
+            store.createFolder(name: "冒烟文件夹", appIDs: [apps[0], apps[1]])
+            DispatchQueue.main.asyncAfter(deadline: .now() + 8.0) {
+                MainActor.assumeIsolated {
+                    guard !completed else { return }
+                    let step = stepNames[min(stage, stepNames.count - 1)]
+                    finishFolder(false, detail: "timeout during \(step) step")
+                }
+            }
+            return
         }
 
         finishSmoke(store: store)
@@ -453,7 +559,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.terminate(nil)
     }
 
-    private func finishSmoke(store: LauncherStore) {
+    private func finishSmoke(store: LauncherStore, ok: Bool = true, detail: String? = nil) -> Never {
         // 启动路径验证仅在显式 --launchtest 时真实拉起应用(避免测试副作用)
         if CommandLine.arguments.contains("--launchtest") {
             let chrome = store.displayModel().visibleAppIDs.first { $0.rawValue.contains("Chrome") }
@@ -467,8 +573,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             print("SMOKE launch=SKIPPED (no --launchtest)")
         }
 
-        print("SMOKE OK")
-        NSApp.terminate(nil)
+        if let detail {
+            print("SMOKE \(ok ? "OK" : "FAIL") \(detail)")
+        } else {
+            print("SMOKE \(ok ? "OK" : "FAIL")")
+        }
+        terminateDiagnostic(success: ok)
     }
 
     private func screenshotArgument() -> String? {

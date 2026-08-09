@@ -2,6 +2,87 @@ import AppKit
 import LaunchCore
 import QuartzCore
 
+/// folder-exit session 的纯状态机。结果回执到达前保持 awaitingResult，
+/// 重复回执或取消后的迟到回执都不会再次完成 session。
+enum FolderExitDragPhase: Equatable {
+    case idle
+    case active
+    case awaitingResult
+}
+
+struct FolderExitDragLifecycle: Equatable {
+    private(set) var phase: FolderExitDragPhase = .idle
+    private(set) var result: Bool?
+
+    var isActive: Bool { phase != .idle }
+    var isAwaitingResult: Bool { phase == .awaitingResult }
+
+    @discardableResult
+    mutating func begin() -> Bool {
+        guard phase == .idle else { return false }
+        phase = .active
+        result = nil
+        return true
+    }
+
+    @discardableResult
+    mutating func awaitResult() -> Bool {
+        guard phase == .active else { return false }
+        phase = .awaitingResult
+        return true
+    }
+
+    @discardableResult
+    mutating func resolve(_ result: Bool) -> Bool {
+        guard phase == .awaitingResult else { return false }
+        phase = .idle
+        self.result = result
+        return true
+    }
+
+    mutating func cancel() {
+        phase = .idle
+        result = nil
+    }
+}
+
+/// 纯输入结束仲裁: 三指 raw ended 可能早于系统左键释放, 但最终 mouseUp
+/// 仍可结束三指 session。除这个明确的 handoff 外, 跨输入源结束一律拒绝。
+enum InputEndArbitration {
+    enum Source: Equatable {
+        case mouse
+        case threeFinger
+    }
+
+    enum Decision: Equatable {
+        case end
+        case handoffToMouse
+        case reject
+    }
+
+    static func decide(
+        sessionOwner: Source?,
+        endingSource: Source,
+        leftMouseButtonPressed: Bool
+    ) -> Decision {
+        guard let sessionOwner else { return .reject }
+
+        // 文件夹/主网格的真实 mouseUp 是三指 session 的最终释放信号。
+        if sessionOwner == .threeFinger, endingSource == .mouse {
+            return .end
+        }
+
+        // 其他跨输入源事件不能取消当前 session。
+        guard sessionOwner == endingSource else { return .reject }
+
+        // 系统三指 ended 可能先到; 左键仍按下时等待同一 mouse session 的 mouseUp。
+        if endingSource == .threeFinger, leftMouseButtonPressed {
+            return .handoffToMouse
+        }
+        return .end
+    }
+}
+
 /// 拖拽控制器(§57/§113): 拖拽状态机 + 拖拽 overlay + 预览变换 + drop。
 ///
 /// 高频路径: 鼠标事件 → GestureSampleBuffer(会话隔离, 仅最新)→ CADisplayLink
@@ -21,7 +102,7 @@ final class DragController {
     }
 
     /// 拖拽输入源(Stage 2 §17): 一个 session 只有一个 owner。
-    enum DragInputSource {
+    enum DragInputSource: Equatable {
         case mouse
         case threeFinger
     }
@@ -35,16 +116,30 @@ final class DragController {
     private let sampleBuffer = GestureSampleBuffer()
     private var frameCoordinator: FrameCoordinator?
     private let overlay = DragOverlayLayer()
+    private let insertionIndicator = InsertionIndicatorLayer()
 
     private var sourceItem: DisplayModel.DisplayItem?
     private var sourceIndex = 0
+    private struct FolderExitDragSession {
+        let app: AppID
+        let folder: FolderID
+    }
+    private var folderExitSession: FolderExitDragSession?
+    private var folderExitLifecycle = FolderExitDragLifecycle()
+    /// 仅在 LayoutStore 回执等待期间持有；teardown 会先清空，防止迟到回执重入 UI。
+    private var folderExitCompletion: ((Bool) -> Void)?
     private var displayAtDragStart: DisplayModel?
     private var lastEdgeAdvance: CFTimeInterval = 0
     private var lastKnownPoint: CGPoint?
     private var sessionID = UUID()
     private var plainLabel = ""
+    private var createFolderCandidate: AppID?
+    private var createFolderCandidateSince: CFTimeInterval = 0
     /// 拖拽开始时的显示修订(外部变化陈旧防护, 评审 M7)。
     private var dragStartRevision: UInt64 = 0
+
+    /// 文件夹局部拖拽在 handoff 后被取消时, 由窗口控制器恢复文件夹 chrome。
+    var onFolderExitDragCancelled: (() -> Void)?
 
     init(grid: GridViewController, store: any LauncherStoring) {
         self.grid = grid
@@ -52,6 +147,10 @@ final class DragController {
     }
 
     var isDragging: Bool { state == .dragging }
+
+    var isFolderExitDragging: Bool {
+        state == .dragging && folderExitSession != nil && folderExitLifecycle.isActive
+    }
 
     // MARK: - 拖拽生命周期
 
@@ -66,6 +165,9 @@ final class DragController {
         guard let grid, !grid.isSearchMode, let sourceIndex = grid.flatIndex(of: item) else { return }
         state = .dragging
         activeInputSource = inputSource
+        folderExitSession = nil
+        folderExitLifecycle.cancel()
+        folderExitCompletion = nil
         sourceItem = item
         self.sourceIndex = sourceIndex
         displayAtDragStart = store.displayModel()
@@ -83,6 +185,8 @@ final class DragController {
         // 复用源单元格已显示的图标(零磁盘 IO, Stage 1 §23-24)
         overlay.configure(label: plainLabel, sourceImage: grid.visibleIconImage(for: item))
         grid.addOverlayLayer(overlay.layer)
+        grid.addOverlayLayer(insertionIndicator.layer)
+        grid.setDragSourceHidden(true, for: item)
         overlay.move(to: point, in: grid.view)
 
         let coordinator = FrameCoordinator(
@@ -96,6 +200,51 @@ final class DragController {
         sampleBuffer.write(point, session: sessionID)
     }
 
+    /// 文件夹子项越过卡片后启动的专用 session。
+    /// 源 App 尚不在主网格 display 中, 因此只显示主网格 overlay/插入指示器;
+    /// 目的地仍统一由 GridViewController.dragDestination(from:) 计算。
+    @discardableResult
+    func beginFolderExitDrag(
+        app: AppID,
+        from folder: FolderID,
+        sourceImage: CGImage?,
+        at point: NSPoint,
+        inputSource: DragInputSource = .mouse
+    ) -> Bool {
+        guard state == .idle, activeInputSource == nil else { return false }
+        guard let grid, !grid.isSearchMode,
+              store.folderChildren(folder)?.contains(app) == true else { return false }
+        guard folderExitLifecycle.begin() else { return false }
+
+        state = .dragging
+        activeInputSource = inputSource
+        folderExitSession = FolderExitDragSession(app: app, folder: folder)
+        sourceItem = nil
+        sourceIndex = 0
+        displayAtDragStart = store.displayModel()
+        dragStartRevision = store.displayRevision
+        lastEdgeAdvance = 0
+        lastKnownPoint = point
+        sessionID = UUID()
+        plainLabel = store.displayName(for: app)
+
+        overlay.configure(label: plainLabel, sourceImage: sourceImage)
+        grid.addOverlayLayer(overlay.layer)
+        grid.addOverlayLayer(insertionIndicator.layer)
+        overlay.move(to: point, in: grid.view)
+
+        let coordinator = FrameCoordinator(
+            view: grid.collectionViewRef, buffer: sampleBuffer, session: sessionID
+        )
+        coordinator.onFrame = { [weak self] in
+            self?.tick()
+        }
+        frameCoordinator = coordinator
+        coordinator.start()
+        sampleBuffer.write(point, session: sessionID)
+        return isFolderExitDragging
+    }
+
     /// 诊断: 手动驱动一帧(无 display link 环境验证缓存, v0.1.6 §69)。
     func probeProcessTick(_ point: NSPoint) {
         guard state == .dragging else { return }
@@ -105,30 +254,99 @@ final class DragController {
 
     /// 拖拽移动(高频写入缓冲, 仅最新样本生效)。
     /// inputSource 必须与 session owner 一致, 否则拒绝(Stage 2 M5: 迟到事件不污染他源 session)。
-    func updateDrag(at point: NSPoint, inputSource: DragInputSource = .mouse) {
-        guard state == .dragging, activeInputSource == inputSource else { return }
+    @discardableResult
+    func updateDrag(at point: NSPoint, inputSource: DragInputSource = .mouse) -> Bool {
+        guard state == .dragging,
+              activeInputSource == inputSource,
+              !folderExitLifecycle.isAwaitingResult else { return false }
         sampleBuffer.write(point, session: sessionID)
+        return true
     }
 
     /// 结束拖拽: 计算 drop 并应用一次结构更新。
     /// inputSource 必须与 session owner 一致(Stage 2 M5), 否则不提交、直接取消。
-    func endDrag(at point: NSPoint, inputSource: DragInputSource = .mouse) {
-        guard state == .dragging, activeInputSource == inputSource, let item = sourceItem else {
+    func endDrag(
+        at point: NSPoint,
+        inputSource: DragInputSource = .mouse,
+        leftMouseButtonPressed: Bool = false,
+        completion: ((Bool) -> Void)? = nil
+    ) {
+        guard state == .dragging else {
+            completion?(false)
+            return
+        }
+
+        switch InputEndArbitration.decide(
+            sessionOwner: activeInputSource?.inputEndSource,
+            endingSource: inputSource.inputEndSource,
+            leftMouseButtonPressed: leftMouseButtonPressed
+        ) {
+        case .end:
+            break
+        case .handoffToMouse:
+            // raw threeFinger ended 只表示手势识别结束, 不表示左键已真实松开。
+            // 立即转移 owner, 让 ended→mouseUp 之间的 mouseDragged 继续更新 overlay。
+            activeInputSource = .mouse
+            return
+        case .reject:
+            // 非 owner 的迟到 ended 不得取消另一输入源的有效 session。
+            completion?(false)
+            return
+        }
+
+        if let folderExitSession {
+            // 已进入等待态时冻结专用 session；重复 mouseUp 不得重发 mutation。
+            guard folderExitLifecycle.phase == .active else { return }
+            guard store.displayRevision == dragStartRevision,
+                  let grid else {
+                teardown()
+                completion?(false)
+                return
+            }
+            let destination = grid.dragDestination(from: point)
+            let displayIndex = grid.displayIndex(for: destination)
+            guard folderExitLifecycle.awaitResult() else { return }
+            let requestSessionID = sessionID
+            folderExitCompletion = completion
+            // 结果前冻结专用 session: 停止逐帧采样,但保留 overlay/目的地/会话身份。
+            frameCoordinator?.stop()
+            frameCoordinator = nil
+            sampleBuffer.clear()
+            store.moveOutOfFolder(
+                app: folderExitSession.app,
+                from: folderExitSession.folder,
+                toDisplayIndex: displayIndex
+            ) { [weak self] result in
+                self?.completeFolderExit(result, sessionID: requestSessionID)
+            }
+            return
+        }
+
+        guard let item = sourceItem else {
             cancelDrag()
+            completion?(false)
             return
         }
         // 拖拽期间目录/布局/配置变化 → 陈旧 drop 防护: 取消拖拽(评审 M7)
         if store.displayRevision != dragStartRevision {
             cancelDrag()
+            completion?(false)
             return
         }
         let display = displayAtDragStart ?? store.displayModel()
+        // mouseUp 可能恰好跨过 dwell 边界；必须用当前 point + 单调时钟重新决策。
+        let createFolderDecision = updateCreateFolderTarget(item: item, point: point)
         let destination = grid?.dragDestination(from: point)
             ?? LayoutTransaction.Destination(page: 0, slot: 0)
 
-        // 文件夹悬停 → 移入文件夹
+        // 文件夹悬停 → 移入文件夹；App 悬停达到 dwell → 两 App 建夹。
         if case .app(let appID) = item, let folder = grid?.hoveredFolder(at: point) {
             store.addToFolder(app: appID, folder: folder)
+        } else if case .app(let appID) = item,
+                  case .active(let target) = createFolderDecision,
+                  case .app(let pointedTarget)? = grid?.itemAt(point: point),
+                  pointedTarget == target {
+            store.createFolder(name: L10n.t(.newFolder), appIDs: [appID, target])
         } else if let drop = LayoutTransaction.drop(
             display: display,
             source: source(from: item),
@@ -137,19 +355,38 @@ final class DragController {
             store.applyDragDrop(drop.mutation)
         }
         teardown()
+        completion?(true)
+    }
+
+    private func completeFolderExit(_ result: Bool, sessionID: UUID) {
+        guard self.sessionID == sessionID,
+              folderExitSession != nil,
+              folderExitLifecycle.resolve(result) else { return }
+        let completion = folderExitCompletion
+        folderExitCompletion = nil
+        // 先释放 overlay/session，再把最终 Bool 交给 FolderViewController。
+        teardown()
+        completion?(result)
     }
 
     /// 取消拖拽(状态不变, 无结构更新)。
     func cancelDrag() {
-        teardown()
+        teardown(restoreFolderExitVisual: true)
     }
 
     /// 显式生命周期收尾(M4): 窗口隐藏/关闭时调用。
     func shutdown() {
-        teardown()
+        teardown(restoreFolderExitVisual: true)
     }
 
-    private func teardown() {
+    private func teardown(restoreFolderExitVisual: Bool = false) {
+        let shouldRestoreFolderExitVisual = restoreFolderExitVisual && folderExitSession != nil
+        grid?.setCreateFolderTargetHighlight(appID: nil, active: false)
+        if let sourceItem {
+            grid?.setDragSourceHidden(false, for: sourceItem)
+        }
+        folderExitCompletion = nil
+        folderExitLifecycle.cancel()
         state = .idle
         activeInputSource = nil
         frameCoordinator?.stop()
@@ -167,11 +404,22 @@ final class DragController {
         lastGapIndex = nil
         currentTransforms.removeAll()
         lastOverlayVisual = nil
+        cachedPageWidth = 0
         grid?.removeOverlayLayer(overlay.layer)
+        insertionIndicator.hide()
+        grid?.removeOverlayLayer(insertionIndicator.layer)
         sourceItem = nil
+        folderExitSession = nil
+        // 迟到的 LayoutStore 回执必须不能命中下一次 drag session。
+        sessionID = UUID()
         displayAtDragStart = nil
         lastKnownPoint = nil
         dragStartRevision = 0
+        createFolderCandidate = nil
+        createFolderCandidateSince = 0
+        if shouldRestoreFolderExitVisual {
+            onFolderExitDragCancelled?()
+        }
     }
 
     private func source(from item: DisplayModel.DisplayItem) -> LayoutTransaction.Source {
@@ -204,6 +452,7 @@ final class DragController {
     private enum OverlayVisual: Equatable {
         case plain(String)
         case folderTarget(FolderID)
+        case createFolderTarget(AppID)
     }
 
     /// 每帧(display link): 静止时也持续处理最后样本(M1)。
@@ -218,8 +467,16 @@ final class DragController {
     }
 
     private func processTick(_ point: NSPoint) {
+        if folderExitSession != nil {
+            guard folderExitLifecycle.phase == .active else { return }
+            processFolderExitTick(point)
+            return
+        }
         guard state == .dragging, let item = sourceItem,
               let display = displayAtDragStart else { return }
+
+        // cell 可能在跨页后重新进入可视区；确保源图标始终只由 overlay 呈现。
+        grid?.setDragSourceHidden(true, for: item)
 
         // 外部目录/布局/配置变化 → 取消拖拽(陈旧 session 防护, 评审 M5)
         if store.displayRevision != dragStartRevision {
@@ -245,13 +502,37 @@ final class DragController {
             return grid?.hoveredFolder(at: point)
         }()
 
+        let createFolderDecision = updateCreateFolderTarget(item: item, point: point)
+
         // Overlay 位置每帧更新(§40)
         if let grid {
             overlay.move(to: point, in: grid.view)
         }
 
         if let folder = hoveredFolder {
+            grid?.setCreateFolderTargetHighlight(appID: nil, active: false)
             setOverlayVisual(.folderTarget(folder))
+            insertionIndicator.hide()
+            clearTransformsIfNeeded()
+            lastDestination = nil
+            lastGapIndex = nil
+            return
+        }
+        switch createFolderDecision {
+        case .none:
+            // 普通排序 preview 前保证没有残留的 App 建夹高亮。
+            grid?.setCreateFolderTargetHighlight(appID: nil, active: false)
+            break
+        case .waiting(let target):
+            // 命中另一个 App 后，等待建夹 dwell 期间也不能显示普通排序预览。
+            grid?.setCreateFolderTargetHighlight(appID: target, active: false)
+            setOverlayVisual(.plain(plainLabel))
+            clearReorderPreview()
+            return
+        case .active(let target):
+            grid?.setCreateFolderTargetHighlight(appID: target, active: true)
+            setOverlayVisual(.createFolderTarget(target))
+            insertionIndicator.hide()
             clearTransformsIfNeeded()
             lastDestination = nil
             lastGapIndex = nil
@@ -261,6 +542,7 @@ final class DragController {
 
         // Destination 没变 → 不重新 preview / 不重写 transform(§40-41)
         guard let destination = grid?.dragDestination(from: point) else {
+            insertionIndicator.hide()
             clearTransformsIfNeeded()
             lastDestination = nil
             lastGapIndex = nil
@@ -275,10 +557,45 @@ final class DragController {
         ) {
             previewCalculationCount += 1
             applyPreviewTransforms(gapIndex: preview.gapIndex)
+            showInsertionIndicator(gapIndex: preview.gapIndex)
             lastGapIndex = preview.gapIndex
         } else {
+            insertionIndicator.hide()
             clearTransformsIfNeeded()
         }
+    }
+
+    /// folder-exit session 的每帧路径: 复用主网格目的地算法, 不对主网格结构做预览位移。
+    private func processFolderExitTick(_ point: NSPoint) {
+        guard state == .dragging,
+              folderExitSession != nil,
+              folderExitLifecycle.phase == .active,
+              let grid else { return }
+
+        if store.displayRevision != dragStartRevision {
+            cancelDrag()
+            return
+        }
+
+        let currentPageWidth = grid.geometry.pageWidth
+        if cachedPageWidth > 0, currentPageWidth != cachedPageWidth {
+            lastDestination = nil
+            lastGapIndex = nil
+        }
+        cachedPageWidth = currentPageWidth
+        maybeAdvancePage(point)
+
+        grid.setCreateFolderTargetHighlight(appID: nil, active: false)
+        overlay.move(to: point, in: grid.view)
+        setOverlayVisual(.plain(plainLabel))
+
+        let destination = grid.dragDestination(from: point)
+        guard destination != lastDestination else { return }
+        destinationChangeCount += 1
+        lastDestination = destination
+        let displayIndex = grid.displayIndex(for: destination)
+        lastGapIndex = displayIndex
+        insertionIndicator.show(at: grid.overlayFrame(forFlatIndex: displayIndex))
     }
 
     /// Overlay 视觉状态缓存: 相同则不重复写 layer/string(§44)。
@@ -289,9 +606,45 @@ final class DragController {
             overlay.showPlain(label: label)
         case .folderTarget(let folder):
             overlay.showFolderTarget(folder, store: store)
+        case .createFolderTarget(let appID):
+            overlay.showCreateFolderTarget(name: store.displayName(for: appID))
         }
         overlayVisualWriteCount += 1
         lastOverlayVisual = visual
+    }
+
+    /// App→App 建夹需要稳定悬停，避免普通排序松手时误建文件夹。
+    private func updateCreateFolderTarget(
+        item: DisplayModel.DisplayItem,
+        point: NSPoint
+    ) -> CreateFolderHoverDecision {
+        guard case .app(let sourceApp) = item,
+              case .app(let target)? = grid?.itemAt(point: point),
+              target != sourceApp else {
+            createFolderCandidate = nil
+            createFolderCandidateSince = 0
+            return .none
+        }
+        let now = CACurrentMediaTime()
+        if createFolderCandidate != target {
+            createFolderCandidate = target
+            createFolderCandidateSince = now
+        }
+
+        return CreateFolderHoverDecision.resolve(
+            sourceApp: sourceApp,
+            pointedApp: target,
+            candidate: createFolderCandidate,
+            elapsed: now - createFolderCandidateSince
+        )
+    }
+
+    /// 普通排序 preview 的统一清理；候选建夹等待态必须立即调用。
+    private func clearReorderPreview() {
+        insertionIndicator.hide()
+        clearTransformsIfNeeded()
+        lastDestination = nil
+        lastGapIndex = nil
     }
 
     /// 边缘翻页: 使用当前可视页 rect(非文档宽度), 并考虑当前页边界(Stage 1 §25)。
@@ -322,26 +675,24 @@ final class DragController {
     /// 区间 = [min(source, gap), max(source, gap) - 1](评审 M5: 含 gap 处被挤动项)。
     private func applyPreviewTransforms(gapIndex: Int) {
         var next: [IndexPath: CATransform3D] = [:]
-        if sourceIndex != gapIndex {
-            let lower = min(sourceIndex, gapIndex)
-            let upper = max(sourceIndex, gapIndex) - 1
-            let step: Int = sourceIndex < gapIndex ? -1 : 1
-            if lower <= upper, let grid {
-                for index in lower...upper {
-                    guard let path = grid.indexPath(atFlatIndex: index),
-                          let cell = grid.cellView(at: path) else { continue }
-                    let target = index + step
-                    guard target >= 0 else { continue }
-                    let sourceFrame = grid.frame(atFlatIndex: index)
-                    let targetFrame = grid.frame(atFlatIndex: target)
-                    let dx = targetFrame.minX - sourceFrame.minX
-                    let dy = targetFrame.minY - sourceFrame.minY
-                    guard dx != 0 || dy != 0 else { continue }
-                    next[path] = CATransform3DMakeTranslation(dx, dy, 0)
-                }
+        if let grid {
+            for move in DragPreviewPlan.moves(sourceIndex: sourceIndex, gapIndex: gapIndex) {
+                guard let path = grid.indexPath(atFlatIndex: move.itemIndex),
+                      grid.cellView(at: path) != nil else { continue }
+                let sourceFrame = grid.frame(atFlatIndex: move.itemIndex)
+                let targetFrame = grid.frame(atFlatIndex: move.targetIndex)
+                let dx = targetFrame.minX - sourceFrame.minX
+                let dy = targetFrame.minY - sourceFrame.minY
+                guard dx != 0 || dy != 0 else { continue }
+                next[path] = CATransform3DMakeTranslation(dx, dy, 0)
             }
         }
         applyTransformDiff(next)
+    }
+
+    private func showInsertionIndicator(gapIndex: Int) {
+        guard let grid else { return }
+        insertionIndicator.show(at: grid.overlayFrame(forFlatIndex: gapIndex))
     }
 
     /// 目标状态 diff: old-only → identity; changed/new → 新变换; unchanged → 0 写。
@@ -350,7 +701,7 @@ final class DragController {
             currentTransforms = next
             return
         }
-        for (path, old) in currentTransforms where next[path] == nil {
+        for path in currentTransforms.keys where next[path] == nil {
             guard let cell = grid.cellView(at: path) else { continue }
             cell.view.layer?.transform = CATransform3DIdentity
             transformWriteCount += 1
@@ -390,12 +741,114 @@ final class DragController {
     }
 }
 
+private extension DragController.DragInputSource {
+    var inputEndSource: InputEndArbitration.Source {
+        switch self {
+        case .mouse:
+            return .mouse
+        case .threeFinger:
+            return .threeFinger
+        }
+    }
+}
+
+/// App→App 建夹的纯候选决策，不依赖时钟、网格或 AppKit。
+enum CreateFolderHoverDecision: Equatable {
+    case none
+    case waiting(AppID)
+    case active(AppID)
+
+    static let activationDwell: TimeInterval = 0.3
+
+    static func resolve(
+        sourceApp: AppID,
+        pointedApp: AppID?,
+        candidate: AppID?,
+        elapsed: TimeInterval
+    ) -> Self {
+        guard let target = pointedApp, target != sourceApp else { return .none }
+        guard candidate == target, elapsed >= activationDwell else {
+            return .waiting(target)
+        }
+        return .active(target)
+    }
+}
+
+/// 把已经由主网格算出的 page/slot 转成 store 使用的显示索引。
+/// 该 helper 不重新计算指针目的地, 只负责 folder-exit mouseUp 的索引归一化。
+struct FolderExitDragPlacement {
+    static func displayIndex(
+        for destination: LayoutTransaction.Destination,
+        pageCapacity: Int,
+        pageCount: Int
+    ) -> Int {
+        guard pageCapacity > 0 else { return 0 }
+        let lastPage = max(0, pageCount - 1)
+        let page = min(max(0, destination.page), lastPage)
+        let slot = min(max(0, destination.slot), pageCapacity - 1)
+        return page * pageCapacity + slot
+    }
+}
+
+/// 纯索引规划：gapIndex 是“移除源项后”的插入位置，源 cell 永不参与位移。
+struct DragPreviewPlan {
+    struct Move: Equatable {
+        let itemIndex: Int
+        let targetIndex: Int
+    }
+
+    static func moves(sourceIndex: Int, gapIndex: Int) -> [Move] {
+        guard sourceIndex != gapIndex else { return [] }
+        if sourceIndex < gapIndex {
+            return (sourceIndex + 1...gapIndex).map { Move(itemIndex: $0, targetIndex: $0 - 1) }
+        }
+        return (gapIndex..<sourceIndex).map { Move(itemIndex: $0, targetIndex: $0 + 1) }
+    }
+}
+
+/// 蓝色垂直插入指示器；仅在普通 reorder preview 时显示。
+@MainActor
+final class InsertionIndicatorLayer {
+    let layer = CALayer()
+
+    init() {
+        layer.backgroundColor = NSColor.systemBlue.cgColor
+        layer.cornerRadius = 2
+        layer.shadowColor = NSColor.systemBlue.cgColor
+        layer.shadowOpacity = 0.8
+        layer.shadowRadius = 4
+        layer.zPosition = 10_000
+        layer.isHidden = true
+    }
+
+    func show(at slotFrame: CGRect) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer.frame = CGRect(
+            x: slotFrame.minX - 6,
+            y: slotFrame.minY + 6,
+            width: 4,
+            height: max(16, slotFrame.height - 12)
+        )
+        layer.isHidden = false
+        CATransaction.commit()
+    }
+
+    func hide() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer.isHidden = true
+        CATransaction.commit()
+    }
+}
+
 /// 拖拽 overlay: 跟随光标的真实图标层 + 文件夹目标提示。
 @MainActor
 final class DragOverlayLayer {
     let layer = CALayer()
     private let iconLayer = CALayer()
     private let labelLayer = CATextLayer()
+    private var hasSourceImage = false
 
     init() {
         layer.frame = CGRect(x: 0, y: 0, width: 96, height: 96)
@@ -417,6 +870,7 @@ final class DragOverlayLayer {
 
     /// 配置 overlay: 复用源单元格已渲染图标(零磁盘 IO), 无图标时保留占位。
     func configure(label: String, sourceImage: CGImage?) {
+        hasSourceImage = sourceImage != nil
         if let sourceImage {
             iconLayer.contents = sourceImage
             iconLayer.backgroundColor = nil
@@ -433,7 +887,7 @@ final class DragOverlayLayer {
         let local = container.convert(point, from: nil)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        layer.position = CGPoint(x: local.x, y: local.y - 60)
+        layer.position = local
         CATransaction.commit()
     }
 
@@ -445,9 +899,18 @@ final class DragOverlayLayer {
         CATransaction.commit()
     }
 
+    func showCreateFolderTarget(name: String) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        iconLayer.backgroundColor = NSColor.systemBlue.cgColor
+        labelLayer.string = "与 \(name) 建立文件夹"
+        CATransaction.commit()
+    }
+
     func showPlain(label: String) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
+        iconLayer.backgroundColor = hasSourceImage ? nil : NSColor.systemGray.cgColor
         labelLayer.string = label
         CATransaction.commit()
     }
