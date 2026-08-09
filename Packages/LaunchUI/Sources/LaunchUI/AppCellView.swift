@@ -292,6 +292,17 @@ final class AppCellView: NSCollectionViewItem {
         startAppIconRequest(appID, provider: iconProvider, scale: scale)
     }
 
+    /// 元数据/本地化重配置(重命名/自定义名/目录显示名/语言):
+    /// 只更新文本与无障碍信息,不触碰图标层、不取消/重启图标请求。
+    /// Diffable 对同 identity cell 复用后不再调用数据源闭包,元数据变化走此路径。
+    func reapplyMetadata(displayName: String, accessibilityHint: String) {
+        guard representedAppID != nil else { return }
+        letterLayer.string = String(displayName.prefix(1)).uppercased()
+        label.stringValue = displayName
+        view.setAccessibilityLabel(displayName)
+        view.setAccessibilityHelp(accessibilityHint)
+    }
+
     /// 配置文件夹单元格。文件夹自身不使用普通 App 的色块/首字母占位，
     /// 只显示透明磨砂容器及其可用的真实子应用图标。
     func configureFolder(

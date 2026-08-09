@@ -289,17 +289,36 @@ final class FolderViewController: NSViewController {
         }
 
         refreshLocalizedPresentation()
-        displayedChildren = children
-
-        var snapshot = NSDiffableDataSourceSnapshot<Int, DisplayModel.DisplayItem>()
-        snapshot.appendSections([0])
-        snapshot.appendItems(children.map(DisplayModel.DisplayItem.app), toSection: 0)
-        dataSource.apply(snapshot, animatingDifferences: false)
-        // 结构变化后显式落定文档高度;同 ID 项也可能只改变名称/图标,同时刷新 cell。
-        view.layoutSubtreeIfNeeded()
-        updateDocumentFrame()
-        collectionView.reloadData()
+        if children == displayedChildren {
+            // 仅元数据/本地化变化(重命名/自定义名/目录名/语言/图标到达):
+            // Diffable 对同 identity cell 复用后不再调用数据源闭包,
+            // 只重配置可见 cell;不 reloadData、不重启图标任务。
+            reconfigureVisibleCells()
+        } else {
+            displayedChildren = children
+            var snapshot = NSDiffableDataSourceSnapshot<Int, DisplayModel.DisplayItem>()
+            snapshot.appendSections([0])
+            snapshot.appendItems(children.map(DisplayModel.DisplayItem.app), toSection: 0)
+            dataSource.apply(snapshot, animatingDifferences: false)
+            // 结构变化后显式落定文档高度。
+            view.layoutSubtreeIfNeeded()
+            updateDocumentFrame()
+        }
         resetDrag()
+    }
+
+    /// 元数据/本地化变化时只刷新可见 cell 的文本与无障碍(结构不变)。
+    private func reconfigureVisibleCells() {
+        for cell in collectionView.visibleItems() {
+            guard let appCell = cell as? AppCellView,
+                  let indexPath = collectionView.indexPath(for: cell),
+                  let item = dataSource.itemIdentifier(for: indexPath),
+                  case .app(let id) = item else { continue }
+            appCell.reapplyMetadata(
+                displayName: store.displayName(for: id),
+                accessibilityHint: L10n.format(.launchApp, store.displayName(for: id))
+            )
+        }
     }
 
     private func updateDocumentFrame() {

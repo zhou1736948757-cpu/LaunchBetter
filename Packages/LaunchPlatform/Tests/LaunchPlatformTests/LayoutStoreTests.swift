@@ -263,4 +263,59 @@ struct LayoutStoreTests {
         #expect(await actor2.currentLayout().folders.isEmpty)
         #expect(await actor2.currentLayout().pages[0].count == 4)
     }
+
+    @Test("renameFolder 持久化失败: 返回 false 且内存布局/磁盘均保持旧文件")
+    func renamePersistenceFailureRollsBack() async throws {
+        let dir = try tempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        // persistence 的“目录”实际指向普通文件,save 必然失败(与既有失败测试同手法)。
+        let blocked = dir.appendingPathComponent("not-a-directory")
+        try Data("blocked".utf8).write(to: blocked)
+        let persistence = LayoutSnapshotStore(directory: blocked)
+        let ids = apps(2)
+        let f = folderID("F")
+        let initial = LayoutSnapshot(
+            pages: [[.folder(f)]],
+            folders: [f: FolderRecord(id: f, name: "旧名", children: [ids[0], ids[1]])]
+        )
+        let actor = LayoutStore(seed: initial, persistence: persistence)
+        _ = await actor.start()
+
+        let ok = await actor.renameFolder(f, to: "新名")
+        #expect(!ok)
+        #expect(await actor.currentLayout() == initial)
+        #expect(await actor.currentLayout().folders[f]?.name == "旧名")
+        #expect(await actor.lastPersistErrorDescription != nil)
+        // 磁盘文件不被创建(保持“失败保留旧文件”语义)。
+        #expect(!FileManager.default.fileExists(atPath: persistence.fileURL.path))
+    }
+
+    @Test("renameFolder 不依赖显示几何: 子项全部缺失/隐藏时仍可改名")
+    func renameFolderRequiresNoDisplayGeometry() async throws {
+        let dir = try tempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = LayoutSnapshotStore(directory: dir)
+        let ids = apps(2)
+        let f = folderID("F")
+        // 两个子项都缺失: 该文件夹在任何 DisplayModel 中都会被过滤,不占页面槽位。
+        let initial = LayoutSnapshot(
+            pages: [[.app(ids[0])]],
+            folders: [f: FolderRecord(id: f, name: "旧名", children: [ids[1]])],
+            missingApps: [ids[1]: MissingAppState(missingSince: Date(timeIntervalSince1970: 100))]
+        )
+        let actor = LayoutStore(seed: initial, persistence: store)
+        _ = await actor.start()
+
+        #expect(await actor.renameFolder(f, to: "几何无关"))
+        let current = await actor.currentLayout()
+        #expect(current.folders[f]?.name == "几何无关")
+        // 结构完全不受影响。
+        #expect(current.pages == initial.pages)
+        #expect(current.missingApps == initial.missingApps)
+
+        // 重启恢复改名结果。
+        let actor2 = LayoutStore(seed: LayoutSnapshot(), persistence: store)
+        _ = await actor2.start()
+        #expect(await actor2.currentLayout().folders[f]?.name == "几何无关")
+    }
 }

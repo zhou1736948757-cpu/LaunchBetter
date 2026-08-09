@@ -123,23 +123,18 @@ public actor LayoutStore {
         return commit(result)
     }
 
-    /// 重命名文件夹。
+    /// 重命名文件夹。重命名是纯持久化状态变更,不改变布局结构,
+    /// 因此走 LayoutEditor 窄 API,不构造显示几何。
     public func renameFolder(
         _ id: FolderID,
         to newName: String,
         expectedLayout: LayoutSnapshot? = nil
     ) -> Bool {
         guard expectedLayout == nil || expectedLayout == layout else { return false }
-        guard let result = LayoutEditor.apply(
-            .renameFolder(id, newName: newName), to: layout, display: currentDisplayPlaceholder()
-        ) else {
+        guard let result = LayoutEditor.renameFolder(id, newName: newName, in: layout) else {
             return false
         }
         return commit(result)
-    }
-
-    private func currentDisplayPlaceholder() -> DisplayModel {
-        DisplayModel(pages: [], pageCapacity: 42)
     }
 
     /// 原子落盘成功后才发布候选布局；失败时保留原布局，避免 UI/磁盘分叉。

@@ -38,7 +38,7 @@ public enum LayoutEditor {
                 layout: layout, display: display
             )
         case .renameFolder(let id, let newName):
-            candidate = renameFolder(id, newName: newName, layout: layout)
+            candidate = renameFolder(id, newName: newName, in: layout)
         }
         guard let candidate, hasUniqueLayoutIdentities(candidate) else { return nil }
         return candidate
@@ -335,16 +335,22 @@ public enum LayoutEditor {
         return result
     }
 
-    private static func renameFolder(
+    /// 重命名文件夹(窄 API): 纯持久化状态变更,不要求显示几何。
+    /// 重命名不改变布局结构,因此不需要 DisplayModel;失败(文件夹不存在)返回 nil。
+    public static func renameFolder(
         _ id: FolderID,
         newName: String,
-        layout: LayoutSnapshot
+        in layout: LayoutSnapshot
     ) -> LayoutSnapshot? {
         guard var folder = layout.folders[id] else { return nil }
         folder.name = newName
         var folders = layout.folders
         folders[id] = folder
-        return LayoutSnapshot(pages: layout.pages, folders: folders, missingApps: layout.missingApps)
+        let candidate = LayoutSnapshot(
+            pages: layout.pages, folders: folders, missingApps: layout.missingApps
+        )
+        guard hasUniqueLayoutIdentities(candidate) else { return nil }
+        return candidate
     }
 
     // MARK: - 工具
