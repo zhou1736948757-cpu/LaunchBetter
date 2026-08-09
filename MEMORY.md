@@ -38,8 +38,9 @@
   合并并在 reconcile 成功后发布；首次 no-op seed 也落盘
 - 诊断与本地化: 非交互诊断不弹权限阻塞；smoke/drag/folder/three-finger/cache/paging 探针强化；
   en/zh-Hans/zh-Hant 文案与 accessibility 补齐
-- 自动化门禁: LaunchCore 119 Swift Testing + 66 XCTest；LaunchPlatform 91；LaunchUI 37；
-  Debug/Release build 通过；7 组 Release 候选诊断全部退出 0；最终 Luna 复审结果见本次收尾记录
+- 自动化门禁: LaunchCore 119 Swift Testing + 66 XCTest；LaunchPlatform 93；LaunchUI 37；
+  Debug/Release build 通过；7 组必选诊断及 paging/search/grid 强化探针全部退出 0；
+  最终 Luna 复审为 0 BLOCKER / 0 MAJOR
 - `MANUAL_VERIFICATION_REQUIRED`: 鼠标与三指真实拖拽、App→App/文件夹、文件夹边界重排与拖出、
   Escape/隐藏/关闭取消、跨页、重启持久化、三种语言即时切换
 
