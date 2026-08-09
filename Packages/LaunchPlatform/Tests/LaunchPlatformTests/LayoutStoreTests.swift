@@ -119,6 +119,56 @@ struct LayoutStoreTests {
         #expect(await actor.currentLayout() == layout)
     }
 
+    @Test("无变化 mutation 不提交也不产生持久化错误")
+    func unchangedMutationDoesNotCommit() async throws {
+        let dir = try tempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = LayoutSnapshotStore(directory: dir)
+        let ids = apps(2)
+        let layout = LayoutSnapshot(pages: [ids.map(LayoutItem.app)])
+        let actor = LayoutStore(seed: layout, persistence: store)
+        let display = DisplayModel(
+            catalog: CatalogSnapshot(apps: []),
+            layout: layout,
+            config: config(columns: 4, rows: 3)
+        )
+
+        let changed = await actor.apply(
+            .reorder(item: .app(ids[0]), toDisplayIndex: 0), display: display
+        )
+
+        #expect(!changed)
+        #expect(await actor.currentLayout() == layout)
+        #expect(await actor.lastPersistErrorDescription == nil)
+        #expect(!FileManager.default.fileExists(atPath: store.fileURL.path))
+    }
+
+    @Test("缺失磁盘快照时,无变化对账仍持久化非空种子")
+    func unchangedReconcilePersistsSeed() async throws {
+        let dir = try tempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let persistence = LayoutSnapshotStore(directory: dir)
+        let ids = apps(2)
+        let seed = LayoutSnapshot(pages: [ids.map(LayoutItem.app)])
+        let actor = LayoutStore(seed: seed, persistence: persistence)
+        _ = await actor.start()
+        let catalog = CatalogSnapshot(apps: ids.map {
+            AppRecord(
+                id: $0, url: URL(fileURLWithPath: $0.rawValue),
+                bundleIdentifier: nil, displayName: $0.rawValue,
+                infoPlistModificationDate: nil,
+                iconContentVersion: .empty
+            )
+        })
+
+        let result = await actor.reconcileWithResult(catalog: catalog, now: Date())
+        #expect(result.committed)
+        #expect(FileManager.default.fileExists(atPath: persistence.fileURL.path))
+
+        let restarted = LayoutStore(seed: LayoutSnapshot(), persistence: persistence)
+        #expect(await restarted.start().layout == seed)
+    }
+
     @Test("持久化失败: mutation 返回 false 且内存布局回滚")
     func persistenceFailureRollsBack() async throws {
         let dir = try tempDirectory()
@@ -143,6 +193,36 @@ struct LayoutStoreTests {
         #expect(!ok)
         #expect(await actor.currentLayout() == initial)
         #expect(await actor.lastPersistErrorDescription != nil)
+    }
+
+    @Test("陈旧布局期望被拒绝且不覆盖较新状态")
+    func staleExpectedLayoutIsRejected() async throws {
+        let dir = try tempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = LayoutSnapshotStore(directory: dir)
+        let ids = apps(3)
+        let initial = LayoutSnapshot(pages: [ids.map(LayoutItem.app)])
+        let actor = LayoutStore(seed: initial, persistence: store)
+        let initialDisplay = DisplayModel(
+            catalog: CatalogSnapshot(apps: []),
+            layout: initial,
+            config: config(columns: 4, rows: 3)
+        )
+        #expect(await actor.apply(
+            .reorder(item: .app(ids[0]), toDisplayIndex: 2),
+            display: initialDisplay,
+            expectedLayout: initial
+        ))
+        let newer = await actor.currentLayout()
+
+        let staleResult = await actor.apply(
+            .reorder(item: .app(ids[1]), toDisplayIndex: 0),
+            display: initialDisplay,
+            expectedLayout: initial
+        )
+
+        #expect(!staleResult)
+        #expect(await actor.currentLayout() == newer)
     }
 
     @Test("文件夹操作: 创建/重命名/解散, 持久化")

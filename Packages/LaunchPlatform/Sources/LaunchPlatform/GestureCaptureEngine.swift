@@ -168,14 +168,16 @@ public final class GestureCaptureEngine: @unchecked Sendable {
     // MARK: - 三指诊断计数(Stage 2 §37)
 
     /// 三指原始帧计数 / 各阶段事件计数。
-    public private(set) var threeFingerRawFrameCount = 0
-    public private(set) var threeFingerBeginCount = 0
-    public private(set) var threeFingerUpdateCount = 0
-    public private(set) var threeFingerEndCount = 0
+    private var threeFingerRawFrameCount = 0
+    private var threeFingerBeginCount = 0
+    private var threeFingerUpdateCount = 0
+    private var threeFingerEndCount = 0
 
     /// 三指诊断快照。
     public func threeFingerStats() -> String {
-        "rawFrames=\(threeFingerRawFrameCount) begin=\(threeFingerBeginCount) update=\(threeFingerUpdateCount) end=\(threeFingerEndCount)"
+        lock.lock()
+        defer { lock.unlock() }
+        return "rawFrames=\(threeFingerRawFrameCount) begin=\(threeFingerBeginCount) update=\(threeFingerUpdateCount) end=\(threeFingerEndCount)"
     }
 
     private func checkPermissionTimeout() {

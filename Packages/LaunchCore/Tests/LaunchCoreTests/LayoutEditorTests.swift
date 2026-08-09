@@ -8,15 +8,40 @@ struct LayoutEditorTests {
 
     private func makeDisplay(
         layout: LayoutSnapshot,
-        hidden: [AppID] = []
+        hidden: [AppID] = [],
+        columns: Int = 4,
+        rows: Int = 3
     ) -> DisplayModel {
-        var cfg = config(columns: 4, rows: 3)
+        var cfg = config(columns: columns, rows: rows)
         cfg.hiddenAppIDs = hidden
         return DisplayModel(
             catalog: catalog(apps(16).map(\.rawValue)),
             layout: layout,
             config: cfg
         )
+    }
+
+    private func appOccurrenceCounts(_ layout: LayoutSnapshot) -> [AppID: Int] {
+        var counts: [AppID: Int] = [:]
+        for page in layout.pages {
+            for item in page {
+                if case .app(let id) = item {
+                    counts[id, default: 0] += 1
+                }
+            }
+        }
+        for folder in layout.folders.values {
+            for id in folder.children {
+                counts[id, default: 0] += 1
+            }
+        }
+        return counts
+    }
+
+    private func expectUniqueAppOccurrences(_ layout: LayoutSnapshot) {
+        let counts = appOccurrenceCounts(layout)
+        #expect(Set(counts.keys) == layout.referencedAppIDs)
+        #expect(counts.values.allSatisfy { $0 == 1 })
     }
 
     @Test("reorder: 同页移动, 隐藏应用保持原位")
@@ -240,6 +265,40 @@ struct LayoutEditorTests {
         }
     }
 
+    @Test("moveOutOfFolder: 历史单 child 文件夹移出后原子删除空槽和记录")
+    func moveOutRemovesHistoricalEmptyFolder() throws {
+        let ids = apps(5)
+        let hidden = ids[0]
+        let folderID = folderID("HistoricalOneChild")
+        let layout = layout(
+            pages: [[.app(hidden), .app(ids[1]), .folder(folderID), .app(ids[3])]],
+            folders: [folderID: FolderRecord(
+                id: folderID, name: "HistoricalOneChild", children: [ids[2]]
+            )]
+        )
+        let display = makeDisplay(layout: layout, hidden: [hidden], columns: 4, rows: 1)
+        let cases: [(target: Int, page: [LayoutItem], visible: [AppID])] = [
+            (0, [.app(hidden), .app(ids[2]), .app(ids[1]), .app(ids[3])], [ids[2], ids[1], ids[3]]),
+            (1, [.app(hidden), .app(ids[1]), .app(ids[2]), .app(ids[3])], [ids[1], ids[2], ids[3]]),
+            (2, [.app(hidden), .app(ids[1]), .app(ids[3]), .app(ids[2])], [ids[1], ids[3], ids[2]]),
+        ]
+
+        for testCase in cases {
+            let result = try #require(LayoutEditor.apply(
+                .moveOutOfFolder(app: ids[2], from: folderID, toDisplayIndex: testCase.target),
+                to: layout,
+                display: display
+            ))
+            #expect(result.folders[folderID] == nil)
+            #expect(result.pages == [testCase.page])
+            #expect(makeDisplay(
+                layout: result, hidden: [hidden], columns: 4, rows: 1
+            ).visibleAppIDs == testCase.visible)
+            #expect(result.referencedAppIDs == layout.referencedAppIDs)
+            expectUniqueAppOccurrences(result)
+        }
+    }
+
     @Test("moveOutOfFolder: 按持久 children 数量解散,隐藏剩余 app 仍回原槽位")
     func moveOutDissolvesUsingPersistentChildrenCount() throws {
         let ids = apps(4)
@@ -287,9 +346,11 @@ struct LayoutEditorTests {
         #expect(result.layout.pages[0] == [
             .app(ids[0]), .folder(result.folderID), .app(ids[2]), .app(ids[4])
         ])
+        #expect(result.layout.referencedAppIDs == layout.referencedAppIDs)
+        expectUniqueAppOccurrences(result.layout)
     }
 
-    @Test("createFolder: 空列表或含非槽位应用 → nil")
+    @Test("createFolder: 空列表/单应用/重复或非可见槽位应用 → nil")
     func createFolderInvalid() throws {
         let ids = apps(3)
         let layout = layout(pages: [ids.map(LayoutItem.app)])
@@ -301,10 +362,151 @@ struct LayoutEditorTests {
             in: layout, display: display, name: "X",
             appIDs: [ids[0], appID("/Applications/NotInLayout.app")]
         ) == nil)
-        // 单应用文件夹允许(UX: 新建后拖入更多)
+        #expect(LayoutEditor.createFolder(
+            in: layout, display: display, name: "X",
+            appIDs: [ids[0], ids[0]]
+        ) == nil)
+        // 单应用文件夹会自动解散,新建时拒绝。
         #expect(LayoutEditor.createFolder(
             in: layout, display: display, name: "X", appIDs: [ids[0]]
-        ) != nil)
+        ) == nil)
+
+        let hiddenDisplay = makeDisplay(layout: layout, hidden: [ids[0]])
+        #expect(LayoutEditor.createFolder(
+            in: layout, display: hiddenDisplay, name: "X", appIDs: [ids[0], ids[1]]
+        ) == nil)
+
+        let missingLayout = LayoutSnapshot(
+            pages: [ids.map(LayoutItem.app)],
+            missingApps: [ids[0]: MissingAppState(missingSince: Date(timeIntervalSince1970: 1))]
+        )
+        #expect(LayoutEditor.createFolder(
+            in: missingLayout,
+            display: makeDisplay(layout: missingLayout),
+            name: "X",
+            appIDs: [ids[0], ids[1]]
+        ) == nil)
+    }
+
+    @Test("createFolder: hidden 应用在目标前/中/后保持持久顺序")
+    func createFolderPreservesHiddenAroundGap() throws {
+        let ids = apps(7)
+
+        do {
+            let layout = layout(pages: [[
+                .app(ids[0]), .app(ids[1]), .app(ids[2]), .app(ids[3])
+            ]])
+            let display = makeDisplay(layout: layout, hidden: [ids[0]])
+            let result = try #require(LayoutEditor.createFolder(
+                in: layout, display: display, name: "Before", appIDs: [ids[2], ids[3]]
+            ))
+            #expect(result.layout.pages == [[
+                .app(ids[0]), .app(ids[1]), .folder(result.folderID)
+            ]])
+            #expect(DisplayModel(
+                catalog: catalog(apps(16).map(\.rawValue)),
+                layout: result.layout,
+                config: { var c = config(); c.hiddenAppIDs = [ids[0]]; return c }()
+            ).flatSlots == [
+                .app(ids[1]), .folder(result.folderID, visibleChildren: [ids[2], ids[3]])
+            ])
+            expectUniqueAppOccurrences(result.layout)
+        }
+
+        do {
+            let layout = layout(pages: [[
+                .app(ids[1]), .app(ids[0]), .app(ids[2]), .app(ids[3])
+            ]])
+            let display = makeDisplay(layout: layout, hidden: [ids[0]])
+            let result = try #require(LayoutEditor.createFolder(
+                in: layout, display: display, name: "Between", appIDs: [ids[2], ids[3]]
+            ))
+            #expect(result.layout.pages == [[
+                .app(ids[1]), .app(ids[0]), .folder(result.folderID)
+            ]])
+            #expect(DisplayModel(
+                catalog: catalog(apps(16).map(\.rawValue)),
+                layout: result.layout,
+                config: { var c = config(); c.hiddenAppIDs = [ids[0]]; return c }()
+            ).flatSlots == [
+                .app(ids[1]), .folder(result.folderID, visibleChildren: [ids[2], ids[3]])
+            ])
+            expectUniqueAppOccurrences(result.layout)
+        }
+
+        do {
+            let layout = layout(pages: [[
+                .app(ids[1]), .app(ids[2]), .app(ids[0]), .app(ids[3])
+            ]])
+            let display = makeDisplay(layout: layout, hidden: [ids[0]])
+            let result = try #require(LayoutEditor.createFolder(
+                in: layout, display: display, name: "After", appIDs: [ids[1], ids[2]]
+            ))
+            #expect(result.layout.pages == [[
+                .app(ids[0]), .folder(result.folderID), .app(ids[3])
+            ]])
+            #expect(DisplayModel(
+                catalog: catalog(apps(16).map(\.rawValue)),
+                layout: result.layout,
+                config: { var c = config(); c.hiddenAppIDs = [ids[0]]; return c }()
+            ).flatSlots == [
+                .folder(result.folderID, visibleChildren: [ids[1], ids[2]]), .app(ids[3])
+            ])
+            expectUniqueAppOccurrences(result.layout)
+        }
+    }
+
+    @Test("createFolder: missing 应用在目标前/中保持持久顺序")
+    func createFolderPreservesMissingAroundGap() throws {
+        let ids = apps(7)
+        let missing = ids[0]
+        let state = MissingAppState(missingSince: Date(timeIntervalSince1970: 1234))
+
+        do {
+            let layout = layout(
+                pages: [[.app(missing), .app(ids[1]), .app(ids[2]), .app(ids[3])]],
+                missingApps: [missing: state]
+            )
+            let display = makeDisplay(layout: layout)
+            let result = try #require(LayoutEditor.createFolder(
+                in: layout, display: display, name: "Before", appIDs: [ids[2], ids[3]]
+            ))
+            #expect(result.layout.pages == [[
+                .app(missing), .app(ids[1]), .folder(result.folderID)
+            ]])
+            #expect(DisplayModel(
+                catalog: catalog(apps(16).map(\.rawValue)),
+                layout: result.layout,
+                config: config()
+            ).flatSlots == [
+                .app(ids[1]), .folder(result.folderID, visibleChildren: [ids[2], ids[3]])
+            ])
+            #expect(result.layout.missingApps[missing] == state)
+            expectUniqueAppOccurrences(result.layout)
+        }
+
+        do {
+            let layout = layout(
+                pages: [[.app(ids[1]), .app(missing), .app(ids[2]), .app(ids[3])]],
+                missingApps: [missing: state]
+            )
+            let display = makeDisplay(layout: layout)
+            let result = try #require(LayoutEditor.createFolder(
+                in: layout, display: display, name: "Between", appIDs: [ids[2], ids[3]]
+            ))
+            #expect(result.layout.pages == [[
+                .app(ids[1]), .app(missing), .folder(result.folderID)
+            ]])
+            #expect(DisplayModel(
+                catalog: catalog(apps(16).map(\.rawValue)),
+                layout: result.layout,
+                config: config()
+            ).flatSlots == [
+                .app(ids[1]), .folder(result.folderID, visibleChildren: [ids[2], ids[3]])
+            ])
+            #expect(result.layout.missingApps[missing] == state)
+            expectUniqueAppOccurrences(result.layout)
+        }
     }
 
     @Test("dissolveFolder: children 插回原显示位置")
@@ -323,6 +525,116 @@ struct LayoutEditorTests {
         #expect(result.pages[0] == [
             .app(ids[0]), .app(ids[1]), .app(ids[2]), .app(ids[3]), .app(ids[4])
         ])
+        #expect(result.referencedAppIDs == layout.referencedAppIDs)
+        expectUniqueAppOccurrences(result)
+    }
+
+    @Test("dissolveFolder: hidden 应用在文件夹前/中/后保持持久顺序")
+    func dissolveFolderPreservesHiddenAroundSlot() throws {
+        let ids = apps(8)
+        let folderID = folderID("HiddenDissolve")
+
+        do {
+            let layout = layout(
+                pages: [[.app(ids[0]), .app(ids[1]), .folder(folderID), .app(ids[4])]],
+                folders: [folderID: FolderRecord(
+                    id: folderID, name: "F", children: [ids[2], ids[3]]
+                )]
+            )
+            let display = makeDisplay(layout: layout, hidden: [ids[0]])
+            let result = try #require(LayoutEditor.dissolveFolder(
+                in: layout, display: display, id: folderID
+            ))
+            #expect(result.pages == [[
+                .app(ids[0]), .app(ids[1]), .app(ids[2]), .app(ids[3]), .app(ids[4])
+            ]])
+            #expect(DisplayModel(
+                catalog: catalog(apps(16).map(\.rawValue)),
+                layout: result,
+                config: { var c = config(); c.hiddenAppIDs = [ids[0]]; return c }()
+            ).flatSlots == [.app(ids[1]), .app(ids[2]), .app(ids[3]), .app(ids[4])])
+            expectUniqueAppOccurrences(result)
+        }
+
+        do {
+            let layout = layout(
+                pages: [[.app(ids[1]), .app(ids[0]), .folder(folderID), .app(ids[4])]],
+                folders: [folderID: FolderRecord(
+                    id: folderID, name: "F", children: [ids[2], ids[3]]
+                )]
+            )
+            let display = makeDisplay(layout: layout, hidden: [ids[0]])
+            let result = try #require(LayoutEditor.dissolveFolder(
+                in: layout, display: display, id: folderID
+            ))
+            #expect(result.pages == [[
+                .app(ids[1]), .app(ids[0]), .app(ids[2]), .app(ids[3]), .app(ids[4])
+            ]])
+            expectUniqueAppOccurrences(result)
+        }
+
+        do {
+            let layout = layout(
+                pages: [[.app(ids[1]), .folder(folderID), .app(ids[0]), .app(ids[4])]],
+                folders: [folderID: FolderRecord(
+                    id: folderID, name: "F", children: [ids[2], ids[3]]
+                )]
+            )
+            let display = makeDisplay(layout: layout, hidden: [ids[0]])
+            let result = try #require(LayoutEditor.dissolveFolder(
+                in: layout, display: display, id: folderID
+            ))
+            #expect(result.pages == [[
+                .app(ids[1]), .app(ids[0]), .app(ids[2]), .app(ids[3]), .app(ids[4])
+            ]])
+            expectUniqueAppOccurrences(result)
+        }
+    }
+
+    @Test("dissolveFolder: missing 应用在文件夹前/中保持持久顺序")
+    func dissolveFolderPreservesMissingAroundSlot() throws {
+        let ids = apps(8)
+        let missing = ids[0]
+        let folderID = folderID("MissingDissolve")
+        let state = MissingAppState(missingSince: Date(timeIntervalSince1970: 4321))
+
+        do {
+            let layout = layout(
+                pages: [[.app(missing), .app(ids[1]), .folder(folderID), .app(ids[4])]],
+                folders: [folderID: FolderRecord(
+                    id: folderID, name: "F", children: [ids[2], ids[3]]
+                )],
+                missingApps: [missing: state]
+            )
+            let display = makeDisplay(layout: layout)
+            let result = try #require(LayoutEditor.dissolveFolder(
+                in: layout, display: display, id: folderID
+            ))
+            #expect(result.pages == [[
+                .app(missing), .app(ids[1]), .app(ids[2]), .app(ids[3]), .app(ids[4])
+            ]])
+            #expect(result.missingApps[missing] == state)
+            expectUniqueAppOccurrences(result)
+        }
+
+        do {
+            let layout = layout(
+                pages: [[.app(ids[1]), .app(missing), .folder(folderID), .app(ids[4])]],
+                folders: [folderID: FolderRecord(
+                    id: folderID, name: "F", children: [ids[2], ids[3]]
+                )],
+                missingApps: [missing: state]
+            )
+            let display = makeDisplay(layout: layout)
+            let result = try #require(LayoutEditor.dissolveFolder(
+                in: layout, display: display, id: folderID
+            ))
+            #expect(result.pages == [[
+                .app(ids[1]), .app(missing), .app(ids[2]), .app(ids[3]), .app(ids[4])
+            ]])
+            #expect(result.missingApps[missing] == state)
+            expectUniqueAppOccurrences(result)
+        }
     }
 
     @Test("dissolveFolder: 未知文件夹或不在显示 → nil")
@@ -336,6 +648,215 @@ struct LayoutEditorTests {
         let display = makeDisplay(layout: layout)
         #expect(LayoutEditor.dissolveFolder(
             in: layout, display: display, id: folderID("Ghost")
+        ) == nil)
+    }
+
+    @Test("create/dissolveFolder: hidden 前缀下跨页按容量确定性重分块")
+    func folderOperationsCrossPageWithHiddenPrefix() throws {
+        let ids = apps(8)
+        let hidden = ids[0]
+
+        let createLayout = layout(pages: [
+            [.app(hidden), .app(ids[1])],
+            [.app(ids[2]), .app(ids[3])],
+            [.app(ids[4]), .app(ids[5])],
+        ])
+        let createDisplay = makeDisplay(
+            layout: createLayout, hidden: [hidden], columns: 2, rows: 1
+        )
+        let created = try #require(LayoutEditor.createFolder(
+            in: createLayout,
+            display: createDisplay,
+            name: "CrossPage",
+            appIDs: [ids[4], ids[5]]
+        ))
+        #expect(created.layout.pages == [
+            [.app(hidden), .app(ids[1])],
+            [.app(ids[2]), .app(ids[3])],
+            [.folder(created.folderID)],
+        ])
+        let createdDisplay = makeDisplay(
+            layout: created.layout, hidden: [hidden], columns: 2, rows: 1
+        )
+        #expect(createdDisplay.pages == [
+            [.app(ids[1]), .app(ids[2])],
+            [.app(ids[3]), .folder(created.folderID, visibleChildren: [ids[4], ids[5]])],
+        ])
+        #expect(created.layout.referencedAppIDs == createLayout.referencedAppIDs)
+        expectUniqueAppOccurrences(created.layout)
+
+        let dissolveFolderID = folderID("CrossPageDissolve")
+        let dissolveLayout = layout(
+            pages: [
+                [.app(hidden), .app(ids[1])],
+                [.folder(dissolveFolderID), .app(ids[2])],
+                [.app(ids[3]), .app(ids[4])],
+            ],
+            folders: [dissolveFolderID: FolderRecord(
+                id: dissolveFolderID, name: "CrossPage", children: [ids[5], ids[6]]
+            )]
+        )
+        let dissolveDisplay = makeDisplay(
+            layout: dissolveLayout, hidden: [hidden], columns: 2, rows: 1
+        )
+        let dissolved = try #require(LayoutEditor.dissolveFolder(
+            in: dissolveLayout, display: dissolveDisplay, id: dissolveFolderID
+        ))
+        #expect(dissolved.pages == [
+            [.app(hidden), .app(ids[1])],
+            [.app(ids[5]), .app(ids[6])],
+            [.app(ids[2]), .app(ids[3])],
+            [.app(ids[4])],
+        ])
+        let dissolvedDisplay = makeDisplay(
+            layout: dissolved, hidden: [hidden], columns: 2, rows: 1
+        )
+        #expect(dissolvedDisplay.pages == [
+            [.app(ids[1]), .app(ids[5])],
+            [.app(ids[6]), .app(ids[2])],
+            [.app(ids[3]), .app(ids[4])],
+        ])
+        #expect(dissolved.referencedAppIDs == dissolveLayout.referencedAppIDs)
+        expectUniqueAppOccurrences(dissolved)
+    }
+
+    @Test("create/dissolveFolder: JSON 重载后保留墓碑, unhide 后顺序恢复")
+    func folderOperationsPersistAndUnhide() throws {
+        let ids = apps(8)
+        let hidden = ids[0]
+        let missing = ids[1]
+        let missingState = MissingAppState(missingSince: Date(timeIntervalSince1970: 9876))
+
+        let createLayout = layout(
+            pages: [[.app(hidden), .app(missing), .app(ids[2]), .app(ids[3]), .app(ids[4])]],
+            missingApps: [missing: missingState]
+        )
+        let createDisplay = makeDisplay(layout: createLayout, hidden: [hidden])
+        let created = try #require(LayoutEditor.createFolder(
+            in: createLayout,
+            display: createDisplay,
+            name: "PersistCreate",
+            appIDs: [ids[3], ids[4]]
+        ))
+        #expect(created.layout.pages == [[
+            .app(hidden), .app(missing), .app(ids[2]), .folder(created.folderID)
+        ]])
+        #expect(created.layout.missingApps[missing] == missingState)
+        #expect(created.layout.referencedAppIDs == createLayout.referencedAppIDs)
+        expectUniqueAppOccurrences(created.layout)
+
+        let createdReloaded = try JSONDecoder().decode(
+            LayoutSnapshot.self,
+            from: JSONEncoder().encode(created.layout)
+        )
+        #expect(createdReloaded == created.layout)
+        #expect(createdReloaded.schemaVersion == LayoutSnapshot.currentSchemaVersion)
+        #expect(createdReloaded.missingApps[missing] == missingState)
+
+        let createdUnhidden = LayoutSnapshot(
+            pages: createdReloaded.pages,
+            folders: createdReloaded.folders
+        )
+        let createdUnhiddenDisplay = makeDisplay(layout: createdUnhidden)
+        #expect(createdUnhiddenDisplay.flatSlots == [
+            .app(hidden), .app(missing), .app(ids[2]),
+            .folder(created.folderID, visibleChildren: [ids[3], ids[4]])
+        ])
+
+        let dissolveFolderID = folderID("PersistDissolve")
+        let dissolveLayout = layout(
+            pages: [[.app(hidden), .app(missing), .app(ids[2]), .folder(dissolveFolderID), .app(ids[5])]],
+            folders: [dissolveFolderID: FolderRecord(
+                id: dissolveFolderID, name: "PersistDissolve", children: [ids[3], ids[4]]
+            )],
+            missingApps: [missing: missingState]
+        )
+        let dissolveDisplay = makeDisplay(layout: dissolveLayout, hidden: [hidden])
+        let dissolved = try #require(LayoutEditor.dissolveFolder(
+            in: dissolveLayout, display: dissolveDisplay, id: dissolveFolderID
+        ))
+        #expect(dissolved.pages == [[
+            .app(hidden), .app(missing), .app(ids[2]), .app(ids[3]), .app(ids[4]), .app(ids[5])
+        ]])
+        #expect(dissolved.missingApps[missing] == missingState)
+        #expect(dissolved.referencedAppIDs == dissolveLayout.referencedAppIDs)
+        expectUniqueAppOccurrences(dissolved)
+
+        let dissolvedReloaded = try JSONDecoder().decode(
+            LayoutSnapshot.self,
+            from: JSONEncoder().encode(dissolved)
+        )
+        #expect(dissolvedReloaded == dissolved)
+        #expect(dissolvedReloaded.schemaVersion == LayoutSnapshot.currentSchemaVersion)
+        #expect(dissolvedReloaded.missingApps[missing] == missingState)
+
+        let dissolvedUnhidden = LayoutSnapshot(
+            pages: dissolvedReloaded.pages,
+            folders: dissolvedReloaded.folders
+        )
+        #expect(makeDisplay(layout: dissolvedUnhidden).flatSlots == [
+            .app(hidden), .app(missing), .app(ids[2]), .app(ids[3]), .app(ids[4]), .app(ids[5])
+        ])
+    }
+
+    @Test("dissolveFolder: 重复 AppID 引用会使操作无效")
+    func dissolveFolderRejectsDuplicateReferences() throws {
+        let ids = apps(4)
+        let dissolveDuplicateFolderID = folderID("Duplicate")
+
+        let createDuplicateFolderID = folderID("CreateDuplicate")
+        let createWithPageAndChildDuplicate = layout(
+            pages: [[.app(ids[0]), .app(ids[1]), .folder(createDuplicateFolderID)]],
+            folders: [createDuplicateFolderID: FolderRecord(
+                id: createDuplicateFolderID,
+                name: "CreateDuplicate",
+                children: [ids[1], ids[2]]
+            )]
+        )
+        #expect(LayoutEditor.createFolder(
+            in: createWithPageAndChildDuplicate,
+            display: makeDisplay(layout: createWithPageAndChildDuplicate),
+            name: "New",
+            appIDs: [ids[0], ids[1]]
+        ) == nil)
+
+        let pageAndChildDuplicate = layout(
+            pages: [[.app(ids[0]), .folder(dissolveDuplicateFolderID)]],
+            folders: [dissolveDuplicateFolderID: FolderRecord(
+                id: dissolveDuplicateFolderID, name: "Duplicate", children: [ids[0], ids[1]]
+            )]
+        )
+        #expect(LayoutEditor.dissolveFolder(
+            in: pageAndChildDuplicate,
+            display: makeDisplay(layout: pageAndChildDuplicate),
+            id: dissolveDuplicateFolderID
+        ) == nil)
+
+        let childDuplicate = layout(
+            pages: [[.folder(dissolveDuplicateFolderID)]],
+            folders: [dissolveDuplicateFolderID: FolderRecord(
+                id: dissolveDuplicateFolderID, name: "Duplicate", children: [ids[0], ids[0]]
+            )]
+        )
+        #expect(LayoutEditor.dissolveFolder(
+            in: childDuplicate,
+            display: makeDisplay(layout: childDuplicate),
+            id: dissolveDuplicateFolderID
+        ) == nil)
+    }
+
+    @Test("重复文件夹槽位会使编辑操作无效")
+    func mutationRejectsDuplicateFolderSlots() {
+        let ids = apps(2)
+        let id = folderID("DuplicateSlot")
+        let malformed = layout(
+            pages: [[.folder(id), .folder(id)]],
+            folders: [id: FolderRecord(id: id, name: "F", children: ids)]
+        )
+        #expect(LayoutEditor.apply(
+            .renameFolder(id, newName: "Renamed"),
+            to: malformed,
+            display: makeDisplay(layout: malformed)
         ) == nil)
     }
 

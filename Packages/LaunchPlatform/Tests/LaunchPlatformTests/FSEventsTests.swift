@@ -3,6 +3,57 @@ import Testing
 import LaunchCore
 @testable import LaunchPlatform
 
+private final class IncrementalScanProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private let firstStarted = DispatchSemaphore(value: 0)
+    private let releaseFirst = DispatchSemaphore(value: 0)
+    private var calls = 0
+
+    let oldRecord: AppRecord
+    let newRecord: AppRecord
+
+    init(appURL: URL) {
+        let id = AppID(appURL.path)!
+        oldRecord = AppRecord(
+            id: id, url: appURL, bundleIdentifier: "com.test.Ordered",
+            displayName: "Old", infoPlistModificationDate: nil,
+            iconContentVersion: IconContentVersion(bundleVersion: "1")
+        )
+        newRecord = AppRecord(
+            id: id, url: appURL, bundleIdentifier: "com.test.Ordered",
+            displayName: "New", infoPlistModificationDate: nil,
+            iconContentVersion: IconContentVersion(bundleVersion: "2")
+        )
+    }
+
+    func discover(_ sources: [URL]) -> [AppRecord] {
+        lock.lock()
+        calls += 1
+        let call = calls
+        lock.unlock()
+        if call == 1 {
+            firstStarted.signal()
+            releaseFirst.wait()
+            return [oldRecord]
+        }
+        return [newRecord]
+    }
+
+    func waitUntilFirstStarted() -> Bool {
+        firstStarted.wait(timeout: .now() + 2) == .success
+    }
+
+    func releaseFirstScan() {
+        releaseFirst.signal()
+    }
+
+    var callCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return calls
+    }
+}
+
 @Suite("AppRootFolding 事件折叠")
 struct AppRootFoldingTests {
     private let scopes = ["/Applications", "/Users/mac/Applications", "/Volumes/Dev"]
@@ -77,6 +128,33 @@ struct IncrementalReconcileTests {
         #expect(delta.inserted.count == 1)
         #expect(delta.removed.isEmpty)
         #expect(await actor.currentSnapshot().apps.count == 1)
+    }
+
+    @Test("并发增量扫描按请求顺序提交,旧结果不能晚到覆盖")
+    func concurrentIncrementalScansAreSerialized() async throws {
+        let dir = try tempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let source = try tempDirectory()
+        defer { try? FileManager.default.removeItem(at: source) }
+        let probe = IncrementalScanProbe(appURL: source.appendingPathComponent("Ordered.app"))
+        let actor = AppCatalogActor(
+            store: CatalogSnapshotStore(directory: dir),
+            sources: [source],
+            discoverSources: probe.discover
+        )
+        _ = await actor.start()
+
+        let first = Task { await actor.reconcileScope(source) }
+        #expect(probe.waitUntilFirstStarted())
+        let second = Task { await actor.reconcileScope(source) }
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(probe.callCount == 1, "第二次扫描必须等待第一次扫描提交")
+
+        probe.releaseFirstScan()
+        _ = await first.value
+        _ = await second.value
+        #expect(probe.callCount == 2)
+        #expect(await actor.currentSnapshot().apps.first?.displayName == "New")
     }
 
     @Test("reconcileAppRoot: 元数据变化 → updated(图标内容版本信号)")

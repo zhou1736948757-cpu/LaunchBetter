@@ -12,7 +12,7 @@ import Foundation
 /// - addToFolder: 从页面移除应用,按可见子项位置插入文件夹 children
 ///   (隐藏/缺失子项保持原位)
 /// - reorderInFolder: 在可见子项空间内重排,隐藏/缺失子项保持布局引用
-/// - moveOutOfFolder: 从 children 移除,插入页面指定显示索引;若实际只剩一个 child 则原子解散文件夹
+/// - moveOutOfFolder: 从 children 移除,插入页面指定显示索引;若实际只剩 0/1 个 child 则原子解散文件夹
 /// - renameFolder: 更新文件夹名称
 public enum LayoutEditor {
     /// 应用一个变更。无效时返回 nil(状态不变)。
@@ -21,35 +21,38 @@ public enum LayoutEditor {
         to layout: LayoutSnapshot,
         display: DisplayModel
     ) -> LayoutSnapshot? {
+        let candidate: LayoutSnapshot?
         switch mutation {
         case .reorder(let item, let toDisplayIndex):
-            return reorder(item, toDisplayIndex: toDisplayIndex, layout: layout, display: display)
+            candidate = reorder(item, toDisplayIndex: toDisplayIndex, layout: layout, display: display)
         case .addToFolder(let app, let folder, let at):
-            return addToFolder(app: app, folder: folder, at: at, layout: layout, display: display)
+            candidate = addToFolder(app: app, folder: folder, at: at, layout: layout, display: display)
         case .reorderInFolder(let app, let folder, let toIndex):
-            return reorderInFolder(
+            candidate = reorderInFolder(
                 app: app, folder: folder, toIndex: toIndex,
                 layout: layout, display: display
             )
         case .moveOutOfFolder(let app, let folder, let toDisplayIndex):
-            return moveOutOfFolder(
+            candidate = moveOutOfFolder(
                 app: app, folder: folder, toDisplayIndex: toDisplayIndex,
                 layout: layout, display: display
             )
         case .renameFolder(let id, let newName):
-            return renameFolder(id, newName: newName, layout: layout)
+            candidate = renameFolder(id, newName: newName, layout: layout)
         }
+        guard let candidate, hasUniqueLayoutIdentities(candidate) else { return nil }
+        return candidate
     }
 
-    /// 创建文件夹: 合并 ≥1 个页面槽位应用,文件夹出现在最早应用的位置。
-    /// (1 个应用的文件夹允许存在,由对账器仅在真正空时解散)
+    /// 创建文件夹: 合并 ≥2 个可见页面槽位应用,文件夹出现在最早应用的位置。
+    /// (单应用文件夹会自动解散,因此不能新建)
     public static func createFolder(
         in layout: LayoutSnapshot,
         display: DisplayModel,
         name: String,
         appIDs: [AppID]
     ) -> (layout: LayoutSnapshot, folderID: FolderID)? {
-        guard !appIDs.isEmpty else { return nil }
+        guard appIDs.count >= 2, Set(appIDs).count == appIDs.count else { return nil }
         let displayOrder = displayLayoutOrder(display)
         // 全部必须是页面槽位应用,且按显示顺序
         let ordered: [(id: AppID, displayIndex: Int)] = appIDs.compactMap { id in
@@ -72,28 +75,26 @@ public enum LayoutEditor {
                 return false
             }
         }
-        var inserted = false
-        var index = 0
-        for page in 0..<pages.count {
-            for itemIndex in 0..<pages[page].count {
-                if index == firstIndex {
-                    pages[page].insert(.folder(folderID), at: itemIndex)
-                    inserted = true
-                    break
-                }
-                index += 1
+        let selectedIDs = Set(orderedIDs)
+        let remainingOrder = displayOrder.filter { item in
+            if case .app(let id) = item {
+                return !selectedIDs.contains(id)
             }
-            if inserted { break }
+            return true
         }
-        if !inserted {
-            if pages.isEmpty { pages = [[]] }
-            pages[pages.count - 1].append(.folder(folderID))
-        }
+        let target = min(max(0, firstIndex), remainingOrder.count)
+        pages = insert(
+            [.folder(folderID)],
+            atDisplayPosition: target,
+            remainingOrder: remainingOrder,
+            pages: pages
+        )
 
         var folders = layout.folders
         folders[folderID] = folder
         var result = LayoutSnapshot(pages: pages, folders: folders, missingApps: layout.missingApps)
         result = rechunk(result, capacity: display.pageCapacity)
+        guard hasUniqueLayoutIdentities(result) else { return nil }
         return (result, folderID)
     }
 
@@ -123,27 +124,20 @@ public enum LayoutEditor {
 
         // 插入 children(布局顺序)到文件夹显示位置
         let children = folder.children.map(LayoutItem.app)
-        var index = 0
-        var inserted = false
-        outer: for page in 0..<pages.count {
-            for itemIndex in 0..<pages[page].count {
-                if index == folderDisplayIndex {
-                    pages[page].insert(contentsOf: children, at: itemIndex)
-                    inserted = true
-                    break outer
-                }
-                index += 1
-            }
-        }
-        if !inserted {
-            if pages.isEmpty { pages = [[]] }
-            pages[pages.count - 1].append(contentsOf: children)
-        }
+        let remainingOrder = displayOrder.filter { $0 != .folder(id) }
+        let target = min(max(0, folderDisplayIndex), remainingOrder.count)
+        pages = insert(
+            children,
+            atDisplayPosition: target,
+            remainingOrder: remainingOrder,
+            pages: pages
+        )
 
         var folders = layout.folders
         folders.removeValue(forKey: id)
         var result = LayoutSnapshot(pages: pages, folders: folders, missingApps: layout.missingApps)
         result = rechunk(result, capacity: display.pageCapacity)
+        guard hasUniqueLayoutIdentities(result) else { return nil }
         return result
     }
 
@@ -176,7 +170,7 @@ public enum LayoutEditor {
         // 契约(Phase 1C): toDisplayIndex 是移除源项后的显示列表中的插入位置(gap 位置)
         let remainingOrder = displayOrder.filter { $0 != itemLayout }
         let target = min(max(0, toDisplayIndex), remainingOrder.count)
-        pages = insert(itemLayout, atDisplayPosition: target, remainingOrder: remainingOrder, pages: pages)
+        pages = insert([itemLayout], atDisplayPosition: target, remainingOrder: remainingOrder, pages: pages)
 
         var result = LayoutSnapshot(pages: pages, folders: layout.folders, missingApps: layout.missingApps)
         result = rechunk(result, capacity: display.pageCapacity)
@@ -287,7 +281,22 @@ public enum LayoutEditor {
         var folders = layout.folders
         var remainingOrder = displayLayoutOrder(display).filter { $0 != .app(app) }
 
-        if folderRecord.children.count == 1 {
+        if folderRecord.children.isEmpty {
+            // 历史/损坏状态下的单 child 文件夹移出后,必须在同一候选快照中
+            // 同时删除空文件夹槽位和记录,再插入被移出的应用,不能留下 ghost folder。
+            var removedFolder = false
+            outer: for page in 0..<pages.count {
+                for itemIndex in 0..<pages[page].count {
+                    guard pages[page][itemIndex] == .folder(folder) else { continue }
+                    pages[page].remove(at: itemIndex)
+                    removedFolder = true
+                    break outer
+                }
+            }
+            guard removedFolder else { return nil }
+            folders.removeValue(forKey: folder)
+            remainingOrder.removeAll { $0 == .folder(folder) }
+        } else if folderRecord.children.count == 1 {
             // 文件夹不能在一次 move-out 后短暂保留为单 App 文件夹:
             // 剩余 child 直接占据原文件夹槽位,并在同一候选快照中删除记录。
             guard let remainingApp = folderRecord.children.first else { return nil }
@@ -319,7 +328,7 @@ public enum LayoutEditor {
 
         // 应用成为新页面槽位,插入指定显示索引
         let target = min(max(0, toDisplayIndex), remainingOrder.count)
-        pages = insert(.app(app), atDisplayPosition: target, remainingOrder: remainingOrder, pages: pages)
+        pages = insert([.app(app)], atDisplayPosition: target, remainingOrder: remainingOrder, pages: pages)
 
         var result = LayoutSnapshot(pages: pages, folders: folders, missingApps: layout.missingApps)
         result = rechunk(result, capacity: display.pageCapacity)
@@ -366,26 +375,28 @@ public enum LayoutEditor {
         !display.hiddenAppIDs.contains(id) && !display.missingAppIDs.contains(id)
     }
 
-    /// 把 item 插到锚(remainingOrder[target] 对应布局项)之前; 越界或锚缺失 → 追加末尾。
+    /// 把 items 插到锚(remainingOrder[target] 对应布局项)之前; 越界或锚缺失 → 追加末尾。
     private static func insert(
-        _ item: LayoutItem,
+        _ items: [LayoutItem],
         atDisplayPosition target: Int,
         remainingOrder: [LayoutItem],
         pages: [[LayoutItem]]
     ) -> [[LayoutItem]] {
-        if target >= remainingOrder.count {
+        guard !items.isEmpty else { return pages }
+        let clampedTarget = min(max(0, target), remainingOrder.count)
+        if clampedTarget >= remainingOrder.count {
             var result = pages
             if result.isEmpty { result = [[]] }
-            result[result.count - 1].append(item)
+            result[result.count - 1].append(contentsOf: items)
             return result
         }
-        let anchor = remainingOrder[target]
+        let anchor = remainingOrder[clampedTarget]
         var result = pages
         var found = false
         outer: for page in 0..<result.count {
             for itemIndex in 0..<result[page].count {
                 if result[page][itemIndex] == anchor {
-                    result[page].insert(item, at: itemIndex)
+                    result[page].insert(contentsOf: items, at: itemIndex)
                     found = true
                     break outer
                 }
@@ -393,9 +404,32 @@ public enum LayoutEditor {
         }
         if !found {
             if result.isEmpty { result = [[]] }
-            result[result.count - 1].append(item)
+            result[result.count - 1].append(contentsOf: items)
         }
         return result
+    }
+
+    /// AppID 在页面槽位和文件夹 children 中只能出现一次。
+    private static func hasUniqueLayoutIdentities(_ layout: LayoutSnapshot) -> Bool {
+        var seen = Set<AppID>()
+        var seenFolders = Set<FolderID>()
+        for page in layout.pages {
+            for item in page {
+                switch item {
+                case .app(let id):
+                    guard seen.insert(id).inserted else { return false }
+                case .folder(let id):
+                    guard layout.folders[id] != nil,
+                          seenFolders.insert(id).inserted else { return false }
+                }
+            }
+        }
+        for folder in layout.folders.values {
+            for id in folder.children where !seen.insert(id).inserted {
+                return false
+            }
+        }
+        return true
     }
 
     /// 按容量重分块(确定性;空页移除)。

@@ -33,16 +33,33 @@ public actor AppCatalogActor {
 
     private let store: CatalogSnapshotStore
     private let sources: [URL]
+    private let discoverSources: @Sendable ([URL]) -> [AppRecord]
+    private let discoverAppRoot: @Sendable (URL) -> AppRecord?
 
     private var snapshot: CatalogSnapshot
     private var generation: Int = 0
+    /// Incremental scans are globally ordered. Actor reentrancy around detached
+    /// filesystem work must not allow an older event to commit after a newer one.
+    private var incrementalTail: Task<CatalogDelta, Never>?
+    private var incrementalRequestSequence: UInt64 = 0
 
     /// 最近一次持久化失败描述(nil = 正常)。持久化失败不阻断对账流程。
     public private(set) var lastPersistErrorDescription: String?
 
-    public init(store: CatalogSnapshotStore, sources: [URL]) {
+    public init(
+        store: CatalogSnapshotStore,
+        sources: [URL],
+        discoverSources: @escaping @Sendable ([URL]) -> [AppRecord] = {
+            AppDiscoveryService.discover(sources: $0)
+        },
+        discoverAppRoot: @escaping @Sendable (URL) -> AppRecord? = {
+            AppDiscoveryService.makeRecord(from: $0)
+        }
+    ) {
         self.store = store
         self.sources = sources
+        self.discoverSources = discoverSources
+        self.discoverAppRoot = discoverAppRoot
         self.snapshot = CatalogSnapshot(apps: [])
     }
 
@@ -92,9 +109,15 @@ public actor AppCatalogActor {
     /// 枚举在后台执行器进行,不阻塞 actor。
     public func reconcileFromDisk() async throws -> CatalogDelta {
         let capturedSources = sources
+        let capturedGeneration = generation
+        let discoverSources = discoverSources
         let discovered = await Task.detached(priority: .utility) {
-            AppDiscoveryService.discover(sources: capturedSources)
+            discoverSources(capturedSources)
         }.value
+
+        // actor 在 detached 扫描期间可重入处理 FSEvents 增量。若代数已变化，
+        // 丢弃旧全量结果，避免覆盖更晚的安装/删除事件。
+        guard generation == capturedGeneration else { return CatalogDelta() }
 
         let delta = ReconcileEngine.delta(from: snapshot, to: discovered)
         snapshot = CatalogSnapshot(apps: discovered)
@@ -135,19 +158,67 @@ public actor AppCatalogActor {
 
     /// 仅重扫单个应用(§71 .app root 折叠后)。
     public func reconcileAppRoot(_ appRootURL: URL) async -> CatalogDelta {
-        let record = await Task.detached(priority: .utility) {
-            AppDiscoveryService.makeRecord(from: appRootURL)
-        }.value
-        let discovered = record.map { [$0] } ?? []
-        return applyIncremental(discovered, appRootPath: appRootURL.path)
+        incrementalRequestSequence &+= 1
+        let request = incrementalRequestSequence
+        let previous = incrementalTail
+        let task = Task { [weak self] () -> CatalogDelta in
+            _ = await previous?.value
+            guard let self else { return CatalogDelta() }
+            return await self.performReconcileAppRoot(appRootURL)
+        }
+        incrementalTail = task
+        let result = await task.value
+        if request == incrementalRequestSequence {
+            incrementalTail = nil
+        }
+        return result
+    }
+
+    private func performReconcileAppRoot(_ appRootURL: URL) async -> CatalogDelta {
+        while true {
+            let capturedGeneration = generation
+            let discoverAppRoot = discoverAppRoot
+            let record = await Task.detached(priority: .utility) {
+                discoverAppRoot(appRootURL)
+            }.value
+            // Another incremental/full scan committed while this actor was
+            // reentrant. Rescan this same root so an older result cannot win.
+            guard generation == capturedGeneration else { continue }
+            let discovered = record.map { [$0] } ?? []
+            return applyIncremental(discovered, appRootPath: appRootURL.path)
+        }
     }
 
     /// 仅枚举单个 scope 目录(§71 目录脏)。
     public func reconcileScope(_ scopeURL: URL) async -> CatalogDelta {
-        let discovered = await Task.detached(priority: .utility) {
-            AppDiscoveryService.discover(sources: [scopeURL])
-        }.value
-        return applyIncremental(discovered, scopePrefix: scopeURL.path + "/")
+        incrementalRequestSequence &+= 1
+        let request = incrementalRequestSequence
+        let previous = incrementalTail
+        let task = Task { [weak self] () -> CatalogDelta in
+            _ = await previous?.value
+            guard let self else { return CatalogDelta() }
+            return await self.performReconcileScope(scopeURL)
+        }
+        incrementalTail = task
+        let result = await task.value
+        if request == incrementalRequestSequence {
+            incrementalTail = nil
+        }
+        return result
+    }
+
+    private func performReconcileScope(_ scopeURL: URL) async -> CatalogDelta {
+        while true {
+            let capturedGeneration = generation
+            let discoverSources = discoverSources
+            let discovered = await Task.detached(priority: .utility) {
+                discoverSources([scopeURL])
+            }.value
+            // Preserve disjoint updates too: retry this scope against the latest
+            // generation instead of merely dropping a result when any scan wins.
+            guard generation == capturedGeneration else { continue }
+            return applyIncremental(discovered, scopePrefix: scopeURL.path + "/")
+        }
     }
 
     /// 事件丢失时对全部 scope 执行恢复性重扫。

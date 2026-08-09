@@ -306,6 +306,171 @@ struct LayoutReconcilerTests {
         #expect(result.pages.flatMap { $0 }.filter { $0 == .app(app) }.count == 1)
     }
 
+    @Test("重复根应用只保留持久化遍历中的首次引用")
+    func duplicateRootAppsKeepFirstOccurrence() throws {
+        let first = try #require(AppID("/Applications/First.app"))
+        let second = try #require(AppID("/Applications/Second.app"))
+        let catalog = try catalog("/Applications/First.app", "/Applications/Second.app")
+        let layout = layout(
+            pages: [
+                [.app(first), .app(first), .app(second)],
+                [.app(first)],
+            ]
+        )
+
+        let result = LayoutReconciler.reconcile(catalog: catalog, layout: layout, now: now)
+
+        #expect(result.pages == [[.app(first), .app(second)]])
+    }
+
+    @Test("重复文件夹槽位只保留首次有效槽位")
+    func duplicateFolderSlotsKeepFirstValidSlot() throws {
+        let first = try #require(AppID("/Applications/First.app"))
+        let second = try #require(AppID("/Applications/Second.app"))
+        let folderID = try #require(FolderID("F"))
+        let catalog = try catalog("/Applications/First.app", "/Applications/Second.app")
+        let layout = layout(
+            pages: [[.folder(folderID), .folder(folderID)]],
+            folders: [folderID: FolderRecord(
+                id: folderID,
+                name: "F",
+                children: [first, second]
+            )]
+        )
+
+        let result = LayoutReconciler.reconcile(catalog: catalog, layout: layout, now: now)
+
+        #expect(result.pages == [[.folder(folderID)]])
+        #expect(result.folders[folderID]?.children == [first, second])
+    }
+
+    @Test("文件夹 children 内重复 AppID 只保留首次引用")
+    func duplicateFolderChildrenKeepFirstOccurrence() throws {
+        let first = try #require(AppID("/Applications/First.app"))
+        let second = try #require(AppID("/Applications/Second.app"))
+        let folderID = try #require(FolderID("F"))
+        let catalog = try catalog("/Applications/First.app", "/Applications/Second.app")
+        let layout = layout(
+            pages: [[.folder(folderID)]],
+            folders: [folderID: FolderRecord(
+                id: folderID,
+                name: "F",
+                children: [first, first, second, second]
+            )]
+        )
+
+        let result = LayoutReconciler.reconcile(catalog: catalog, layout: layout, now: now)
+
+        #expect(result.pages == [[.folder(folderID)]])
+        #expect(result.folders[folderID]?.children == [first, second])
+    }
+
+    @Test("根应用优先于后续文件夹 child,且跨文件夹重复按槽位顺序收敛")
+    func crossRootAndFolderReferencesKeepFirstOccurrence() throws {
+        let root = try #require(AppID("/Applications/Root.app"))
+        let shared = try #require(AppID("/Applications/Shared.app"))
+        let firstOnly = try #require(AppID("/Applications/FirstOnly.app"))
+        let secondOnly = try #require(AppID("/Applications/SecondOnly.app"))
+        let firstFolder = try #require(FolderID("First"))
+        let secondFolder = try #require(FolderID("Second"))
+        let catalog = try catalog(
+            "/Applications/Root.app",
+            "/Applications/Shared.app",
+            "/Applications/FirstOnly.app",
+            "/Applications/SecondOnly.app"
+        )
+        let layout = layout(
+            pages: [[.app(root), .folder(firstFolder), .folder(secondFolder)]],
+            folders: [
+                firstFolder: FolderRecord(
+                    id: firstFolder,
+                    name: "First",
+                    children: [root, shared, firstOnly]
+                ),
+                secondFolder: FolderRecord(
+                    id: secondFolder,
+                    name: "Second",
+                    children: [shared, secondOnly]
+                ),
+            ]
+        )
+
+        let result = LayoutReconciler.reconcile(catalog: catalog, layout: layout, now: now)
+
+        #expect(result.pages == [[.app(root), .folder(firstFolder), .app(secondOnly)]])
+        #expect(result.folders[firstFolder]?.children == [shared, firstOnly])
+        #expect(result.folders[secondFolder] == nil)
+    }
+
+    @Test("孤儿文件夹按 rawValue 排序恢复,单 child 转为应用,空记录丢弃")
+    func orphanFoldersAreRestoredDeterministically() throws {
+        let root = try #require(AppID("/Applications/Root.app"))
+        let shared = try #require(AppID("/Applications/Shared.app"))
+        let alphaOnly = try #require(AppID("/Applications/AlphaOnly.app"))
+        let single = try #require(AppID("/Applications/Single.app"))
+        let zetaOnly = try #require(AppID("/Applications/ZetaOnly.app"))
+        let alpha = try #require(FolderID("Alpha"))
+        let empty = try #require(FolderID("Empty"))
+        let singleFolder = try #require(FolderID("Single"))
+        let zeta = try #require(FolderID("Zeta"))
+        let catalog = try catalog(
+            "/Applications/Root.app",
+            "/Applications/Shared.app",
+            "/Applications/AlphaOnly.app",
+            "/Applications/Single.app",
+            "/Applications/ZetaOnly.app"
+        )
+        let layout = layout(
+            pages: [[.app(root)]],
+            folders: [
+                zeta: FolderRecord(id: zeta, name: "Zeta", children: [shared, zetaOnly]),
+                empty: FolderRecord(id: empty, name: "Empty"),
+                singleFolder: FolderRecord(id: singleFolder, name: "Single", children: [single]),
+                alpha: FolderRecord(id: alpha, name: "Alpha", children: [shared, alphaOnly]),
+            ]
+        )
+
+        let result = LayoutReconciler.reconcile(catalog: catalog, layout: layout, now: now)
+
+        #expect(result.pages == [[
+            .app(root),
+            .folder(alpha),
+            .app(single),
+            .app(zetaOnly),
+        ]])
+        #expect(result.folders.count == 1)
+        #expect(result.folders[alpha]?.children == [shared, alphaOnly])
+        #expect(result.folders[empty] == nil)
+        #expect(result.folders[singleFolder] == nil)
+        #expect(result.folders[zeta] == nil)
+    }
+
+    @Test("归一化幂等且保留未过期墓碑")
+    func normalizationIsIdempotentAndPreservesTombstones() throws {
+        let first = try #require(AppID("/Applications/First.app"))
+        let second = try #require(AppID("/Applications/Second.app"))
+        let gone = try #require(AppID("/Applications/Gone.app"))
+        let folderID = try #require(FolderID("F"))
+        let missingSince = now.addingTimeInterval(-1)
+        let catalog = try catalog("/Applications/First.app", "/Applications/Second.app")
+        let layout = layout(
+            pages: [[.app(first), .app(first), .folder(folderID)]],
+            folders: [folderID: FolderRecord(
+                id: folderID,
+                name: "F",
+                children: [first, second]
+            )],
+            missingApps: [gone: MissingAppState(missingSince: missingSince)]
+        )
+
+        let once = LayoutReconciler.reconcile(catalog: catalog, layout: layout, now: now)
+        let twice = LayoutReconciler.reconcile(catalog: catalog, layout: once, now: now)
+
+        #expect(once == twice)
+        #expect(once.missingApps[gone]?.missingSince == missingSince)
+        #expect(!once.referencedAppIDs.contains(gone))
+    }
+
     @Test("隐藏应用与对账无关: 布局引用即保留")
     func hiddenAppsNotReconciled() throws {
         let app = try #require(AppID("/Applications/A.app"))

@@ -34,10 +34,11 @@ public enum DurableFile: Sendable {
     /// 用于"损坏的持久状态不静默清除"策略。
     @discardableResult
     public static func backupCorruptedFile(at url: URL) throws -> URL {
-        let stamp = Int(Date().timeIntervalSince1970)
+        let stamp = Int(Date().timeIntervalSince1970 * 1_000)
+        let nonce = UUID().uuidString
         let backup = url
             .deletingLastPathComponent()
-            .appendingPathComponent("\(url.lastPathComponent).corrupt-\(stamp)")
+            .appendingPathComponent("\(url.lastPathComponent).corrupt-\(stamp)-\(nonce)")
         try FileManager.default.moveItem(at: url, to: backup)
         return backup
     }

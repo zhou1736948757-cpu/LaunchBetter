@@ -8,10 +8,111 @@ import Foundation
 /// - 缺失应用: 创建/保留墓碑,布局引用保留(显示层隐藏)
 /// - 应用回归: 清除墓碑,恢复原位置(引用本就在布局中)
 /// - 过期墓碑(超宽限期): 从页面与文件夹子项移除
-/// - 孤儿文件夹项: 从页面移除
+/// - 孤儿文件夹记录: 按 FolderID 排序恢复到末尾,或确定性解散
 /// - 空/单应用文件夹: 确定性解散
 public enum LayoutReconciler {
     public static let defaultGracePeriod: TimeInterval = 30 * 24 * 60 * 60
+
+    /// 在目录对账前把持久化布局收敛到可安全交给显示层的形态。
+    ///
+    /// 页面是持久化布局的主遍历顺序;页面中首次出现的文件夹槽位及其
+    /// children 先取得对应的 AppID。未被页面引用的文件夹记录按 FolderID
+    /// 排序追加,因此字典遍历顺序不会影响结果。
+    private static func normalize(
+        layout: LayoutSnapshot,
+        excluding excludedAppIDs: Set<AppID>
+    ) -> LayoutSnapshot {
+        var normalizedPages: [[LayoutItem]] = []
+        var normalizedFolders: [FolderID: FolderRecord] = [:]
+        var seenAppIDs = Set<AppID>()
+        var seenFolderSlots = Set<FolderID>()
+        var consumedFolderIDs = Set<FolderID>()
+
+        func uniqueChildren(of folder: FolderRecord) -> [AppID] {
+            var children: [AppID] = []
+            children.reserveCapacity(folder.children.count)
+            for child in folder.children {
+                guard !excludedAppIDs.contains(child),
+                      seenAppIDs.insert(child).inserted else {
+                    continue
+                }
+                children.append(child)
+            }
+            return children
+        }
+
+        func appendAtEnd(_ item: LayoutItem) {
+            if normalizedPages.isEmpty {
+                normalizedPages = [[]]
+            }
+            normalizedPages[normalizedPages.count - 1].append(item)
+        }
+
+        for page in layout.pages {
+            var normalizedPage: [LayoutItem] = []
+            normalizedPage.reserveCapacity(page.count)
+
+            for item in page {
+                switch item {
+                case .app(let id):
+                    guard !excludedAppIDs.contains(id),
+                          seenAppIDs.insert(id).inserted else {
+                        continue
+                    }
+                    normalizedPage.append(.app(id))
+
+                case .folder(let folderID):
+                    // 同一个 FolderID 只保留首次出现的有效槽位。
+                    guard seenFolderSlots.insert(folderID).inserted,
+                          let folder = layout.folders[folderID] else {
+                        continue
+                    }
+                    consumedFolderIDs.insert(folderID)
+
+                    let children = uniqueChildren(of: folder)
+                    if children.count >= 2 {
+                        var normalizedFolder = folder
+                        normalizedFolder.children = children
+                        normalizedFolders[folderID] = normalizedFolder
+                        normalizedPage.append(.folder(folderID))
+                    } else if let child = children.first {
+                        // 单 child 文件夹确定性解散到原槽位。
+                        normalizedPage.append(.app(child))
+                    }
+                }
+            }
+
+            if !normalizedPage.isEmpty {
+                normalizedPages.append(normalizedPage)
+            }
+        }
+
+        // 页面未引用的文件夹记录不能被静默丢弃,否则其 children 会成为布局孤儿。
+        // 按 rawValue 排序后追加,保证跨运行结果一致。
+        let orphanFolderIDs = layout.folders.keys
+            .filter { !consumedFolderIDs.contains($0) }
+            .sorted { $0.rawValue < $1.rawValue }
+
+        for folderID in orphanFolderIDs {
+            guard let folder = layout.folders[folderID] else { continue }
+            let children = uniqueChildren(of: folder)
+
+            if children.count >= 2 {
+                var normalizedFolder = folder
+                normalizedFolder.children = children
+                normalizedFolders[folderID] = normalizedFolder
+                appendAtEnd(.folder(folderID))
+            } else if let child = children.first {
+                appendAtEnd(.app(child))
+            }
+        }
+
+        return LayoutSnapshot(
+            pages: normalizedPages,
+            folders: normalizedFolders,
+            missingApps: layout.missingApps
+        )
+    }
 
     public static func reconcile(
         catalog: CatalogSnapshot,
@@ -19,39 +120,40 @@ public enum LayoutReconciler {
         now: Date,
         gracePeriod: TimeInterval = LayoutReconciler.defaultGracePeriod
     ) -> LayoutSnapshot {
-        var pages = layout.pages
-        var folders = layout.folders
+        let catalogIDs = Set(catalog.apps.map(\.id))
         var missing = layout.missingApps
 
-        let catalogIDs = Set(catalog.apps.map(\.id))
-
-        // 移除孤儿文件夹项(引用了不存在的 FolderID)
-        var cleanedPages: [[LayoutItem]] = []
-        for page in pages {
-            let cleaned = page.filter { item in
-                switch item {
-                case .app:
-                    return true
-                case .folder(let id):
-                    return folders[id] != nil
+        // 先计算当前调用中真正会过期的墓碑,让同一归一化遍历同时移除其引用。
+        // 已回归目录的 AppID 与旧逻辑一致: 不因旧墓碑过期而删除。
+        let expiredIDs: Set<AppID> = Set(
+            missing.compactMap { id, state in
+                guard !catalogIDs.contains(id),
+                      state.missingSince.addingTimeInterval(gracePeriod) <= now else {
+                    return nil
                 }
+                return id
             }
-            if !cleaned.isEmpty {
-                cleanedPages.append(cleaned)
-            }
-        }
-        pages = cleanedPages
+        )
 
-        let referenced = LayoutSnapshot(
-            pages: pages,
-            folders: folders
-        ).referencedAppIDs
+        let normalized = normalize(layout: layout, excluding: expiredIDs)
+        var pages = normalized.pages
+
+        for id in expiredIDs {
+            missing.removeValue(forKey: id)
+        }
+
+        let referenced = normalized.referencedAppIDs
 
         // 新应用: 在 Catalog 中、布局未引用 → 追加到最后一页(按 AppID 排序,确定性)
         // 若存在无引用的墓碑(罕见: 引用已被手动移除),清除墓碑并重新加入。
-        let newApps = catalog.apps
-            .filter { !referenced.contains($0.id) }
-            .map(\.id)
+        var appendedAppIDs = Set<AppID>()
+        let newApps = catalog.apps.compactMap { record -> AppID? in
+            guard !referenced.contains(record.id),
+                  appendedAppIDs.insert(record.id).inserted else {
+                return nil
+            }
+            return record.id
+        }
         if !newApps.isEmpty {
             for id in newApps {
                 missing.removeValue(forKey: id)
@@ -76,92 +178,9 @@ public enum LayoutReconciler {
             missing.removeValue(forKey: id)
         }
 
-        // 过期墓碑: 从页面与文件夹子项移除,清除墓碑
-        let expiredIDs = missing
-            .filter { $0.value.missingSince.addingTimeInterval(gracePeriod) <= now }
-            .map(\.key)
-        if !expiredIDs.isEmpty {
-            let expiredSet = Set(expiredIDs)
-            pages = pages.compactMap { page in
-                let cleaned = page.filter { item in
-                    switch item {
-                    case .app(let id):
-                        return !expiredSet.contains(id)
-                    case .folder:
-                        return true
-                    }
-                }
-                return cleaned.isEmpty ? nil : cleaned
-            }
-            for (folderID, var folder) in folders {
-                let before = folder.children.count
-                folder.children.removeAll { expiredSet.contains($0) }
-                if folder.children.count != before {
-                    folders[folderID] = folder
-                }
-            }
-            for id in expiredIDs {
-                missing.removeValue(forKey: id)
-            }
-        }
-
-        // 空文件夹: 确定性解散(从页面与文件夹表移除)
-        let emptyFolderIDs = folders.filter { $0.value.children.isEmpty }.map(\.key)
-        if !emptyFolderIDs.isEmpty {
-            let emptySet = Set(emptyFolderIDs)
-            pages = pages.compactMap { page in
-                let cleaned = page.filter { item in
-                    switch item {
-                    case .app:
-                        return true
-                    case .folder(let id):
-                        return !emptySet.contains(id)
-                    }
-                }
-                return cleaned.isEmpty ? nil : cleaned
-            }
-            for id in emptyFolderIDs {
-                folders.removeValue(forKey: id)
-            }
-        }
-
-        // 单应用文件夹: 基于当前 folders 快照原子解散,以唯一 child 替换页面槽。
-        // 页面按原顺序扫描;重复的页面 AppID 只保留首次引用,避免解散后产生重复应用。
-        let singleChildApps = folders.reduce(into: [FolderID: AppID]()) { result, entry in
-            guard entry.value.children.count == 1,
-                  let child = entry.value.children.first else {
-                return
-            }
-            result[entry.key] = child
-        }
-
-        var seenPageApps = Set<AppID>()
-        pages = pages.compactMap { page in
-            let rewritten = page.compactMap { item -> LayoutItem? in
-                switch item {
-                case .app(let id):
-                    guard seenPageApps.insert(id).inserted else { return nil }
-                    return .app(id)
-                case .folder(let id):
-                    if let child = singleChildApps[id] {
-                        guard seenPageApps.insert(child).inserted else { return nil }
-                        return .app(child)
-                    }
-                    // 防御性处理: 页面中若仍有不存在的文件夹引用,不让它进入结果。
-                    guard folders[id] != nil else { return nil }
-                    return .folder(id)
-                }
-            }
-            return rewritten.isEmpty ? nil : rewritten
-        }
-
-        for id in singleChildApps.keys {
-            folders.removeValue(forKey: id)
-        }
-
         return LayoutSnapshot(
             pages: pages,
-            folders: folders,
+            folders: normalized.folders,
             missingApps: missing
         )
     }
