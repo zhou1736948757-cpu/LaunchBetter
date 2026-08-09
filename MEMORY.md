@@ -108,6 +108,14 @@ v0.2.3 release commit (tag `v0.2.3`); 基线为 `v0.2.2` / `9ee1264`
 - visual-reviewer(mimo)4 次误报(镜像/缺字形/裁切/搜索空), 均被像素级证据证伪;
   唯一真实捕获 = 搜索顶行裁切 → 促成 flipped 修复
 
+## 编排规则(2026-08-10 用户明确)
+
+- **实现一律走独立 implementer 窗口**(`opencode run -m opencode-go/deepseek-v4-flash`),
+  与主对话完全隔离上下文, 防污染。任务包模板见 .opencode/agents/implementer.md;
+  主对话禁止在同一会话改生产代码(只做规划/打包/验证/提交/评审)
+- **超长 Prompt 协议**: 收到长任务先"解析回读关键约束清单 → 用户确认 → 拆 todo → 外部化
+  到 Docs/Tasks/ 或 MEMORY → 逐项验收", 不依赖模型记忆(防遗忘/防幻觉)
+
 ## 阶段收尾规则(用户要求, 必须执行)
 
 每个大阶段完成后:

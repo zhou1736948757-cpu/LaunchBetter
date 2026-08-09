@@ -66,20 +66,34 @@ xcodebuild -project LaunchBetter.xcodeproj -scheme LaunchBetter test
 - 禁止: force push、重写已发布历史、未授权重置用户工作、删除含未合并工作的分支
 - 提交信息简明描述变更
 
-## 模型路由(用户指令,2026-08-09 更新)
+## 模型路由(用户指令,2026-08-10 更新)
 
 - **总控(主对话)**: opencode-go/deepseek-v4-flash —— 阶段规划、任务打包、调度评审、
-  验证收口、Git 提交、MEMORY 维护
-- **实现(独立 subagent)**: opencode-go/deepseek-v4-flash **variant: max**(Max 思考深度),
-  经 `.opencode/agents/implementer.md` 单独窗口运行,与主对话**完全隔离上下文**(防污染)。
-  总控只给任务包(范围/约束/验收/必写测试),implementer 返回(改动清单/假设清单/测试结果/偏差);
-  总控收到后必须独立验证,不盲信。**所有 DeepSeek sub agent 一律 variant: max**
+  验证收口、Git 提交、MEMORY 维护。
+  **总控不直接写生产代码** —— 实现一律交独立 implementer 窗口(防上下文污染)。
+- **实现(独立 subagent)**: opencode-go/deepseek-v4-flash **variant: max**(Max 思考深度)。
+  运行方式: `opencode run -m opencode-go/deepseek-v4-flash "<任务包指令>"` 起独立窗口,
+  与主对话**完全隔离上下文**。任务包在 `Docs/Tasks/<name>.md`(模板见 implementer.md);
+  implementer 返回(改动清单/假设清单/测试结果/偏差/进度 `[PROGRESS]`);
+  总控收到后必须独立验证(build/测试/探针),不盲信。
+  **主对话禁止在同一会话里改生产文件**;只有总控的验证/提交/评审属例外。
 - **方案门 + 阶段评审**: opencode-go/gpt-5.6-luna (variant: max),经 `.opencode/agents/reviewer.md`
   独立窗口 —— 高风险任务(几何/手势/并发/性能)动手前先评审执行计划;阶段末评审
   0 BLOCKER 0 MAJOR 才能完成
 - **视觉评审**: opencode-go/mimo-v2.5,经 `.opencode/agents/visual-reviewer.md` —— 仅截图证据场景;
   视觉结论必须经像素级验证后采纳(该项目 4 次误报记录)
 - **仲裁**: opencode-go/qwen3.8-max —— Flash 与 Luna 分歧、疑难调试,慎用
+
+## 超长 Prompt 处理协议
+
+收到超长/多阶段任务 Prompt 时,总控必须先做以下步骤再动手(防遗忘/防幻觉):
+
+1. **解析并回读**: 提取"目标 / 禁止项 / 完成条件 / 关键数值 / 验收 gate",输出一份
+   结构化关键约束清单,**请用户确认后再执行**(用户确认或回复"执行"即放行)
+2. **拆 todo**: 每个可验证单元一条;完成条件逐项对应 §XX
+3. **外部化**: 关键约束/禁止项/数值写入 `Docs/Tasks/<name>.md` 或 MEMORY,不依赖模型记忆
+4. **逐项验收**: 阶段结束按完成条件清单逐条核对并输出,对照原文
+5. 若用户不确认,默认只做探索/只读分析,不动生产代码
 
 ## 单一写者规则
 
