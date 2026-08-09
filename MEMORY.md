@@ -21,7 +21,7 @@
 
 ## Current Phase
 
-**v0.1.6 — Interaction Quality + Performance Consolidation 完成(评审 0 BLOCKER, 2 MAJOR+4 MINOR 已修)**, 已安装 /Applications, tag v0.1.6
+**v0.1.7 — 吸附阈值调低(用户实测反馈): displacementThreshold 0.30→0.21(原值 70%, 滑更少即翻页)**, 已安装 /Applications, tag v0.1.7
 
 ## v0.1.6 关键成果(已验证)
 
