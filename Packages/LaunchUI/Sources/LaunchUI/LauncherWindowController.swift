@@ -308,13 +308,13 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
     public func threeFingerDragUpdate() {
         guard let drag = dragController, let window else { return }
         let windowPoint = window.convertPoint(fromScreen: NSEvent.mouseLocation)
-        drag.updateDrag(at: windowPoint)
+        drag.updateDrag(at: windowPoint, inputSource: .threeFinger)
     }
 
     public func threeFingerDragEnd() {
         guard let drag = dragController, let window else { return }
         let windowPoint = window.convertPoint(fromScreen: NSEvent.mouseLocation)
-        drag.endDrag(at: windowPoint)
+        drag.endDrag(at: windowPoint, inputSource: .threeFinger)
     }
 
     public func threeFingerDragCancel() {

@@ -97,6 +97,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
                 self?.runSearchProbe()
             }
+        } else if CommandLine.arguments.contains("--threefingerdiag") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
+                guard let container = self?.container else {
+                    print("3FDIAG FAIL")
+                    NSApp.terminate(nil)
+                    return
+                }
+                print("3FDIAG engine=\(container.activationCoordinator.diagnostics())")
+                print("3FDIAG coordinator=\(container.threeFingerCoordinator.diagnostics())")
+                print("3FDIAG windowVisible=\(container.windowController.isVisible)")
+                print("3FDIAG OK")
+                NSApp.terminate(nil)
+            }
         } else if CommandLine.arguments.contains("--dragcacheprobe") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
                 self?.runDragCacheProbe()

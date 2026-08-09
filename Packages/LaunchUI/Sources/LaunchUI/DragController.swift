@@ -104,14 +104,16 @@ final class DragController {
     }
 
     /// 拖拽移动(高频写入缓冲, 仅最新样本生效)。
-    func updateDrag(at point: NSPoint) {
-        guard state == .dragging else { return }
+    /// inputSource 必须与 session owner 一致, 否则拒绝(Stage 2 M5: 迟到事件不污染他源 session)。
+    func updateDrag(at point: NSPoint, inputSource: DragInputSource = .mouse) {
+        guard state == .dragging, activeInputSource == inputSource else { return }
         sampleBuffer.write(point, session: sessionID)
     }
 
     /// 结束拖拽: 计算 drop 并应用一次结构更新。
-    func endDrag(at point: NSPoint) {
-        guard state == .dragging, let item = sourceItem else {
+    /// inputSource 必须与 session owner 一致(Stage 2 M5), 否则不提交、直接取消。
+    func endDrag(at point: NSPoint, inputSource: DragInputSource = .mouse) {
+        guard state == .dragging, activeInputSource == inputSource, let item = sourceItem else {
             cancelDrag()
             return
         }
