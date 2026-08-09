@@ -10,13 +10,15 @@ import os
 /// ```
 /// image(for:) → memory hit? → 返回
 ///            → inFlight[key]? → 等待共享任务
-///            → 创建任务并注册(首个挂起点之前)→ 磁盘 → 实时 → 预解码 → 内存+磁盘
+///            → 创建任务并注册(首个挂起点之前)→ 磁盘 → 实时 → 内存 + 异步磁盘写
 /// ```
 /// 约束:
 /// - in-flight 条目必须在首个挂起点前注册(防重复磁盘请求, §75)
 /// - 消费者取消不杀死共享任务(§81): 取消语义 = 不应用结果给该消费者
 /// - 图标完成只更新对应缓存条目,不触发目录/布局刷新
 /// - 内存压力: 保留集裁剪 → 激进裁剪 → 全清(§77);磁盘缓存保留
+/// - live 结果不再二次光栅化(§A5): provider 已输出精确 pixelSize 显示就绪位图
+/// - 磁盘写交独立 DiskCacheWriter(§A6): resolve 不等 PNG encode + 原子写盘
 public actor IconRepository {
     public enum MemoryPressureLevel: Sendable {
         case hidden        // 启动器隐藏: 裁剪低优先级
@@ -27,6 +29,7 @@ public actor IconRepository {
     private let memoryCache: IconMemoryCache
     private let diskCache: IconDiskCache
     private let provider: any AppIconProviding
+    private let diskWriter: any IconDiskWriting
 
     private var inFlight: [IconKey: Task<CGImage?, Never>] = [:]
     private let log = OSLog(subsystem: "dev.launchbetter", category: "IconRepository")
@@ -37,6 +40,8 @@ public actor IconRepository {
     public private(set) var memoryHits = 0
     public private(set) var diskHits = 0
     public private(set) var liveResolves = 0
+
+    /// 已提交给 writer 的磁盘写请求数(写异步执行;成功与否由 writer 记录,§A6)。
     public private(set) var diskWrites = 0
 
     public struct IconStats: Sendable {
@@ -59,11 +64,13 @@ public actor IconRepository {
     public init(
         memoryCache: IconMemoryCache,
         diskCache: IconDiskCache,
-        provider: any AppIconProviding
+        provider: any AppIconProviding,
+        diskWriter: (any IconDiskWriting)? = nil
     ) {
         self.memoryCache = memoryCache
         self.diskCache = diskCache
         self.provider = provider
+        self.diskWriter = diskWriter ?? DiskCacheWriter(rootURL: diskCache.rootURL)
 
         let source = DispatchSource.makeMemoryPressureSource(
             eventMask: [.warning, .critical], queue: .global(qos: .utility)
@@ -78,17 +85,24 @@ public actor IconRepository {
         source.resume()
     }
 
-    /// 显式生命周期收尾(M3): 取消内存压力源、清除 in-flight 与内存缓存。
+    /// 显式生命周期收尾(M3): 取消内存压力源、清除 in-flight 与内存缓存,
+    /// 并等待已提交的磁盘写完成(§A6 干净 shutdown)。
     /// 幂等;调用后存储库仍可用于读取(缓存重建),但不再接收系统内存压力事件。
-    public func shutdown() {
+    public func shutdown() async {
         guard !shutdownCalled else { return }
         shutdownCalled = true
         memoryPressureSource.cancel()
         inFlight.removeAll()
         memoryCache.removeAll()
+        await diskWriter.flush()
     }
 
     private var shutdownCalled = false
+
+    /// 等待所有已提交的磁盘写完成(干净 shutdown / 测试同步)。幂等。
+    public func waitForPendingDiskWrites() async {
+        await diskWriter.flush()
+    }
 
     /// 请求图标(异步,幂等)。
     ///
@@ -175,14 +189,18 @@ public actor IconRepository {
         guard isCurrent(key.appID, generation: generation) else { return nil }
         liveResolves += 1
 
-        let decoded = preDecode(live, pixelSize: key.pixelSize) ?? live
+        // A5: live provider 已输出"精确 pixelSize + 显示就绪"位图,不再二次光栅化;
+        // 仅当尺寸与请求不符时回退 preDecode(防御,provider 契约之外)。
+        let decoded = isDisplayReady(live, pixelSize: key.pixelSize)
+            ? live
+            : (preDecode(live, pixelSize: key.pixelSize) ?? live)
         storeInMemory(decoded, key: key)
-        do {
-            try diskCache.store(key: key, image: decoded)
+        // A6: 磁盘写交独立 writer(有界/按 key 去重/异步),resolve 不等写盘。
+        if await diskWriter.enqueue(key: key, image: decoded) {
             diskWrites += 1
-        } catch {
-            // 磁盘写入失败不阻断返回(可再生缓存)
         }
+        // M2: 入队挂起点后复验代际,陈旧任务不得发布结果。
+        guard isCurrent(key.appID, generation: generation) else { return nil }
         return decoded
     }
 
@@ -199,7 +217,14 @@ public actor IconRepository {
         memoryCache.insert(image, for: key)
     }
 
+    /// A5: live provider 契约输出"精确 pixelSize 显示就绪"位图(渲染自 NSImage, 非惰性解码)。
+    /// 尺寸与请求一致视为显示就绪,跳过二次光栅化。
+    private func isDisplayReady(_ image: CGImage, pixelSize: Int) -> Bool {
+        image.width == pixelSize && image.height == pixelSize
+    }
+
     /// 预解码: 绘制到显示就绪位图(BGRA premultiplied),避免惰性解码上显示路径(§79)。
+    /// 仅磁盘加载路径需要(磁盘 PNG 非显示就绪);live 路径由 isDisplayReady 短路。
     private func preDecode(_ image: CGImage, pixelSize: Int) -> CGImage? {
         guard let context = CGContext(
             data: nil,

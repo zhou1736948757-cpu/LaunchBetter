@@ -8,12 +8,14 @@ import LaunchCore
 struct IconRepositoryTests {
     private func makeRepository(
         provider: TestIconProvider,
-        root: URL
+        root: URL,
+        writer: (any IconDiskWriting)? = nil
     ) -> IconRepository {
         IconRepository(
             memoryCache: IconMemoryCache(costLimitBytes: 50_000_000),
             diskCache: IconDiskCache(rootURL: root),
-            provider: provider
+            provider: provider,
+            diskWriter: writer
         )
     }
 
@@ -52,6 +54,78 @@ struct IconRepositoryTests {
         #expect(await repo.memoryHits == 1)
     }
 
+    @Test("A5 live 路径不二次光栅化: 返回 provider 同一对象")
+    func livePathNoRedecode() async throws {
+        let provider = TestIconProvider()
+        let root = try tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let repo = makeRepository(provider: provider, root: root)
+        let key = iconKey()
+
+        let image = await repo.image(for: key)
+        let provided = await provider.lastImage
+        #expect(image != nil)
+        #expect(provided != nil)
+        #expect(image === provided, "live 显示就绪位图应直接返回, 不二次光栅化")
+    }
+
+    @Test("A5 1x/2x 像素尺寸与请求一致")
+    func livePathPixelSizeMatches() async throws {
+        let provider = TestIconProvider()
+        let root = try tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let repo = makeRepository(provider: provider, root: root)
+
+        let scale1 = iconKey(pointSize: 48, scale: 1)
+        let scale2 = iconKey(pointSize: 48, scale: 2)
+        let img1 = await repo.image(for: scale1)
+        let img2 = await repo.image(for: scale2)
+        #expect(img1?.width == 48)
+        #expect(img1?.height == 48)
+        #expect(img2?.width == 96)
+        #expect(img2?.height == 96)
+    }
+
+    @Test("A6 resolve 不等磁盘写: 慢写器下首显不劣化, 返回时写未完成")
+    func resolveDoesNotWaitForDiskWrite() async throws {
+        let provider = TestIconProvider()
+        let writer = SlowIconDiskWriter(storeDelay: 400_000_000) // 400ms 慢写
+        let root = try tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let repo = makeRepository(provider: provider, root: root, writer: writer)
+        let key = iconKey()
+
+        let start = Date()
+        let image = await repo.image(for: key)
+        let elapsedMs = Date().timeIntervalSince(start) * 1000
+        #expect(image != nil)
+        #expect(elapsedMs < 300, "resolve 不应等待 400ms 慢磁盘写(实际 \(elapsedMs)ms)")
+        #expect(await writer.storeCount == 0, "resolve 返回时磁盘写仍未完成")
+        #expect(await writer.enqueueCount == 1, "resolve 已提交写请求")
+
+        await repo.waitForPendingDiskWrites()
+        #expect(await writer.storeCount == 1, "写最终异步完成")
+    }
+
+    @Test("A6 磁盘写失败不阻断 resolve 返回图像")
+    func resolveSurvivesDiskWriteFailure() async throws {
+        let provider = TestIconProvider()
+        // 父路径被文件占据 → 磁盘写必然失败(可再生缓存, 仅记录)
+        let root = try tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let blocker = root.appendingPathComponent("blocker")
+        try Data().write(to: blocker)
+        let badRoot = blocker.appendingPathComponent("Icons")
+        let writer = DiskCacheWriter(rootURL: badRoot)
+        let repo = makeRepository(provider: provider, root: badRoot, writer: writer)
+
+        let key = iconKey()
+        let image = await repo.image(for: key)
+        #expect(image != nil, "写失败仍应返回图像")
+        await repo.waitForPendingDiskWrites() // 不抛错
+    }
+
     @Test("in-flight 去重: 并发请求只调一次 provider")
     func inFlightDedup() async throws {
         let provider = TestIconProvider()
@@ -79,6 +153,7 @@ struct IconRepositoryTests {
         let key = iconKey()
 
         _ = await repo.image(for: key)
+        await repo.waitForPendingDiskWrites() // A6: 等异步写完成, 模拟"重启时已落盘"
         // 模拟冷启动: 新 repository(同一磁盘缓存)
         let repo2 = makeRepository(provider: provider, root: root)
         let image = await repo2.image(for: key)
@@ -189,6 +264,7 @@ struct IconRepositoryTests {
         let k2 = iconKey(app: "/B.app")
         _ = await repo.image(for: k1)
         _ = await repo.image(for: k2)
+        await repo.waitForPendingDiskWrites() // 等异步写完成, 逐出后可回读磁盘
 
         await repo.trimMemory(keeping: [k1], level: .hidden)
         #expect(await repo.image(for: k1) != nil, "保留键应仍在内存")
@@ -210,6 +286,7 @@ struct IconRepositoryTests {
         let keyB = iconKey(app: "/B.app")
         _ = await repo.image(for: keyA)
         _ = await repo.image(for: keyB)
+        await repo.waitForPendingDiskWrites() // 等异步写完成, 失效后可回读磁盘
         await repo.invalidate(appID: AppID("/A.app")!)
 
         let fromDisk = await repo.image(for: keyA)

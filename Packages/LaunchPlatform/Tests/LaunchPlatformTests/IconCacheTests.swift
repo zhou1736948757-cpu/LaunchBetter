@@ -37,6 +37,7 @@ func iconKey(
 
 actor TestIconProvider: AppIconProviding {
     private(set) var callCount = 0
+    private(set) var lastImage: CGImage?
     private var delayNanoseconds: UInt64 = 0
 
     func setDelay(_ nanoseconds: UInt64) {
@@ -48,7 +49,40 @@ actor TestIconProvider: AppIconProviding {
         if delayNanoseconds > 0 {
             try? await Task.sleep(nanoseconds: delayNanoseconds)
         }
-        return makeImage(size: pixelSize, gray: 0.3)
+        let image = makeImage(size: pixelSize, gray: 0.3)
+        lastImage = image
+        return image
+    }
+}
+
+/// 慢磁盘写 fake: enqueue 快(模拟入队路径无 IO),store 慢(模拟 PNG encode + 写盘)。
+/// 用于断言 resolve 不等待磁盘写完成。
+actor SlowIconDiskWriter: IconDiskWriting {
+    private(set) var enqueueCount = 0
+    private(set) var storeCount = 0
+    private var storeDelay: UInt64
+    private var storeTask: Task<Void, Never>?
+
+    init(storeDelay nanoseconds: UInt64) {
+        storeDelay = nanoseconds
+    }
+
+    @discardableResult
+    func enqueue(key: IconKey, image: CGImage) async -> Bool {
+        enqueueCount += 1
+        if storeTask == nil {
+            storeTask = Task { await self.slowStore() }
+        }
+        return true
+    }
+
+    func flush() async {
+        await storeTask?.value
+    }
+
+    private func slowStore() async {
+        try? await Task.sleep(nanoseconds: storeDelay)
+        storeCount += 1
     }
 }
 
@@ -255,5 +289,67 @@ struct IconDiskCacheTests {
         try Data("garbage".utf8).write(to: url)
         #expect(cache.load(key: key) == nil)
         #expect(!FileManager.default.fileExists(atPath: url.path), "损坏文件应被删除")
+    }
+}
+
+@Suite("DiskCacheWriter 异步写")
+struct DiskCacheWriterTests {
+    private func tempRoot() throws -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("IconWriterTests-\(UUID().uuidString)")
+    }
+
+    @Test("按 key 去重: 同 key 仅一次写, 多 key 全部落盘")
+    func dedupAndDrainAll() async throws {
+        let root = try tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cache = IconDiskCache(rootURL: root)
+        let writer = DiskCacheWriter(rootURL: root)
+        let img = try #require(makeImage(size: 192))
+
+        let k1 = iconKey(app: "/A.app")
+        let k2 = iconKey(app: "/B.app")
+        #expect(await writer.enqueue(key: k1, image: img) == true)
+        #expect(await writer.enqueue(key: k1, image: img) == false, "同 key 重复入队被去重")
+        #expect(await writer.enqueue(key: k2, image: img) == true)
+
+        await writer.flush()
+        #expect(cache.load(key: k1) != nil, "写完成后 k1 磁盘可读")
+        #expect(cache.load(key: k2) != nil, "写完成后 k2 磁盘可读")
+        let loaded = cache.load(key: k1)
+        #expect(loaded?.width == 192)
+    }
+
+    @Test("写失败不抛错: 损坏目标路径仅记录, 不中断 writer")
+    func storeFailureTolerated() async throws {
+        let root = try tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let blocker = root.appendingPathComponent("blocker")
+        try Data().write(to: blocker)
+        let badRoot = blocker.appendingPathComponent("Icons")
+        let writer = DiskCacheWriter(rootURL: badRoot)
+        let img = try #require(makeImage(size: 192))
+
+        #expect(await writer.enqueue(key: iconKey(), image: img) == true)
+        await writer.flush() // store 抛错, flush 不抛出
+        #expect(await writer.enqueue(key: iconKey(app: "/C.app"), image: img) == true, "失败后 writer 仍可用")
+    }
+
+    @Test("flush 等待全部写完成: 返回后磁盘全部可读")
+    func flushWaitsForCompletion() async throws {
+        let root = try tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cache = IconDiskCache(rootURL: root)
+        let writer = DiskCacheWriter(rootURL: root)
+        let img = try #require(makeImage(size: 96))
+
+        for i in 0..<20 {
+            _ = await writer.enqueue(key: iconKey(app: "/App\(i).app"), image: img)
+        }
+        await writer.flush()
+        for i in 0..<20 {
+            #expect(cache.load(key: iconKey(app: "/App\(i).app")) != nil)
+        }
     }
 }
