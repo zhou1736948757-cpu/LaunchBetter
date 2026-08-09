@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		0D5A02D46D0122A622298A74 /* ActivationCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C34AB424D5AF0AE055AF24D /* ActivationCoordinator.swift */; };
 		4B4DA07E558E44CB0E148630 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 977BB904E1D1E96A25A079FC /* AppDelegate.swift */; };
+		6C94E77306BCF04C683B5052 /* ThreeFingerDragCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A257A4CDFADF5CB520111144 /* ThreeFingerDragCoordinator.swift */; };
 		78FF293876DA8791FD534F60 /* LaunchCore in Frameworks */ = {isa = PBXBuildFile; productRef = 022C22583EB95E8DB7E533DA /* LaunchCore */; };
 		97CAF62410D849C74D1ED8FE /* LaunchUI in Frameworks */ = {isa = PBXBuildFile; productRef = BFBADDC8868444DA8FEB4241 /* LaunchUI */; };
 		BB5EC826ACB1AF62EE21847B /* IconImageAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E4FB7BAF0189E406E0361FE /* IconImageAdapter.swift */; };
@@ -31,6 +32,7 @@
 		7F48F69D4EFE02FA4BFC2085 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		977BB904E1D1E96A25A079FC /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		A07D65125EC0696A81DDDC45 /* LaunchUI */ = {isa = PBXFileReference; lastKnownFileType = folder; name = LaunchUI; path = Packages/LaunchUI; sourceTree = SOURCE_ROOT; };
+		A257A4CDFADF5CB520111144 /* ThreeFingerDragCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreeFingerDragCoordinator.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -57,6 +59,7 @@
 				3667895D56B49968ADB46248 /* LauncherStore.swift */,
 				5363485EFF16DF98D8CCB975 /* LauncherWindowCoordinator.swift */,
 				7F48F69D4EFE02FA4BFC2085 /* main.swift */,
+				A257A4CDFADF5CB520111144 /* ThreeFingerDragCoordinator.swift */,
 			);
 			path = LaunchBetterApp;
 			sourceTree = "<group>";
@@ -161,6 +164,7 @@
 				BB5EC826ACB1AF62EE21847B /* IconImageAdapter.swift in Sources */,
 				C7367F5C43E434A600DE07D2 /* LauncherStore.swift in Sources */,
 				F0D06B4E758A2F503166B24E /* LauncherWindowCoordinator.swift in Sources */,
+				6C94E77306BCF04C683B5052 /* ThreeFingerDragCoordinator.swift in Sources */,
 				D787CB7DB7A8142C2793057B /* main.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

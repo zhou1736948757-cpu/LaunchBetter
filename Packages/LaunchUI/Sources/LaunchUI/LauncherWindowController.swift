@@ -24,6 +24,9 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
 
     private var visible = false
 
+    /// 可见性变化回调(三指拖动等按面板显示启用, Stage 2)。
+    public var onVisibilityChange: ((Bool) -> Void)?
+
     public init(
         store: any LauncherStoring,
         iconProvider: (any IconImageProviding)?,
@@ -143,6 +146,7 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         lastShowStart = showStart
         guard let window, let launcherWindow = window as? LauncherWindow else { return }
         launcherWindow.showOnScreen(containing: NSEvent.mouseLocation)
+        onVisibilityChange?(true)
         // 语言可能已变更: 刷新本地化文案
         searchField.placeholderString = L10n.t(.searchPlaceholder)
         updateBackground(for: window)
@@ -211,6 +215,7 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
     public func hide() {
         guard visible else { return }
         visible = false
+        onVisibilityChange?(false)
         // M4: 隐藏时终止拖拽(display link/overlay 清理)
         dragController?.shutdown()
         iconProvider?.trimMemoryForHidden()
@@ -282,6 +287,38 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
     /// 诊断: 手动驱动一帧(无 display link 环境, v0.1.6 §69)。
     public func dragProbeTick(_ point: NSPoint) {
         gridViewController?.dragController?.probeProcessTick(point)
+    }
+
+    /// 是否有活动拖拽(Stage 2 三指 enable/disable 检查)。
+    public func hasActiveDrag() -> Bool {
+        dragController?.isDragging ?? false
+    }
+
+    /// 三指拖动: 反查指针下图标并开始拖拽(Stage 2)。返回是否成功开始。
+    /// 位置语义与旧 LaunchHistory 一致: 用 NSEvent.mouseLocation(指针), 非触点中心。
+    public func threeFingerDragBegin() -> Bool {
+        guard let grid = gridViewController, let drag = dragController else { return false }
+        guard let window else { return false }
+        let windowPoint = window.convertPoint(fromScreen: NSEvent.mouseLocation)
+        guard let item = grid.itemAt(point: windowPoint) else { return false }
+        drag.beginDrag(item: item, at: windowPoint, inputSource: .threeFinger)
+        return drag.isDragging
+    }
+
+    public func threeFingerDragUpdate() {
+        guard let drag = dragController, let window else { return }
+        let windowPoint = window.convertPoint(fromScreen: NSEvent.mouseLocation)
+        drag.updateDrag(at: windowPoint)
+    }
+
+    public func threeFingerDragEnd() {
+        guard let drag = dragController, let window else { return }
+        let windowPoint = window.convertPoint(fromScreen: NSEvent.mouseLocation)
+        drag.endDrag(at: windowPoint)
+    }
+
+    public func threeFingerDragCancel() {
+        dragController?.cancelDrag()
     }
 
     /// 拖拽缓存诊断(v0.1.6 §64): 同 destination 停留时 preview/transform 写应不增长。

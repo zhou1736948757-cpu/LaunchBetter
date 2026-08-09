@@ -1,11 +1,13 @@
 import Foundation
+import LaunchCore
 
-/// 手势捕获引擎(§115): 四指捏合 → 事件;与 UI/Store 完全解耦。
+/// 手势捕获引擎(§115): 四指捏合 + 三指拖动 → 事件;与 UI/Store 完全解耦。
 ///
-/// - 引擎只发出 GestureEvent(闭合回调), 不直接操作 LauncherStore/窗口
-/// - 回调在系统线程高频到达 → 事件缓冲仅保留最新一帧(PinchAnalyzer 串行消费)
+/// - 引擎只发出 GestureEvent / ThreeFingerGestureEvent(闭合回调), 不直接操作 LauncherStore/窗口
+/// - 回调在系统线程高频到达 → 事件缓冲仅保留最新一帧(PinchAnalyzer / ThreeFingerDragRecognizer 串行消费)
 /// - 优雅不可用: 框架缺失/无设备 → isAvailable == false, 不崩溃
 /// - 输入监控权限缺失: 回调不到达 → 启动后无回调超时检测
+/// - 单一 MTDevice subscription, 按 finger count 路由: 3 指 → 三指拖动, 4+ 指 → pinch(Stage 2 §19)
 public final class GestureCaptureEngine: @unchecked Sendable {
     public enum Status: Sendable, Equatable {
         case unavailable          // 框架缺失或无设备
@@ -16,6 +18,7 @@ public final class GestureCaptureEngine: @unchecked Sendable {
     private let lock = NSLock()
     private var multitouch: MultitouchSupport?
     private var analyzer = PinchAnalyzer()
+    private var threeFinger = ThreeFingerDragRecognizer()
     private var pendingSamples: [ContactSample]?
     private var receivedAnyCallback = false
     /// 设备是否成功枚举(>0 = 授权已生效, 回调只在触摸时到达, 不能据此判断权限)
@@ -27,6 +30,9 @@ public final class GestureCaptureEngine: @unchecked Sendable {
 
     /// 手势事件回调(后台队列; 高频路径仅最新帧)。
     public var onGesture: (@Sendable (GestureEvent) -> Void)?
+
+    /// 三指拖动手势事件回调(后台线程; 与 pinch 同源、按 finger count 路由)。
+    public var onThreeFingerGesture: (@Sendable (ThreeFingerGestureEvent) -> Void)?
 
     /// 状态变化回调。
     public var onStatusChange: (@Sendable (Status) -> Void)?
@@ -118,6 +124,21 @@ public final class GestureCaptureEngine: @unchecked Sendable {
         var analyzer = self.analyzer
         let event = analyzer.process(contacts: frame, now: Date(timeIntervalSince1970: timestamp))
         self.analyzer = analyzer
+        // 三指: 提取活跃触点归一化坐标 → 纯逻辑识别(微秒级, 就地执行)
+        var threeFinger = self.threeFinger
+        let activePoints = frame
+            .filter(\.isOnSurface)
+            .map(\.normalized)
+        threeFingerRawFrameCount += 1
+        let threeEvent = threeFinger.process(points: activePoints)
+        self.threeFinger = threeFinger
+        if let threeEvent {
+            switch threeEvent {
+            case .began: threeFingerBeginCount += 1
+            case .changed: threeFingerUpdateCount += 1
+            case .ended: threeFingerEndCount += 1
+            }
+        }
         let elapsed = DispatchTime.now().uptimeNanoseconds - start
         lock.unlock()
 
@@ -139,6 +160,22 @@ public final class GestureCaptureEngine: @unchecked Sendable {
         if let event {
             onGesture?(event)
         }
+        if let threeEvent, let onThreeFingerGesture {
+            onThreeFingerGesture(threeEvent)
+        }
+    }
+
+    // MARK: - 三指诊断计数(Stage 2 §37)
+
+    /// 三指原始帧计数 / 各阶段事件计数。
+    public private(set) var threeFingerRawFrameCount = 0
+    public private(set) var threeFingerBeginCount = 0
+    public private(set) var threeFingerUpdateCount = 0
+    public private(set) var threeFingerEndCount = 0
+
+    /// 三指诊断快照。
+    public func threeFingerStats() -> String {
+        "rawFrames=\(threeFingerRawFrameCount) begin=\(threeFingerBeginCount) update=\(threeFingerUpdateCount) end=\(threeFingerEndCount)"
     }
 
     private func checkPermissionTimeout() {

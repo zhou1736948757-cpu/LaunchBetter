@@ -12,6 +12,7 @@ public final class DependencyContainer {
     public let directoryMonitor: DirectoryMonitor
     public let activationCoordinator: ActivationCoordinator
     public let settingsController: SettingsWindowController
+    let threeFingerCoordinator: ThreeFingerDragCoordinator
 
     public init() {
         let bundleID = Bundle.main.bundleIdentifier ?? "dev.launchbetter.LaunchBetter"
@@ -111,10 +112,12 @@ public final class DependencyContainer {
         )
         self.windowController = windowController
 
-        // 激活: 四指手势 + 全局热键 + 热角(§115)
+        // 激活: 四指手势 + 三指拖动 + 全局热键 + 热角(§115 / Stage 2)
+        // 单一 GestureCaptureEngine: 三指(拖动)与四指(pinch)按 finger count 路由(Stage 2 §19)
+        let gestureEngine = GestureCaptureEngine()
         let activation = ActivationCoordinator(
             windowController: windowController,
-            gestureEngine: GestureCaptureEngine(),
+            gestureEngine: gestureEngine,
             hotkey: GlobalHotkey()
         )
         activation.start()
@@ -124,6 +127,16 @@ public final class DependencyContainer {
         }
         activation.reconfigure(with: store.config)
         self.activationCoordinator = activation
+
+        // 三指拖动: 复用现有 DragController(Stage 2 §9); 面板显示时启用
+        let threeFinger = ThreeFingerDragCoordinator(
+            windowController: windowController, engine: gestureEngine
+        )
+        threeFinger.install()
+        windowController.onVisibilityChange = { [weak threeFinger] visible in
+            threeFinger?.setEnabled(visible)
+        }
+        self.threeFingerCoordinator = threeFinger
 
         // 设置窗口
         self.settingsController = SettingsWindowController(handler: store)
