@@ -21,7 +21,7 @@
 
 ## Current Phase
 
-**v0.1.7 — 吸附阈值调低(用户实测反馈): displacementThreshold 0.30→0.21(原值 70%, 滑更少即翻页)**, 已安装 /Applications, tag v0.1.7
+**v0.1.8 — 用户实测调参: displacementThreshold 0.18, followSensitivity 0.85(原 1.0)**, 已安装 /Applications, tag v0.1.8
 
 ## v0.1.6 关键成果(已验证)
 
