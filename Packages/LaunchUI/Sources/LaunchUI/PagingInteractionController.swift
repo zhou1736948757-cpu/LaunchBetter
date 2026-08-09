@@ -151,9 +151,10 @@ final class PagingInteractionController {
         guard axisLock.accumulate(deltaX: deltaX, deltaY: deltaY) else {
             return
         }
-        // 一次手势最多一页(§17)
+        // 一次手势最多一页(§17); 跟手位移应用灵敏度系数(§16, v0.1.7 0.85)
         let maxDisp = onReadPageWidth() * PagingTuning.maxGestureDisplacementPages
-        displacement = min(max(displacement + deltaX, -maxDisp), maxDisp)
+        let applied = deltaX * PagingTuning.followSensitivity
+        displacement = min(max(displacement + applied, -maxDisp), maxDisp)
         // 方向: 手指左滑(deltaX 负, 自然滚动)→ 内容左移 → offset 增加
         latestDesiredOffset = baseOffset - displacement
         velocity.update(position: -displacement, timestamp: CACurrentMediaTime())
