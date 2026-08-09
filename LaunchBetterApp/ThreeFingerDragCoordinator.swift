@@ -23,6 +23,7 @@ final class ThreeFingerDragCoordinator: @unchecked Sendable {
 
     private let lock = NSLock()
     private var enabled = false
+    private var installed = false
     private var updateQueued = false
 
     // 诊断计数(§37; 主线程更新, 读为诊断近似值)
@@ -39,6 +40,9 @@ final class ThreeFingerDragCoordinator: @unchecked Sendable {
 
     /// 订阅引擎三指事件(后台线程到达)。
     func install() {
+        lock.lock()
+        installed = true
+        lock.unlock()
         engine.onThreeFingerGesture = { [weak self] event in
             self?.receive(event)
         }
@@ -46,6 +50,9 @@ final class ThreeFingerDragCoordinator: @unchecked Sendable {
 
     /// 卸载回调。
     func uninstall() {
+        lock.lock()
+        installed = false
+        lock.unlock()
         engine.onThreeFingerGesture = nil
     }
 
@@ -153,6 +160,6 @@ final class ThreeFingerDragCoordinator: @unchecked Sendable {
     func diagnostics() -> String {
         lock.lock()
         defer { lock.unlock() }
-        return "begin=\(beginCount) update=\(updateCount) end=\(endCount) cancel=\(cancelCount) missedBegin=\(missedBeginCount) engine[\(engine.threeFingerStats())]"
+        return "installed=\(installed) enabled=\(enabled) begin=\(beginCount) update=\(updateCount) end=\(endCount) cancel=\(cancelCount) missedBegin=\(missedBeginCount) engine[\(engine.threeFingerStats())]"
     }
 }

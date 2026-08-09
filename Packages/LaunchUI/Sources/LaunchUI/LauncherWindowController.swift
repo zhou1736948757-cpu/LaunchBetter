@@ -249,6 +249,7 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
     }
 
     public var isVisible: Bool { visible }
+    public var isActuallyVisible: Bool { window?.isVisible == true }
 
     // MARK: - 文件夹视图
 
@@ -325,6 +326,10 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
     /// 诊断: 手动驱动一帧(无 display link 环境, v0.1.6 §69)。
     public func dragProbeTick(_ point: NSPoint) {
         gridViewController?.dragController?.probeProcessTick(point)
+    }
+
+    public func dragCacheProbePoint() -> NSPoint? {
+        gridViewController?.dragCacheProbePoint()
     }
 
     /// 是否有活动拖拽(Stage 2 三指 enable/disable 检查)。
@@ -443,6 +448,14 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
     /// 分页探针(性能测量, v0.1.6 §63): 合成 NSEvent 驱动分页交互。
     public func pagingProbeFeed(_ event: NSEvent) {
         gridViewController?.pagingProbeFeed(event)
+    }
+
+    public func pagingProbeGesture(deltaXs: [CGFloat]) {
+        gridViewController?.pagingProbeGesture(deltaXs: deltaXs)
+    }
+
+    public func pagingProbeDisplayFrame() -> Bool {
+        gridViewController?.pagingProbeDisplayFrame() ?? false
     }
 
     public func pagingProbeDiagnostics() -> String {

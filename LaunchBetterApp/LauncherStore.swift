@@ -30,7 +30,7 @@ private final class LayoutMutationCompletionGate {
 /// 变更经 LayoutStore 应用并持久化,缓存同步后触发 onDataChange。
 /// 禁止: 每帧状态(拖拽/动画)进入本存储(§60)。
 @MainActor
-public final class LauncherStore: LauncherStoring, SettingsHandling {
+public final class LauncherStore: LauncherStoring, LayoutMutationCompleting, SettingsHandling {
     public var onDataChange: (() -> Void)?
     private var dataObservers: [UUID: () -> Void] = [:]
 
@@ -46,6 +46,10 @@ public final class LauncherStore: LauncherStoring, SettingsHandling {
     private var searchIndex = SearchIndex()
     /// 结构变更一次只允许一个 in-flight，避免旧 display 索引应用到更新后的 actor layout。
     private var layoutMutationInFlight = false
+    /// FSEvents callbacks are coalesced into one generation-checked drain so
+    /// an older async callback cannot publish after a newer catalog snapshot.
+    private var externalCatalogRefreshPending = false
+    private var externalCatalogRefreshTask: Task<Void, Never>?
 
     public var searchQuery = "" {
         didSet {
@@ -128,26 +132,11 @@ public final class LauncherStore: LauncherStoring, SettingsHandling {
     }
 
     private func applySnapshot(_ snapshot: CatalogSnapshot) {
-        catalogSnapshot = snapshot
-        let reconciled = LayoutReconciler.reconcile(
-            catalog: snapshot,
-            layout: layout,
-            now: Date()
-        )
-        if reconciled != layout {
-            layout = reconciled
-        }
-        // 始终向 LayoutStore 同步(store 从自身状态对账, 幂等),
-        // 否则 store 内部布局停留在初始种子, 文件夹操作会在空布局上执行
-        Task { [weak self] in
-            guard let self else { return }
-            _ = await layoutStore.reconcile(catalog: snapshot, now: Date())
-            await self.commitLayoutChange()
-        }
-        // catalog 变化 → 重建搜索索引(progressive: 首帧即用已恢复快照可搜, §51)
-        rebuildSearchIndex()
-        bumpRevision()
-        notifyDataChange()
+        // All catalog/layout publication goes through one generation-checked
+        // persistence drain. The parameter documents the triggering snapshot;
+        // the drain deliberately fetches the actor's newest authoritative value.
+        _ = snapshot
+        catalogDidChangeExternally()
     }
 
     /// 布局变更统一提交(v0.1.6 §49): 一次 currentLayout + 按需 rebuild + revision + notify。
@@ -168,17 +157,8 @@ public final class LauncherStore: LauncherStoring, SettingsHandling {
         notifyDataChange()
     }
 
-    /// 执行一次布局变更: 经 LayoutStore 应用并持久化, 同步缓存。
-    private func performLayoutMutation(
-        _ mutation: LayoutTransaction.LayoutMutation
-    ) {
-        performSerializedLayoutChange { [layoutStore] display in
-            await layoutStore.apply(mutation, display: display)
-        }
-    }
-
     private func performSerializedLayoutChange(
-        _ operation: @escaping @MainActor (DisplayModel) async -> Bool,
+        _ operation: @escaping @MainActor (DisplayModel, LayoutSnapshot) async -> Bool,
         completion: ((Bool) -> Void)? = nil
     ) {
         let completionGate = LayoutMutationCompletionGate(completion)
@@ -188,12 +168,13 @@ public final class LauncherStore: LauncherStoring, SettingsHandling {
         }
         layoutMutationInFlight = true
         let display = displayModel()
+        let expectedLayout = layout
         Task { [weak self] in
             guard let self else {
                 completionGate.finish(false)
                 return
             }
-            let changed = await operation(display)
+            let changed = await operation(display, expectedLayout)
             if changed {
                 await self.commitLayoutChange(releaseMutationLock: true)
                 // commitLayoutChange 已同步缓存、修订号及所有数据观察者。
@@ -265,28 +246,75 @@ public final class LauncherStore: LauncherStoring, SettingsHandling {
     // MARK: - 文件夹/布局(Phase 5)
 
     public func createFolder(name: String, appIDs: [AppID]) {
-        guard !appIDs.isEmpty else { return }
-        performSerializedLayoutChange { [layoutStore] display in
-            await layoutStore.createFolder(
-                display: display, name: name, appIDs: appIDs
-            ) != nil
+        createFolder(name: name, appIDs: appIDs) { _ in }
+    }
+
+    public func createFolder(
+        name: String,
+        appIDs: [AppID],
+        completion: @escaping (Bool) -> Void
+    ) {
+        guard !appIDs.isEmpty else {
+            completion(false)
+            return
         }
+        performSerializedLayoutChange { [layoutStore] display, expectedLayout in
+            await layoutStore.createFolder(
+                display: display,
+                name: name,
+                appIDs: appIDs,
+                expectedLayout: expectedLayout
+            ) != nil
+        } completion: { completion($0) }
     }
 
     public func renameFolder(_ id: FolderID, to name: String) {
-        performSerializedLayoutChange { [layoutStore] _ in
-            await layoutStore.renameFolder(id, to: name)
-        }
+        renameFolder(id, to: name) { _ in }
+    }
+
+    public func renameFolder(
+        _ id: FolderID,
+        to name: String,
+        completion: @escaping (Bool) -> Void
+    ) {
+        performSerializedLayoutChange { [layoutStore] _, expectedLayout in
+            await layoutStore.renameFolder(id, to: name, expectedLayout: expectedLayout)
+        } completion: { completion($0) }
     }
 
     public func dissolveFolder(_ id: FolderID) {
-        performSerializedLayoutChange { [layoutStore] display in
-            await layoutStore.dissolveFolder(display: display, id: id)
-        }
+        dissolveFolder(id) { _ in }
+    }
+
+    public func dissolveFolder(_ id: FolderID, completion: @escaping (Bool) -> Void) {
+        performSerializedLayoutChange { [layoutStore] display, expectedLayout in
+            await layoutStore.dissolveFolder(
+                display: display,
+                id: id,
+                expectedLayout: expectedLayout
+            )
+        } completion: { completion($0) }
     }
 
     public func addToFolder(app: AppID, folder: FolderID) {
-        performLayoutMutation(.addToFolder(app: app, folder: folder, at: Int.max))
+        addToFolder(app: app, folder: folder) { _ in }
+    }
+
+    public func addToFolder(
+        app: AppID,
+        folder: FolderID,
+        completion: @escaping (Bool) -> Void
+    ) {
+        performSerializedLayoutChange(
+            { [layoutStore] display, expectedLayout in
+                await layoutStore.apply(
+                    .addToFolder(app: app, folder: folder, at: Int.max),
+                    display: display,
+                    expectedLayout: expectedLayout
+                )
+            },
+            completion: completion
+        )
     }
 
     public func moveOutOfFolder(
@@ -296,10 +324,11 @@ public final class LauncherStore: LauncherStoring, SettingsHandling {
         completion: @escaping (Bool) -> Void
     ) {
         performSerializedLayoutChange(
-            { [layoutStore] display in
+            { [layoutStore] display, expectedLayout in
                 await layoutStore.apply(
                     .moveOutOfFolder(app: app, from: folder, toDisplayIndex: toDisplayIndex),
-                    display: display
+                    display: display,
+                    expectedLayout: expectedLayout
                 )
             },
             completion: completion
@@ -307,8 +336,24 @@ public final class LauncherStore: LauncherStoring, SettingsHandling {
     }
 
     public func reorderFolderApp(app: AppID, in folder: FolderID, toIndex: Int) {
-        performLayoutMutation(
-            .reorderInFolder(app: app, folder: folder, toIndex: toIndex)
+        reorderFolderApp(app: app, in: folder, toIndex: toIndex) { _ in }
+    }
+
+    public func reorderFolderApp(
+        app: AppID,
+        in folder: FolderID,
+        toIndex: Int,
+        completion: @escaping (Bool) -> Void
+    ) {
+        performSerializedLayoutChange(
+            { [layoutStore] display, expectedLayout in
+                await layoutStore.apply(
+                    .reorderInFolder(app: app, folder: folder, toIndex: toIndex),
+                    display: display,
+                    expectedLayout: expectedLayout
+                )
+            },
+            completion: completion
         )
     }
 
@@ -324,18 +369,65 @@ public final class LauncherStore: LauncherStoring, SettingsHandling {
     }
 
     public func applyDragDrop(_ mutation: LayoutTransaction.LayoutMutation) {
-        performLayoutMutation(mutation)
+        applyDragDrop(mutation) { _ in }
+    }
+
+    public func applyDragDrop(
+        _ mutation: LayoutTransaction.LayoutMutation,
+        completion: @escaping (Bool) -> Void
+    ) {
+        performSerializedLayoutChange(
+            { [layoutStore] display, expectedLayout in
+                await layoutStore.apply(
+                    mutation,
+                    display: display,
+                    expectedLayout: expectedLayout
+                )
+            },
+            completion: completion
+        )
     }
 
     /// 外部目录变化(FSEvents)后调用: 拉取最新目录快照 → 布局对账(新应用/墓碑)→ 刷新。
     public func catalogDidChangeExternally() {
-        Task { [weak self] in
-            guard let self else { return }
-            catalogSnapshot = await catalogActor.currentSnapshot()
-            layout = await layoutStore.reconcile(catalog: catalogSnapshot, now: Date())
+        externalCatalogRefreshPending = true
+        guard externalCatalogRefreshTask == nil else { return }
+        externalCatalogRefreshTask = Task { [weak self] in
+            await self?.drainExternalCatalogRefreshes()
+        }
+    }
+
+    private func drainExternalCatalogRefreshes() async {
+        while externalCatalogRefreshPending {
+            externalCatalogRefreshPending = false
+            let generation = await catalogActor.snapshotGeneration()
+            guard let snapshot = await catalogActor.currentSnapshot(ifGeneration: generation) else {
+                externalCatalogRefreshPending = true
+                continue
+            }
+            let result = await layoutStore.reconcileWithResult(catalog: snapshot, now: Date())
+            guard result.committed else {
+                // Do not publish a catalog whose required tombstone/layout update
+                // failed to persist; a later filesystem callback may retry.
+                continue
+            }
+            guard await catalogActor.currentSnapshot(ifGeneration: generation) != nil else {
+                // A newer catalog arrived during layout persistence. Loop once more
+                // before publishing so the final disk/UI state is current.
+                externalCatalogRefreshPending = true
+                continue
+            }
+            catalogSnapshot = snapshot
+            layout = result.layout
             rebuildSearchIndex()
             bumpRevision()
             notifyDataChange()
+        }
+        externalCatalogRefreshTask = nil
+        // No await occurs between the loop condition and clearing the task, but
+        // keep this defensive restart if future code introduces one.
+        if externalCatalogRefreshPending {
+            catalogDidChangeExternally()
         }
     }
 
@@ -345,9 +437,14 @@ public final class LauncherStore: LauncherStoring, SettingsHandling {
         // 仅自定义显示名变化时重建搜索索引(§47-48);
         // gridRows/columns/iconSize/wallpaper/hotkey/hotcorner/hidden 等不重建。
         let searchMetadataChanged = config.customDisplayNames != self.config.customDisplayNames
+        do {
+            try settingsStore.save(config)
+        } catch {
+            print("CONFIG save error: \(error)")
+            return
+        }
         self.config = config
         L10n.configure(language: config.language)
-        try? settingsStore.save(config)
         if searchMetadataChanged {
             rebuildSearchIndex()
         }

@@ -20,11 +20,12 @@ public final class ActivationCoordinator {
     /// 冒烟/截图等非交互模式不弹窗。
     private var isInteractive: Bool {
         let args = CommandLine.arguments
-        return !args.contains("--smoke")
-            && !args.contains("--dragtest")
-            && !args.contains("--folders")
-            && !args.contains("--screenshot")
-            && !args.contains("--iconbench")
+        let nonInteractiveFlags = [
+            "--smoke", "--dragtest", "--folders", "--screenshot",
+            "--iconbench", "--pagetest", "--threefingerdiag",
+            "--dragcacheprobe", "--pagingprobe", "--searchprobe", "--gridtest",
+        ]
+        return !nonInteractiveFlags.contains { args.contains($0) }
     }
 
     /// 按配置注册热键/热角(设置变更即时生效)。
@@ -143,10 +144,10 @@ public final class ActivationCoordinator {
         guard !permissionPromptShown, isInteractive else { return }
         permissionPromptShown = true
         let alert = NSAlert()
-        alert.messageText = "需要输入监控权限"
-        alert.informativeText = "四指捏合手势需要“输入监控”权限才能工作。\n请点击“打开系统设置”,在 隐私与安全性 → 输入监控 中启用 LaunchBetter,然后回到应用。"
-        alert.addButton(withTitle: "打开系统设置")
-        alert.addButton(withTitle: "稍后")
+        alert.messageText = L10n.t(.permissionTitle)
+        alert.informativeText = L10n.t(.permissionMessage)
+        alert.addButton(withTitle: L10n.t(.permissionOpenSettings))
+        alert.addButton(withTitle: L10n.t(.later))
         let response = alert.runModal()
         if response == .alertFirstButtonReturn {
             if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent") {

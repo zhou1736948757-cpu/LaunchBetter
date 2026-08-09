@@ -126,6 +126,17 @@ final class PagingInteractionController {
         return true
     }
 
+    /// Deterministic diagnostic entry after NSEvent normalization. This keeps the
+    /// probe focused on axis lock, target resolution, animation, and page writes.
+    func probeGesture(deltaXs: [CGFloat]) {
+        resetCounters()
+        beginGesture()
+        for deltaX in deltaXs {
+            feedTracking(deltaX: deltaX, deltaY: 0)
+        }
+        endGesture()
+    }
+
     // MARK: - 手势生命周期
 
     private func beginGesture() {
@@ -239,6 +250,17 @@ final class PagingInteractionController {
     }
 
     @objc private func tick(_ link: CADisplayLink) {
+        processDisplayFrame()
+    }
+
+    /// Diagnostic fallback for processes where AppKit does not schedule a view
+    /// display link. Returns true once the real animator reaches idle.
+    func probeDisplayFrame() -> Bool {
+        processDisplayFrame()
+        return phase == .idle
+    }
+
+    private func processDisplayFrame() {
         displayFrameCount += 1
         switch phase {
         case .tracking:

@@ -13,6 +13,12 @@ public enum L10n {
         case quit
         case addToFolder
         case newFolder
+        case launchApp
+        case folderLabel
+        case folderContentsHelp
+        case renameFolderHelp
+        case dropIntoFolder
+        case createFolderWith
         case rename
         case renameApp
         case dissolveFolder
@@ -41,6 +47,9 @@ public enum L10n {
         case permissionSection
         case permissionStatus
         case permissionOpenSettings
+        case permissionTitle
+        case permissionMessage
+        case later
         case none
         case cornerShow
         case cornerHide
@@ -50,6 +59,9 @@ public enum L10n {
     nonisolated(unsafe) private static let zhHans: [Key: String] = [
         .searchPlaceholder: "搜索应用", .back: "返回", .settings: "设置",
         .quit: "退出 LaunchBetter", .addToFolder: "加入文件夹", .newFolder: "新建文件夹",
+        .launchApp: "点击启动 %@", .folderLabel: "文件夹 %@",
+        .folderContentsHelp: "文件夹内容和操作", .renameFolderHelp: "重命名文件夹",
+        .dropIntoFolder: "放入 %@", .createFolderWith: "与 %@ 建立文件夹",
         .rename: "重命名…", .renameApp: "重命名…", .dissolveFolder: "解散文件夹",
         .hideApp: "隐藏应用", .unhideApp: "取消隐藏", .moveToTrash: "移到废纸篓…",
         .ok: "确定", .cancel: "取消", .noFolders: "(无文件夹)",
@@ -60,13 +72,18 @@ public enum L10n {
         .addSource: "添加目录…", .remove: "移除", .hiddenAppsLabel: "隐藏应用",
         .addHiddenApp: "添加…", .settingsTitle: "LaunchBetter 设置",
         .permissionSection: "手势", .permissionStatus: "输入监控权限",
-        .permissionOpenSettings: "打开系统设置", .none: "无",
+        .permissionOpenSettings: "打开系统设置", .permissionTitle: "需要输入监控权限",
+        .permissionMessage: "四指捏合手势需要“输入监控”权限才能工作。\n请点击“打开系统设置”，在“隐私与安全性” → “输入监控”中启用 LaunchBetter，然后回到应用。",
+        .later: "稍后", .none: "无",
         .cornerShow: "显示启动器", .cornerHide: "隐藏启动器", .cornerToggle: "切换启动器",
     ]
 
     nonisolated(unsafe) private static let zhHant: [Key: String] = [
         .searchPlaceholder: "搜尋應用程式", .back: "返回", .settings: "設定",
         .quit: "結束 LaunchBetter", .addToFolder: "加入檔案夾", .newFolder: "新增檔案夾",
+        .launchApp: "點擊啟動 %@", .folderLabel: "檔案夾 %@",
+        .folderContentsHelp: "檔案夾內容與操作", .renameFolderHelp: "重新命名檔案夾",
+        .dropIntoFolder: "放入 %@", .createFolderWith: "與 %@ 建立檔案夾",
         .rename: "重新命名…", .renameApp: "重新命名…", .dissolveFolder: "解散檔案夾",
         .hideApp: "隱藏應用程式", .unhideApp: "取消隱藏", .moveToTrash: "移到垃圾桶…",
         .ok: "確定", .cancel: "取消", .noFolders: "(沒有檔案夾)",
@@ -77,13 +94,18 @@ public enum L10n {
         .addSource: "加入目錄…", .remove: "移除", .hiddenAppsLabel: "隱藏應用程式",
         .addHiddenApp: "加入…", .settingsTitle: "LaunchBetter 設定",
         .permissionSection: "手勢", .permissionStatus: "輸入監控權限",
-        .permissionOpenSettings: "開啟系統設定", .none: "無",
+        .permissionOpenSettings: "開啟系統設定", .permissionTitle: "需要輸入監控權限",
+        .permissionMessage: "四指捏合手勢需要「輸入監控」權限才能運作。\n請點擊「開啟系統設定」，在「隱私權與安全性」→「輸入監控」中啟用 LaunchBetter，然後返回應用程式。",
+        .later: "稍後", .none: "無",
         .cornerShow: "顯示啟動器", .cornerHide: "隱藏啟動器", .cornerToggle: "切換啟動器",
     ]
 
     nonisolated(unsafe) private static let english: [Key: String] = [
         .searchPlaceholder: "Search apps", .back: "Back", .settings: "Settings",
         .quit: "Quit LaunchBetter", .addToFolder: "Add to Folder", .newFolder: "New Folder",
+        .launchApp: "Click to launch %@", .folderLabel: "Folder %@",
+        .folderContentsHelp: "Folder contents and actions", .renameFolderHelp: "Rename folder",
+        .dropIntoFolder: "Drop into %@", .createFolderWith: "Create a folder with %@",
         .rename: "Rename…", .renameApp: "Rename…", .dissolveFolder: "Dissolve Folder",
         .hideApp: "Hide App", .unhideApp: "Unhide", .moveToTrash: "Move to Trash…",
         .ok: "OK", .cancel: "Cancel", .noFolders: "(No folders)",
@@ -94,7 +116,9 @@ public enum L10n {
         .addSource: "Add Folder…", .remove: "Remove", .hiddenAppsLabel: "Hidden Apps",
         .addHiddenApp: "Add…", .settingsTitle: "LaunchBetter Settings",
         .permissionSection: "Gestures", .permissionStatus: "Input Monitoring",
-        .permissionOpenSettings: "Open System Settings", .none: "None",
+        .permissionOpenSettings: "Open System Settings", .permissionTitle: "Input Monitoring Permission Required",
+        .permissionMessage: "The four-finger pinch gesture requires Input Monitoring permission.\nClick “Open System Settings”, then enable LaunchBetter in Privacy & Security → Input Monitoring and return to the app.",
+        .later: "Later", .none: "None",
         .cornerShow: "Show Launcher", .cornerHide: "Hide Launcher", .cornerToggle: "Toggle Launcher",
     ]
 
@@ -132,5 +156,10 @@ public enum L10n {
         case .english:
             return english[key] ?? zhHans[key] ?? key.rawValue
         }
+    }
+
+    /// 取带参数翻译。格式字符串统一使用 Foundation 的 %@ 占位符。
+    public static func format(_ key: Key, _ arguments: CVarArg...) -> String {
+        String(format: t(key), arguments: arguments)
     }
 }

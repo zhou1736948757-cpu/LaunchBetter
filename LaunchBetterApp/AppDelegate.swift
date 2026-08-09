@@ -100,16 +100,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         } else if CommandLine.arguments.contains("--threefingerdiag") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
-                guard let container = self?.container else {
+                guard let self, let container = self.container else {
                     print("3FDIAG FAIL")
-                    NSApp.terminate(nil)
-                    return
+                    fflush(stdout)
+                    fflush(stderr)
+                    exit(1)
                 }
-                print("3FDIAG engine=\(container.activationCoordinator.diagnostics())")
-                print("3FDIAG coordinator=\(container.threeFingerCoordinator.diagnostics())")
-                print("3FDIAG windowVisible=\(container.windowController.isVisible)")
-                print("3FDIAG OK")
-                NSApp.terminate(nil)
+                let engine = container.activationCoordinator.diagnostics()
+                let coordinator = container.threeFingerCoordinator.diagnostics()
+                let windowVisible = container.windowController.isVisible
+                let windowActuallyVisible = container.windowController.isActuallyVisible
+                let ok = engine.contains("gesture=running")
+                    && coordinator.contains("installed=true")
+                    && coordinator.contains("enabled=true")
+                    && windowVisible
+                    && windowActuallyVisible
+                print("3FDIAG engine=\(engine)")
+                print("3FDIAG coordinator=\(coordinator)")
+                print("3FDIAG windowVisible=\(windowVisible)")
+                print("3FDIAG windowActuallyVisible=\(windowActuallyVisible)")
+                print("3FDIAG \(ok ? "OK" : "FAIL")")
+                self.terminateDiagnostic(success: ok)
             }
         } else if CommandLine.arguments.contains("--dragcacheprobe") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
@@ -180,7 +191,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let first = controller.dragTestItems().first else {
             finishProbe("DRAGCACHE", ok: false, detail: "empty drag-test items")
         }
-        let p = NSPoint(x: 900, y: 400)
+        guard let p = controller.dragCacheProbePoint() else {
+            finishProbe("DRAGCACHE", ok: false, detail: "no deterministic empty gap")
+        }
         controller.dragTestBegin(item: first, at: p)
         guard controller.hasActiveDrag() else {
             finishProbe("DRAGCACHE", ok: false, detail: "drag begin rejected")
@@ -244,9 +257,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// 分页性能探针(v0.1.6 §63/§82): 合成触控板 swipe + momentum, 测量计数器。
     private func runPagingProbe() {
         guard let controller = container?.windowController else {
-            print("PAGINGPROBE FAIL")
-            NSApp.terminate(nil)
-            return
+            finishProbe("PAGINGPROBE", ok: false, detail: "container not ready")
         }
         func makeScroll(dx: CGFloat, phase: Int, momentum: Int) -> NSEvent? {
             guard let src = CGEventSource(stateID: .hidSystemState),
@@ -260,25 +271,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return NSEvent(cgEvent: cg)
         }
         print("PAGINGPROBE before: \(controller.pagingProbeDiagnostics())")
-        // 1. 手势: began + changed×8(累计 -460pt > 30%×1470=441 → 下一页)
-        controller.pagingProbeFeed(makeScroll(dx: 0, phase: 1, momentum: 0)!)
-        for _ in 0..<4 { controller.pagingProbeFeed(makeScroll(dx: -60, phase: 2, momentum: 0)!) }
-        for _ in 0..<4 { controller.pagingProbeFeed(makeScroll(dx: -55, phase: 2, momentum: 0)!) }
-        controller.pagingProbeFeed(makeScroll(dx: 0, phase: 4, momentum: 0)!)
+        // 1. Deterministically feed the same normalized precise deltas that the
+        // NSEvent adapter supplies. Synthetic CGEvent phase/timestamp conversion
+        // varies across SDKs and previously made this probe test the fixture.
+        controller.pagingProbeGesture(
+            deltaXs: Array(repeating: -60, count: 4)
+                + Array(repeating: -55, count: 4)
+        )
         // 2. momentum 序列(应 0 位移 0 snap)
+        let beforeMomentum = controller.pagingProbeDiagnostics()
         controller.pagingProbeFeed(makeScroll(dx: -80, phase: 0, momentum: 1)!)
         controller.pagingProbeFeed(makeScroll(dx: -80, phase: 0, momentum: 2)!)
-        controller.pagingProbeFeed(makeScroll(dx: 0, phase: 0, momentum: 4)!)
-        // 等 settle 完成
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-            MainActor.assumeIsolated {
+        controller.pagingProbeFeed(makeScroll(dx: 0, phase: 0, momentum: 3)!)
+        let afterMomentum = controller.pagingProbeDiagnostics()
+        let momentumIgnored = ["input", "scroll", "settles"].allSatisfy { key in
+            diagnosticCounter(key, in: beforeMomentum)
+                == diagnosticCounter(key, in: afterMomentum)
+        }
+        // A command-line diagnostic process may receive no NSView display-link
+        // callbacks. Drive the exact same frame body against wall-clock time and
+        // still require the animator to settle at the real document offset.
+        var remainingFrames = 240
+        @MainActor func advanceProbeFrame() {
+            let settled = controller.pagingProbeDisplayFrame()
+            remainingFrames -= 1
+            if settled || remainingFrames == 0 {
                 let page = controller.pageTestCurrentPage()
-                print("PAGINGPROBE after: \(controller.pagingProbeDiagnostics()) page=\(page) scrollX=\(Int(controller.pageTestScrollX()))")
-                let ok = page == 1 && controller.pageTestScrollX() > 1400
+                print("PAGINGPROBE after: \(controller.pagingProbeDiagnostics()) page=\(page) scrollX=\(Int(controller.pageTestScrollX())) settled=\(settled)")
+                let ok = momentumIgnored && settled && page == 1
+                    && controller.pageTestScrollX() > 1400
                 print("PAGINGPROBE \(ok ? "OK" : "FAIL")")
-                NSApp.terminate(nil)
+                self.terminateDiagnostic(success: ok)
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0 / 120.0) {
+                MainActor.assumeIsolated {
+                    advanceProbeFrame()
+                }
             }
         }
+        advanceProbeFrame()
     }
 
     /// Settings 几何生效验证: 改 columns/rows/iconSize → 布局/容量/图标请求尺寸跟随; 完成后恢复。
@@ -358,6 +389,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         store.searchQuery = ""
 
         print("SMOKE window [\(windowController.diagnostics())]")
+        let baseOK = store.diagnosticCatalogAppCount() > 0
+            && !display.pages.isEmpty
+            && !display.flatSlots.isEmpty
+            && display.pageCapacity > 0
+            && windowController.isActuallyVisible
+        guard baseOK else {
+            finishSmoke(store: store, ok: false, detail: "invalid catalog/layout/capacity/window baseline")
+        }
 
         // 拖拽引擎: 程序化驱动 beginDrag → updateDrag ×N → endDrag(真实代码路径)
         if CommandLine.arguments.contains("--dragtest") {
@@ -371,6 +410,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             let previousOnDataChange = store.onDataChange
             var completed = false
+            var verificationScheduled = false
             func finishDrag(_ ok: Bool, detail: String) {
                 guard !completed else { return }
                 completed = true
@@ -384,11 +424,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let orderAfter = store.displayModel().flatSlots
                 guard orderAfter != orderBefore else { return }
                 let unique = Set(orderAfter).count == orderAfter.count
-                let activeDrag = windowController.hasActiveDrag()
-                finishDrag(
-                    unique && !activeDrag,
-                    detail: "changed=true unique=\(unique) activeDrag=\(activeDrag) items=\(orderAfter.count)"
-                )
+                guard !verificationScheduled else { return }
+                verificationScheduled = true
+                // Committed layout publication precedes the completion callback that
+                // tears down the overlay. Verify after that callback has run.
+                DispatchQueue.main.async {
+                    let activeDrag = windowController.hasActiveDrag()
+                    finishDrag(
+                        unique && !activeDrag,
+                        detail: "changed=true unique=\(unique) activeDrag=\(activeDrag) items=\(orderAfter.count)"
+                    )
+                }
             }
             // 目标点: 窗口中心偏右(模拟拖到末尾)
             let targetPoint = NSPoint(x: 900, y: 400)
@@ -518,9 +564,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func runPageTest() {
         guard let controller = container?.windowController else {
-            print("PAGETEST FAIL")
-            NSApp.terminate(nil)
-            return
+            finishProbe("PAGETEST", ok: false, detail: "container not ready")
         }
         // 翻页为动画(0.35s), 每步等待动画完成再读数
         func step(_ action: () -> Void) {
@@ -528,9 +572,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             RunLoop.current.run(until: Date().addingTimeInterval(0.5))
         }
         // Stage 1 §36: 0→1→2→1→0 序列 + 诊断字段
+        var observedPages: [Int] = []
+        var observedOffsets: [Double] = []
         func report(_ label: String) {
             let scrollX = controller.pageTestScrollX()
             let page = controller.pageTestCurrentPage()
+            observedPages.append(page)
+            observedOffsets.append(scrollX)
             let count = controller.pageTestPageCount()
             let pageW = controller.pageTestPageWidth()
             let docW = controller.pageTestDocumentWidth()
@@ -547,16 +595,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         step { _ = controller.pageTestGoTo(0) }
         report("p4")
         print("PAGETEST after: \(controller.pageTestScrollDiagnostics())")
-        let ok = controller.pageTestCurrentPage() == 0
-        let moved = controller.pageTestScrollX() < controller.pageTestPageWidth()
+        let sequenceOK = observedPages == [0, 1, 2, 1, 0]
+        let pageWidth = controller.pageTestPageWidth()
+        let expectedOffsets = [0, pageWidth, pageWidth * 2, pageWidth, 0]
+        let offsetsOK = zip(observedOffsets, expectedOffsets).allSatisfy {
+            abs($0.0 - $0.1) < 1
+        }
+        let ok = controller.pageTestCurrentPage() == 0 && sequenceOK && offsetsOK
         // v0.1.4: 重开面板回到第一页
         _ = controller.pageTestGoTo(2)
         step {}
         let reset = controller.pageTestHideShowReset()
         step {}
         print("PAGETEST hideShowReset=\(reset ? "OK" : "FAIL") page=\(controller.pageTestCurrentPage())")
-        print("PAGETEST \(ok && moved && reset ? "OK" : "FAIL")")
-        NSApp.terminate(nil)
+        let passed = ok && reset
+        print("PAGETEST \(passed ? "OK" : "FAIL") sequence=\(observedPages)")
+        terminateDiagnostic(success: passed)
     }
 
     private func finishSmoke(store: LauncherStore, ok: Bool = true, detail: String? = nil) -> Never {

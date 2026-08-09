@@ -1,6 +1,20 @@
 import AppKit
 import LaunchCore
 
+enum GridDragSourceIdentity: Equatable {
+    case app(AppID)
+    case folder(FolderID)
+
+    init(item: DisplayModel.DisplayItem) {
+        switch item {
+        case .app(let id):
+            self = .app(id)
+        case .folder(let id, _):
+            self = .folder(id)
+        }
+    }
+}
+
 /// 网格视图控制器: NSCollectionView + DiffableDataSource + 分页导航。
 ///
 /// 两种模式:
@@ -81,6 +95,9 @@ final class GridViewController: NSViewController {
     /// 当前 App B 建夹目标。cell 离屏/reuse 后由 configure 恢复。
     private var createFolderTargetAppID: AppID?
     private var createFolderTargetIsActive = false
+
+    /// 当前主网格拖拽源身份。它独立于可复用的 cell 实例。
+    private var activeDragSourceIdentity: GridDragSourceIdentity?
 
     /// 集合视图(拖拽/诊断用)。首次访问触发 view 加载。
     var collectionViewRef: NSCollectionView {
@@ -213,7 +230,7 @@ final class GridViewController: NSViewController {
             cell.configure(
                 displayName: store.displayName(for: id),
                 colorIndex: stableColorIndex(id.rawValue),
-                accessibilityHint: "点击启动 \(store.displayName(for: id))",
+                accessibilityHint: L10n.format(.launchApp, store.displayName(for: id)),
                 appID: id,
                 pointSize: pointSize,
                 iconProvider: iconProvider
@@ -225,13 +242,15 @@ final class GridViewController: NSViewController {
             let children = store.folderChildren(id) ?? []
             cell.configureFolder(
                 displayName: store.folderName(for: id),
-                accessibilityHint: "文件夹 \(store.folderName(for: id))",
+                accessibilityHint: L10n.format(.folderLabel, store.folderName(for: id)),
                 folderID: id,
                 children: children,
                 pointSize: pointSize,
                 iconProvider: iconProvider
             )
         }
+        // prepareForReuse/beginConfiguration 可能刚恢复 opacity; identity 是唯一真值。
+        cell.setDragSourceHidden(isActiveDragSource(item))
     }
 
     private func stableColorIndex(_ key: String) -> Int {
@@ -441,13 +460,6 @@ final class GridViewController: NSViewController {
             addItem.submenu = submenu
             menu.addItem(addItem)
 
-            let newFolder = NSMenuItem(
-                title: L10n.t(.newFolder), action: #selector(createFolderWith(_:)), keyEquivalent: ""
-            )
-            newFolder.representedObject = id
-            newFolder.target = self
-            menu.addItem(newFolder)
-
             menu.addItem(.separator())
 
             let hide = NSMenuItem(
@@ -501,17 +513,10 @@ final class GridViewController: NSViewController {
         store.addToFolder(app: payload.appID, folder: payload.folderID)
     }
 
-    @objc private func createFolderWith(_ sender: NSMenuItem) {
-        guard let appID = sender.representedObject as? AppID else { return }
-        let name = promptForName(defaultValue: "新文件夹")
-        guard let name, !name.isEmpty else { return }
-        store.createFolder(name: name, appIDs: [appID])
-    }
-
     @objc private func renameFolder(_ sender: NSMenuItem) {
         guard let folderID = sender.representedObject as? FolderID else { return }
         let current = store.folderName(for: folderID)
-        let name = promptForName(defaultValue: current)
+        let name = promptForName(defaultValue: current, titleKey: .rename)
         guard let name, !name.isEmpty else { return }
         store.renameFolder(folderID, to: name)
     }
@@ -528,7 +533,9 @@ final class GridViewController: NSViewController {
 
     @objc private func renameApp(_ sender: NSMenuItem) {
         guard let appID = sender.representedObject as? AppID else { return }
-        let name = promptForName(defaultValue: store.displayName(for: appID))
+        let name = promptForName(
+            defaultValue: store.displayName(for: appID), titleKey: .renameApp
+        )
         guard let name, !name.isEmpty else { return }
         store.setCustomName(appID, name: name)
     }
@@ -544,11 +551,11 @@ final class GridViewController: NSViewController {
         store.moveToTrash(appID)
     }
 
-    private func promptForName(defaultValue: String) -> String? {
+    private func promptForName(defaultValue: String, titleKey: L10n.Key) -> String? {
         let alert = NSAlert()
-        alert.messageText = defaultValue == "新文件夹" ? "新建文件夹" : "重命名"
-        alert.addButton(withTitle: "确定")
-        alert.addButton(withTitle: "取消")
+        alert.messageText = L10n.t(titleKey)
+        alert.addButton(withTitle: L10n.t(.ok))
+        alert.addButton(withTitle: L10n.t(.cancel))
         let field = NSTextField(string: defaultValue)
         field.frame = NSRect(x: 0, y: 0, width: 240, height: 24)
         alert.accessoryView = field
@@ -606,6 +613,14 @@ final class GridViewController: NSViewController {
             paging.resetCounters()
         }
         _ = paging.handleWheel(event)
+    }
+
+    func pagingProbeGesture(deltaXs: [CGFloat]) {
+        paging.probeGesture(deltaXs: deltaXs)
+    }
+
+    func pagingProbeDisplayFrame() -> Bool {
+        paging.probeDisplayFrame()
     }
 
     /// 布局诊断(§56/§83): 一次交互中 prepare / attribute query 计数。
@@ -685,17 +700,65 @@ final class GridViewController: NSViewController {
         collectionView.item(at: path)
     }
 
-    /// 源项当前显示的图标图像(拖拽 overlay 复用, 零磁盘 IO, Stage 1 §23-24)。
-    func visibleIconImage(for item: Item) -> CGImage? {
+    /// Empty horizontal gap used by the drag-cache diagnostic. This avoids App
+    /// hover/dwell and deterministically exercises ordinary reorder preview caching.
+    func dragCacheProbePoint() -> NSPoint? {
+        guard dataSource.snapshot().itemIdentifiers.count >= 3 else { return nil }
+        let left = frame(atFlatIndex: 1)
+        let right = frame(atFlatIndex: 2)
+        guard left.maxX < right.minX else { return nil }
+        let documentPoint = NSPoint(
+            x: (left.maxX + right.minX) / 2,
+            y: (left.midY + right.midY) / 2
+        )
+        return collectionView.convert(documentPoint, to: nil)
+    }
+
+    /// 源项当前的语义化拖拽视觉表示(只复用已渲染内存, 零磁盘 IO)。
+    func dragRepresentation(for item: Item) -> DragVisualRepresentation? {
         guard let index = flatIndex(of: item), let path = indexPath(atFlatIndex: index) else {
             return nil
         }
         guard let cell = cellView(at: path) as? AppCellView else { return nil }
-        return cell.visibleIconImage
+        return cell.dragRepresentation()
     }
 
-    /// 拖拽源单元格显示状态。源项滚出可视区时为 no-op；重新可见后由每帧处理再次隐藏。
+    /// 登记并隐藏主网格拖拽源。先捕获表示，再登记 identity/隐藏 cell。
+    /// cell 离屏或随后被复用时，configure 会按 identity 同步恢复隐藏状态。
+    @discardableResult
+    func beginDragSource(for item: Item) -> DragVisualRepresentation? {
+        guard flatIndex(of: item) != nil else { return nil }
+        let representation = dragRepresentation(for: item)
+        activeDragSourceIdentity = GridDragSourceIdentity(item: item)
+        applyDragSourceVisibility(for: item, hidden: true)
+        return representation
+    }
+
+    /// 释放主网格拖拽源身份并恢复当前可见 cell。
+    func endDragSource(for item: Item) {
+        let identity = GridDragSourceIdentity(item: item)
+        guard activeDragSourceIdentity == identity else { return }
+        activeDragSourceIdentity = nil
+        applyDragSourceVisibility(for: item, hidden: false)
+    }
+
+    /// 兼容旧的网格调用方，同时把状态提升为 identity-owned。
     func setDragSourceHidden(_ hidden: Bool, for item: Item) {
+        let identity = GridDragSourceIdentity(item: item)
+        if hidden {
+            activeDragSourceIdentity = identity
+        } else {
+            guard activeDragSourceIdentity == identity else { return }
+            activeDragSourceIdentity = nil
+        }
+        applyDragSourceVisibility(for: item, hidden: hidden)
+    }
+
+    private func isActiveDragSource(_ item: Item) -> Bool {
+        activeDragSourceIdentity == GridDragSourceIdentity(item: item)
+    }
+
+    private func applyDragSourceVisibility(for item: Item, hidden: Bool) {
         guard let index = flatIndex(of: item), let path = indexPath(atFlatIndex: index),
               let cell = cellView(at: path) as? AppCellView else { return }
         cell.setDragSourceHidden(hidden)

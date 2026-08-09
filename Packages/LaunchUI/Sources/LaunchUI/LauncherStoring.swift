@@ -111,3 +111,37 @@ public protocol LauncherStoring: AnyObject {
     /// 是否已隐藏。
     func isHidden(_ appID: AppID) -> Bool
 }
+
+/// 可回报结构 mutation 最终持久化结果的存储能力。
+///
+/// 测试替身和只读宿主仍可只实现 `LauncherStoring`;正式存储通过此协议让 UI
+/// 仅在磁盘提交成功后确认操作，失败时恢复原视觉而不发布假成功。
+@MainActor
+public protocol LayoutMutationCompleting: LauncherStoring {
+    func createFolder(
+        name: String,
+        appIDs: [AppID],
+        completion: @escaping (Bool) -> Void
+    )
+    func renameFolder(
+        _ id: FolderID,
+        to name: String,
+        completion: @escaping (Bool) -> Void
+    )
+    func dissolveFolder(_ id: FolderID, completion: @escaping (Bool) -> Void)
+    func addToFolder(
+        app: AppID,
+        folder: FolderID,
+        completion: @escaping (Bool) -> Void
+    )
+    func reorderFolderApp(
+        app: AppID,
+        in folder: FolderID,
+        toIndex: Int,
+        completion: @escaping (Bool) -> Void
+    )
+    func applyDragDrop(
+        _ mutation: LayoutTransaction.LayoutMutation,
+        completion: @escaping (Bool) -> Void
+    )
+}

@@ -19,6 +19,8 @@ final class FolderViewController: NSViewController {
     private var cardShadowView: NSView!
     private var visualCardView: NSVisualEffectView!
     private var titleLabel: NSTextField!
+    private var dissolveButton: NSButton!
+    private var renameButton: NSButton!
     private var collectionView: ClickableCollectionView!
     private var scrollView: NSScrollView!
     private var dataSource: NSCollectionViewDiffableDataSource<Int, DisplayModel.DisplayItem>!
@@ -98,8 +100,8 @@ final class FolderViewController: NSViewController {
         card.layer?.cornerRadius = 24
         card.layer?.masksToBounds = true
         card.setAccessibilityRole(.group)
-        card.setAccessibilityLabel("文件夹 \(store.folderName(for: folderID))")
-        card.setAccessibilityHelp("文件夹内容和操作")
+        card.setAccessibilityLabel(L10n.format(.folderLabel, store.folderName(for: folderID)))
+        card.setAccessibilityHelp(L10n.t(.folderContentsHelp))
         cardShadowView.addSubview(card)
         card.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
@@ -114,8 +116,9 @@ final class FolderViewController: NSViewController {
         let dissolveButton = NSButton(
             title: L10n.t(.dissolveFolder), target: self, action: #selector(dissolveTapped)
         )
+        self.dissolveButton = dissolveButton
         dissolveButton.bezelStyle = .rounded
-        dissolveButton.setAccessibilityHelp("解散文件夹")
+        dissolveButton.setAccessibilityHelp(L10n.t(.dissolveFolder))
         card.addSubview(dissolveButton)
         dissolveButton.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
@@ -126,8 +129,9 @@ final class FolderViewController: NSViewController {
         let renameButton = NSButton(
             title: L10n.t(.rename), target: self, action: #selector(renameTapped)
         )
+        self.renameButton = renameButton
         renameButton.bezelStyle = .rounded
-        renameButton.setAccessibilityHelp("重命名文件夹")
+        renameButton.setAccessibilityHelp(L10n.t(.renameFolderHelp))
         card.addSubview(renameButton)
         renameButton.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
@@ -139,7 +143,7 @@ final class FolderViewController: NSViewController {
         titleLabel.font = .boldSystemFont(ofSize: 24)
         titleLabel.alignment = .center
         titleLabel.lineBreakMode = .byTruncatingTail
-        titleLabel.setAccessibilityLabel(store.folderName(for: folderID))
+        titleLabel.setAccessibilityLabel(L10n.format(.folderLabel, store.folderName(for: folderID)))
         card.addSubview(titleLabel)
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
@@ -192,7 +196,7 @@ final class FolderViewController: NSViewController {
                 cell.configure(
                     displayName: store.displayName(for: id),
                     colorIndex: stableColorIndex(id.rawValue),
-                    accessibilityHint: "点击启动 \(store.displayName(for: id))",
+                    accessibilityHint: L10n.format(.launchApp, store.displayName(for: id)),
                     appID: id,
                     pointSize: folderIconSize,
                     iconProvider: iconProvider
@@ -265,6 +269,18 @@ final class FolderViewController: NSViewController {
         refresh()
     }
 
+    private func refreshLocalizedPresentation(folderName: String? = nil) {
+        let name = folderName ?? store.folderName(for: folderID)
+        titleLabel.stringValue = name
+        titleLabel.setAccessibilityLabel(L10n.format(.folderLabel, name))
+        visualCardView?.setAccessibilityLabel(L10n.format(.folderLabel, name))
+        visualCardView?.setAccessibilityHelp(L10n.t(.folderContentsHelp))
+        dissolveButton?.title = L10n.t(.dissolveFolder)
+        dissolveButton?.setAccessibilityHelp(L10n.t(.dissolveFolder))
+        renameButton?.title = L10n.t(.rename)
+        renameButton?.setAccessibilityHelp(L10n.t(.renameFolderHelp))
+    }
+
     private func refresh() {
         guard isViewLoaded, !folderExitHandedOff else { return }
         guard let children = store.folderChildren(folderID) else {
@@ -272,8 +288,7 @@ final class FolderViewController: NSViewController {
             return
         }
 
-        titleLabel.stringValue = store.folderName(for: folderID)
-        visualCardView?.setAccessibilityLabel("文件夹 \(store.folderName(for: folderID))")
+        refreshLocalizedPresentation()
         displayedChildren = children
 
         var snapshot = NSDiffableDataSourceSnapshot<Int, DisplayModel.DisplayItem>()
@@ -316,6 +331,7 @@ final class FolderViewController: NSViewController {
         view.layer?.addSublayer(dragOverlay.layer)
         view.layer?.addSublayer(insertionIndicator.layer)
         (collectionView.item(at: indexPath) as? AppCellView)?.setDragSourceHidden(true)
+        setTrailingSlotReservation(true)
         dragOverlay.move(to: point, in: view)
         updateInsertionIndicator(at: point)
     }
@@ -356,8 +372,11 @@ final class FolderViewController: NSViewController {
             return
         }
 
+        guard let gap = folderDropGap(at: point) else {
+            resetDrag()
+            return
+        }
         resetDrag()
-        guard let gap = folderDropGap(at: point) else { return }
         // gap 是原列表索引;源项移除后,其后的 gap 要左移一位。
         let destination = gap > sourceIndex ? gap - 1 : gap
         guard destination != sourceIndex else { return }
@@ -452,38 +471,16 @@ final class FolderViewController: NSViewController {
         let local = collectionView.convert(point, from: nil)
         guard collectionView.bounds.contains(local) else { return nil }
 
-        // 搜索式布局可以有任意行数;用实际 attributes 而不是固定 rows 几何定位最近项。
-        var nearestIndex: Int?
-        var nearestDistance = CGFloat.greatestFiniteMagnitude
-        var nearestFrame = NSRect.zero
-        for index in displayedChildren.indices {
-            guard let attributes = layout.layoutAttributesForItem(
-                at: IndexPath(item: index, section: 0)
-            ) else { continue }
-            let frame = attributes.frame
-            let dx = local.x - frame.midX
-            let dy = local.y - frame.midY
-            let distance = dx * dx + dy * dy
-            if distance < nearestDistance {
-                nearestIndex = index
-                nearestDistance = distance
-                nearestFrame = frame
-            }
-        }
-        guard let nearestIndex else { return nil }
-        let horizontalDistance = abs(local.x - nearestFrame.midX)
-        let verticalDistance = abs(local.y - nearestFrame.midY)
-        let after: Bool
-        if verticalDistance > horizontalDistance {
-            after = local.y > nearestFrame.midY
-        } else {
-            after = local.x > nearestFrame.midX
-        }
-        return after ? nearestIndex + 1 : nearestIndex
+        let dropGeometry = FolderDropGeometry(
+            geometry: layout.liveGeometry,
+            itemCount: displayedChildren.count
+        )
+        return dropGeometry.gap(for: local)
     }
 
     private func resetDrag() {
         clearLocalDragVisuals()
+        setTrailingSlotReservation(false)
         draggingOutside = false
         folderExitLifecycle.cancel()
     }
@@ -528,15 +525,28 @@ final class FolderViewController: NSViewController {
             return nil
         }
         let bounded = min(max(0, gap), displayedChildren.count)
+        let dropGeometry = FolderDropGeometry(
+            geometry: layout.liveGeometry,
+            itemCount: displayedChildren.count
+        )
         if bounded < displayedChildren.count {
             return layout.layoutAttributesForItem(
                 at: IndexPath(item: bounded, section: 0)
-            )?.frame
+            )?.frame ?? dropGeometry.frame(forGap: bounded)
         }
-        guard let last = layout.layoutAttributesForItem(
-            at: IndexPath(item: displayedChildren.count - 1, section: 0)
-        )?.frame else { return nil }
-        return last.offsetBy(dx: last.width + layout.horizontalSpacing, dy: 0)
+        return dropGeometry.frame(forGap: bounded)
+    }
+
+    /// During a local folder drag, reserve the virtual trailing slot in the
+    /// search document so its insertion frame remains scrollable and visible.
+    private func setTrailingSlotReservation(_ reserved: Bool) {
+        guard let layout = collectionView?.collectionViewLayout as? PagingGridLayout,
+              layout.reservesSearchTrailingSlot != reserved else {
+            return
+        }
+        layout.reservesSearchTrailingSlot = reserved
+        collectionView.layoutSubtreeIfNeeded()
+        updateDocumentFrame()
     }
 
     private func closeFolder() {
@@ -565,9 +575,21 @@ final class FolderViewController: NSViewController {
 
         let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { return }
-        store.renameFolder(folderID, to: name)
-        titleLabel.stringValue = name
-        visualCardView?.setAccessibilityLabel("文件夹 \(name)")
+        if let completingStore = store as? any LayoutMutationCompleting {
+            renameButton.isEnabled = false
+            completingStore.renameFolder(folderID, to: name) { [weak self] committed in
+                guard let self else { return }
+                self.renameButton.isEnabled = true
+                if committed {
+                    self.refreshLocalizedPresentation(folderName: name)
+                } else {
+                    self.refresh()
+                }
+            }
+        } else {
+            store.renameFolder(folderID, to: name)
+            refreshLocalizedPresentation(folderName: name)
+        }
     }
 
     @objc private func dissolveTapped() {
@@ -583,8 +605,21 @@ final class FolderViewController: NSViewController {
         alert.addButton(withTitle: L10n.t(.cancel))
         guard alert.runModal() == .alertFirstButtonReturn else { return }
 
-        store.dissolveFolder(folderID)
-        closeFolder()
+        if let completingStore = store as? any LayoutMutationCompleting {
+            dissolveButton.isEnabled = false
+            completingStore.dissolveFolder(folderID) { [weak self] committed in
+                guard let self else { return }
+                self.dissolveButton.isEnabled = true
+                if committed {
+                    self.closeFolder()
+                } else {
+                    self.refresh()
+                }
+            }
+        } else {
+            store.dissolveFolder(folderID)
+            closeFolder()
+        }
     }
 
     private func stableColorIndex(_ key: String) -> Int {

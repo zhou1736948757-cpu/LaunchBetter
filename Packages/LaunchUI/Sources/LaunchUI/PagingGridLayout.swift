@@ -26,6 +26,15 @@ public final class PagingGridLayout: NSCollectionViewLayout {
     /// 布局模式(搜索模式切换分页为垂直滚动)。
     public var mode: Mode = .paged
 
+    /// 搜索拖拽时保留末尾虚拟槽位所需的文档空间。
+    /// 默认关闭，普通搜索结果仍只占实际结果所需高度；文件夹拖拽会临时开启。
+    var reservesSearchTrailingSlot = false {
+        didSet {
+            guard oldValue != reservesSearchTrailingSlot else { return }
+            invalidateLayout()
+        }
+    }
+
     private var itemFrames: [IndexPath: CGRect] = [:]
     private var contentWidth: CGFloat = 0
     private var contentHeight: CGFloat = 0
@@ -102,8 +111,16 @@ public final class PagingGridLayout: NSCollectionViewLayout {
             ?? collectionView.bounds.width
     }
 
+    private var visibleClipHeight: CGFloat {
+        guard let collectionView else { return 0 }
+        return collectionView.enclosingScrollView?.contentView.bounds.height
+            ?? collectionView.bounds.height
+    }
+
     private func buildGeometry(usingClipWidth clipWidth: CGFloat) -> GridGeometry {
-        let height = collectionView?.bounds.height ?? 0
+        let height = visibleClipHeight > 0
+            ? visibleClipHeight
+            : (collectionView?.bounds.height ?? 0)
         return GridGeometry(
             columns: columns,
             rows: rows,
@@ -171,7 +188,7 @@ public final class PagingGridLayout: NSCollectionViewLayout {
             return
         }
         let itemCount = collectionView.numberOfItems(inSection: 0)
-        let size = geometry.searchContentSize(forItemCount: itemCount)
+        let size = searchContentSize(forItemCount: itemCount, geometry: geometry)
         contentWidth = size.width
         contentHeight = size.height
         lockDocumentWidth(size.width, collectionView: collectionView)
@@ -181,6 +198,25 @@ public final class PagingGridLayout: NSCollectionViewLayout {
                 forIndex: index, itemCount: itemCount
             )
         }
+    }
+
+    /// Pure search-size calculation, shared by prepare() and geometry tests.
+    /// The optional reservation makes a virtual trailing slot a real document
+    /// coordinate during folder drag without changing ordinary search mode.
+    func searchContentSize(forItemCount count: Int, geometry: GridGeometry) -> CGSize {
+        var size = geometry.searchContentSize(forItemCount: count)
+        guard reservesSearchTrailingSlot, count > 0 else { return size }
+
+        let trailing = geometry.searchFrame(
+            forIndex: count,
+            itemCount: count,
+            padding: FolderDropGeometry.searchPadding
+        )
+        size.height = max(
+            size.height,
+            trailing.maxY + FolderDropGeometry.searchPadding
+        )
+        return size
     }
 
     private func lockDocumentWidth(_ width: CGFloat, collectionView: NSCollectionView) {

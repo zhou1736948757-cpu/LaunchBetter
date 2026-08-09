@@ -128,6 +128,9 @@ final class DragController {
     private var folderExitLifecycle = FolderExitDragLifecycle()
     /// 仅在 LayoutStore 回执等待期间持有；teardown 会先清空，防止迟到回执重入 UI。
     private var folderExitCompletion: ((Bool) -> Void)?
+    /// 根网格 drop 等待持久化期间冻结会话；sessionID 防止迟到回执命中新拖拽。
+    private var awaitingRootDropResult = false
+    private var rootDropCompletion: ((Bool) -> Void)?
     private var displayAtDragStart: DisplayModel?
     private var lastEdgeAdvance: CFTimeInterval = 0
     private var lastKnownPoint: CGPoint?
@@ -182,11 +185,12 @@ final class DragController {
         case .folder(let id, _):
             plainLabel = store.folderName(for: id)
         }
-        // 复用源单元格已显示的图标(零磁盘 IO, Stage 1 §23-24)
-        overlay.configure(label: plainLabel, sourceImage: grid.visibleIconImage(for: item))
+        // 复用源单元格已显示的视觉表示(零磁盘 IO)。先登记/隐藏源,
+        // 再让 overlay 变为可见, 避免首帧同时存在两个视觉 owner。
+        let representation = grid.beginDragSource(for: item)
+        overlay.configure(label: plainLabel, representation: representation)
         grid.addOverlayLayer(overlay.layer)
         grid.addOverlayLayer(insertionIndicator.layer)
-        grid.setDragSourceHidden(true, for: item)
         overlay.move(to: point, in: grid.view)
 
         let coordinator = FrameCoordinator(
@@ -211,6 +215,25 @@ final class DragController {
         at point: NSPoint,
         inputSource: DragInputSource = .mouse
     ) -> Bool {
+        // 保留旧 folder-child 调用签名; 内部立即转成语义化表示。
+        beginFolderExitDrag(
+            app: app,
+            from: folder,
+            representation: DragVisualRepresentation.legacy(image: sourceImage),
+            at: point,
+            inputSource: inputSource
+        )
+    }
+
+    /// 文件夹子项 handoff 的语义化入口。DragController 不处理文件夹渲染细节。
+    @discardableResult
+    func beginFolderExitDrag(
+        app: AppID,
+        from folder: FolderID,
+        representation: DragVisualRepresentation?,
+        at point: NSPoint,
+        inputSource: DragInputSource = .mouse
+    ) -> Bool {
         guard state == .idle, activeInputSource == nil else { return false }
         guard let grid, !grid.isSearchMode,
               store.folderChildren(folder)?.contains(app) == true else { return false }
@@ -228,7 +251,7 @@ final class DragController {
         sessionID = UUID()
         plainLabel = store.displayName(for: app)
 
-        overlay.configure(label: plainLabel, sourceImage: sourceImage)
+        overlay.configure(label: plainLabel, representation: representation)
         grid.addOverlayLayer(overlay.layer)
         grid.addOverlayLayer(insertionIndicator.layer)
         overlay.move(to: point, in: grid.view)
@@ -275,6 +298,7 @@ final class DragController {
             completion?(false)
             return
         }
+        guard !awaitingRootDropResult else { return }
 
         switch InputEndArbitration.decide(
             sessionOwner: activeInputSource?.inputEndSource,
@@ -340,6 +364,43 @@ final class DragController {
             ?? LayoutTransaction.Destination(page: 0, slot: 0)
 
         // 文件夹悬停 → 移入文件夹；App 悬停达到 dwell → 两 App 建夹。
+        // 正式存储提供最终持久化回执；在结果到达前冻结同一拖拽会话。
+        if let completingStore = store as? any LayoutMutationCompleting {
+            if case .app(let appID) = item, let folder = grid?.hoveredFolder(at: point) {
+                awaitRootDropResult(completion: completion) { result in
+                    completingStore.addToFolder(app: appID, folder: folder, completion: result)
+                }
+                return
+            }
+            if case .app(let appID) = item,
+               case .active(let target) = createFolderDecision,
+               case .app(let pointedTarget)? = grid?.itemAt(point: point),
+               pointedTarget == target {
+                awaitRootDropResult(completion: completion) { result in
+                    completingStore.createFolder(
+                        name: L10n.t(.newFolder),
+                        appIDs: [appID, target],
+                        completion: result
+                    )
+                }
+                return
+            }
+            if let drop = LayoutTransaction.drop(
+                display: display,
+                source: source(from: item),
+                destination: destination
+            ) {
+                awaitRootDropResult(completion: completion) { result in
+                    completingStore.applyDragDrop(drop.mutation, completion: result)
+                }
+                return
+            }
+            teardown()
+            completion?(false)
+            return
+        }
+
+        // 兼容不提供持久化回执的轻量测试/嵌入式存储。
         if case .app(let appID) = item, let folder = grid?.hoveredFolder(at: point) {
             store.addToFolder(app: appID, folder: folder)
         } else if case .app(let appID) = item,
@@ -353,9 +414,38 @@ final class DragController {
             destination: destination
         ) {
             store.applyDragDrop(drop.mutation)
+        } else {
+            teardown()
+            completion?(false)
+            return
         }
         teardown()
         completion?(true)
+    }
+
+    private func awaitRootDropResult(
+        completion: ((Bool) -> Void)?,
+        operation: (@escaping (Bool) -> Void) -> Void
+    ) {
+        guard !awaitingRootDropResult else { return }
+        awaitingRootDropResult = true
+        rootDropCompletion = completion
+        let requestSessionID = sessionID
+        frameCoordinator?.stop()
+        frameCoordinator = nil
+        sampleBuffer.clear()
+        operation { [weak self] result in
+            self?.completeRootDrop(result, sessionID: requestSessionID)
+        }
+    }
+
+    private func completeRootDrop(_ result: Bool, sessionID: UUID) {
+        guard self.sessionID == sessionID, awaitingRootDropResult else { return }
+        let completion = rootDropCompletion
+        rootDropCompletion = nil
+        awaitingRootDropResult = false
+        teardown()
+        completion?(result)
     }
 
     private func completeFolderExit(_ result: Bool, sessionID: UUID) {
@@ -364,6 +454,8 @@ final class DragController {
               folderExitLifecycle.resolve(result) else { return }
         let completion = folderExitCompletion
         folderExitCompletion = nil
+        rootDropCompletion = nil
+        awaitingRootDropResult = false
         // 先释放 overlay/session，再把最终 Bool 交给 FolderViewController。
         teardown()
         completion?(result)
@@ -383,10 +475,12 @@ final class DragController {
         let shouldRestoreFolderExitVisual = restoreFolderExitVisual && folderExitSession != nil
         grid?.setCreateFolderTargetHighlight(appID: nil, active: false)
         if let sourceItem {
-            grid?.setDragSourceHidden(false, for: sourceItem)
+            grid?.endDragSource(for: sourceItem)
         }
         folderExitCompletion = nil
         folderExitLifecycle.cancel()
+        rootDropCompletion = nil
+        awaitingRootDropResult = false
         state = .idle
         activeInputSource = nil
         frameCoordinator?.stop()
@@ -868,11 +962,18 @@ final class DragOverlayLayer {
         layer.isHidden = true
     }
 
-    /// 配置 overlay: 复用源单元格已渲染图标(零磁盘 IO), 无图标时保留占位。
-    func configure(label: String, sourceImage: CGImage?) {
-        hasSourceImage = sourceImage != nil
-        if let sourceImage {
-            iconLayer.contents = sourceImage
+    /// 配置 overlay: 复用源单元格已渲染视觉表示(零磁盘 IO), 无图像时保留占位。
+    func configure(label: String, representation: DragVisualRepresentation?) {
+        let scale = representation?.rasterScale
+            ?? max(1, NSScreen.main?.backingScaleFactor ?? 2)
+        layer.contentsScale = scale
+        iconLayer.contentsScale = scale
+        labelLayer.contentsScale = scale
+        iconLayer.frame = fittedIconFrame(for: representation?.logicalSize)
+
+        hasSourceImage = representation != nil
+        if let representation {
+            iconLayer.contents = representation.image
             iconLayer.backgroundColor = nil
         } else {
             iconLayer.contents = nil
@@ -880,6 +981,38 @@ final class DragOverlayLayer {
         }
         labelLayer.string = label
         layer.isHidden = false
+    }
+
+    /// 保留 FolderViewController 现有的 folder-child 调用签名。
+    func configure(label: String, sourceImage: CGImage?) {
+        configure(
+            label: label,
+            representation: DragVisualRepresentation.legacy(image: sourceImage)
+        )
+    }
+
+    private func fittedIconFrame(for logicalSize: CGSize?) -> CGRect {
+        guard let logicalSize,
+              logicalSize.width > 0,
+              logicalSize.height > 0,
+              layer.bounds.width > 0,
+              layer.bounds.height > 0 else {
+            return layer.bounds
+        }
+        let factor = min(
+            layer.bounds.width / logicalSize.width,
+            layer.bounds.height / logicalSize.height
+        )
+        let size = CGSize(
+            width: logicalSize.width * factor,
+            height: logicalSize.height * factor
+        )
+        return CGRect(
+            x: layer.bounds.midX - size.width / 2,
+            y: layer.bounds.midY - size.height / 2,
+            width: size.width,
+            height: size.height
+        )
     }
 
     /// 位置必须转 overlay 挂载父视图(视口)坐标 —— 分页滚动后 document 坐标含页偏移(评审 M6)。
@@ -895,7 +1028,7 @@ final class DragOverlayLayer {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         iconLayer.backgroundColor = NSColor.systemGreen.cgColor
-        labelLayer.string = "放入 \(store.folderName(for: folder))"
+        labelLayer.string = L10n.format(.dropIntoFolder, store.folderName(for: folder))
         CATransaction.commit()
     }
 
@@ -903,7 +1036,7 @@ final class DragOverlayLayer {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         iconLayer.backgroundColor = NSColor.systemBlue.cgColor
-        labelLayer.string = "与 \(name) 建立文件夹"
+        labelLayer.string = L10n.format(.createFolderWith, name)
         CATransaction.commit()
     }
 

@@ -1,6 +1,37 @@
 import AppKit
 import LaunchCore
 
+/// 拖拽视觉表示: 只携带已在内存中的位图及其 point/pixel 语义。
+///
+/// 生成方负责渲染细节; DragController 只消费这个值, 不接触 cell/layer 树。
+@MainActor
+struct DragVisualRepresentation {
+    let image: CGImage
+    let logicalSize: CGSize
+    let rasterScale: CGFloat
+
+    init(image: CGImage, logicalSize: CGSize, rasterScale: CGFloat) {
+        self.image = image
+        self.logicalSize = logicalSize
+        self.rasterScale = rasterScale.isFinite && rasterScale > 0 ? rasterScale : 1
+    }
+
+    /// 兼容旧 folder-child API: 旧接口只传 CGImage, 从当前屏幕推导其 raster scale。
+    static func legacy(image: CGImage?) -> DragVisualRepresentation? {
+        guard let image else { return nil }
+        let scale = max(1, NSScreen.main?.backingScaleFactor ?? 2)
+        let logicalSize = CGSize(
+            width: CGFloat(image.width) / scale,
+            height: CGFloat(image.height) / scale
+        )
+        return DragVisualRepresentation(
+            image: image,
+            logicalSize: logicalSize,
+            rasterScale: scale
+        )
+    }
+}
+
 /// 应用/文件夹单元格: 图标或文件夹缩略图 + 标签。
 ///
 /// 图标加载(§85 复用竞态防护):
@@ -52,6 +83,28 @@ final class AppCellView: NSCollectionViewItem {
         // 类型校验后强转, 消除对任意 contents 的裸 force-cast crash point(v0.1.6 §53)
         guard CFGetTypeID(ref) == CGImage.typeID else { return nil }
         return (ref as! CGImage)
+    }
+
+    /// 返回当前单元格的语义化拖拽视觉表示。
+    /// 普通 App 直接复用已显示的图标; 文件夹由缩略图 view 在内存中栅格化。
+    /// 不触发新的图标请求, 也不访问磁盘。
+    func dragRepresentation() -> DragVisualRepresentation? {
+        if representedFolderID != nil {
+            return folderThumbnailView.dragRepresentation()
+        }
+
+        guard representedAppID != nil, let image = visibleIconImage else { return nil }
+        let logicalSize = iconLayer.bounds.size.width > 0 && iconLayer.bounds.size.height > 0
+            ? iconLayer.bounds.size
+            : CGSize(width: iconPointSize, height: iconPointSize)
+        let scale = lastRequestedScale > 0
+            ? CGFloat(lastRequestedScale)
+            : max(1, iconLayer.contentsScale)
+        return DragVisualRepresentation(
+            image: image,
+            logicalSize: logicalSize,
+            rasterScale: scale
+        )
     }
 
     /// 诊断: 是否已显示真实图标(contents 非空)。
@@ -313,6 +366,10 @@ final class AppCellView: NSCollectionViewItem {
     }
 
     private func beginConfiguration() {
+        // Reconfiguration must never carry a previous identity's hidden state.
+        // GridViewController reapplies the active source identity immediately after
+        // this configuration returns.
+        setDragSourceHidden(false)
         invalidateIconRequests()
         resetCreateFolderTargetHighlight()
         representedAppID = nil
@@ -529,6 +586,41 @@ private final class FolderThumbnailView: NSVisualEffectView {
         let iconLayer = iconLayers[index]
         iconLayer.contents = image
         iconLayer.isHidden = image == nil
+    }
+
+    /// 将当前已渲染的文件夹缩略图复制到内存 bitmap; 不重新请求子图标。
+    /// context 像素尺寸显式按 point × backing scale 计算, 覆盖 1x/2x 显示器。
+    func dragRepresentation() -> DragVisualRepresentation? {
+        guard !isHidden, bounds.width > 0, bounds.height > 0,
+              let layer else { return nil }
+
+        let scale = max(1, backingScale)
+        let pixelWidth = max(1, Int(ceil(bounds.width * scale)))
+        let pixelHeight = max(1, Int(ceil(bounds.height * scale)))
+        guard let context = CGContext(
+            data: nil,
+            width: pixelWidth,
+            height: pixelHeight,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else {
+            return nil
+        }
+
+        context.interpolationQuality = .high
+        context.saveGState()
+        context.scaleBy(x: scale, y: scale)
+        layer.render(in: context)
+        context.restoreGState()
+
+        guard let image = context.makeImage() else { return nil }
+        return DragVisualRepresentation(
+            image: image,
+            logicalSize: bounds.size,
+            rasterScale: scale
+        )
     }
 }
 
