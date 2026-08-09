@@ -21,7 +21,7 @@
 
 ## Current Phase
 
-**v0.1.8 — 用户实测调参: displacementThreshold 0.18, followSensitivity 0.85(原 1.0)**, 已安装 /Applications, tag v0.1.8
+**v0.1.9 — 用户实测调参: displacementThreshold 0.15, followSensitivity 0.85**, 已安装 /Applications, tag v0.1.9
 
 ## v0.1.6 关键成果(已验证)
 
