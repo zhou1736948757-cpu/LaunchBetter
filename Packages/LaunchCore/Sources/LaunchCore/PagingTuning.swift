@@ -14,7 +14,8 @@ public enum PagingTuning {
     public static let maxGestureDisplacementPages: CGFloat = 1.0
 
     /// 松手吸附: 位移达到页宽的该比例即翻页。
-    public static let displacementThreshold: CGFloat = 0.30
+    /// v0.1.7: 用户反馈阻尼感太强, 0.30 → 0.21(原值的 70%, 滑更少即翻页)。
+    public static let displacementThreshold: CGFloat = 0.21
 
     /// 松手吸附: fling 最小方向性位移(页宽比例), 防止零位移误翻。
     public static let flingMinimumDisplacementPages: CGFloat = 0.12
