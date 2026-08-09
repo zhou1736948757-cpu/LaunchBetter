@@ -23,7 +23,7 @@ public final class ActivationCoordinator {
         let nonInteractiveFlags = [
             "--smoke", "--dragtest", "--folders", "--screenshot",
             "--iconbench", "--pagetest", "--threefingerdiag",
-            "--dragcacheprobe", "--pagingprobe", "--searchprobe", "--gridtest",
+            "--dragcacheprobe", "--pagingprobe", "--searchprobe", "--gridtest", "--perf",
         ]
         return !nonInteractiveFlags.contains { args.contains($0) }
     }

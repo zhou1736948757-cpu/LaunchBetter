@@ -149,36 +149,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 搜索前截图(同壁纸基线)
         windowController.captureContentScreenshot(to: "/tmp/lb-search-before.png")
         store.searchQuery = query
+        windowController.refreshGrid()
         // 等搜索布局 + 图标异步加载完成后再测量/截图
         DispatchQueue.main.asyncAfter(deadline: .now() + 6.0) { [weak self] in
             MainActor.assumeIsolated {
-                guard let store = self?.container?.store, let windowController = self?.container?.windowController else {
-                    NSApp.terminate(nil)
-                    return
+                guard let self else { exit(1) }
+                guard let store = self.container?.store,
+                      let windowController = self.container?.windowController else {
+                    self.finishProbe("SEARCHPROBE", ok: false, detail: "container disappeared")
                 }
                 let results = store.searchResults() ?? []
                 let diag = windowController.pageTestScrollDiagnostics()
-                print("SEARCHPROBE query=\(query) results=\(results.count) capacity=\(capacity) overflow=\(results.count > capacity)")
+                let overflow = results.count > capacity
+                print("SEARCHPROBE query=\(query) results=\(results.count) capacity=\(capacity) overflow=\(overflow)")
                 print("SEARCHPROBE \(diag)")
-                print("SEARCHPROBE realIcons=\(windowController.realIconCount())/\(windowController.visibleItemCountForDiag())")
+                let realIcons = windowController.realIconCount()
+                let visibleItems = windowController.visibleItemCountForDiag()
+                let iconsOK = visibleItems > 0 && realIcons == visibleItems
+                let searchUIOK = windowController.isSearchModeForDiag()
+                    && windowController.snapshotItemCountForDiag() == results.count
+                print("SEARCHPROBE realIcons=\(realIcons)/\(visibleItems)")
+                print("SEARCHPROBE uiMode=\(searchUIOK) snapshotItems=\(windowController.snapshotItemCountForDiag())")
                 if let screenshotPath = CommandLine.arguments.last, !screenshotPath.hasPrefix("--") {
                     windowController.captureContentScreenshot(to: screenshotPath)
                 }
                 // §71: customDisplayName 变化应触发搜索索引重建
                 let rb0 = store.searchIndexRebuildCount
                 let target = store.displayModel().visibleAppIDs.first
+                var customNameRebuilt = false
                 if let target {
                     store.setCustomName(target, name: "SearchInvProbeName")
                     let rb1 = store.searchIndexRebuildCount
                     store.setCustomName(target, name: nil)
                     let delta = rb1 - rb0
+                    customNameRebuilt = delta > 0
                     print("SEARCHPROBE searchRebuildOnCustomName=\(delta > 0 ? "OK (+\(delta))" : "FAIL (0)")")
                 }
                 store.searchQuery = ""
                 windowController.refreshGrid()
-                print("SEARCHPROBE restored search=\(store.searchResults() == nil)")
-                print("SEARCHPROBE OK")
-                NSApp.terminate(nil)
+                let restored = store.searchResults() == nil
+                let restoredUI = !windowController.isSearchModeForDiag()
+                print("SEARCHPROBE restored search=\(restored) ui=\(restoredUI)")
+                let ok = overflow && iconsOK && searchUIOK && customNameRebuilt && restored && restoredUI
+                self.finishProbe("SEARCHPROBE", ok: ok, detail: "overflow=\(overflow) icons=\(iconsOK) ui=\(searchUIOK) customName=\(customNameRebuilt) restored=\(restored && restoredUI)")
             }
         }
     }
@@ -280,9 +293,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         // 2. momentum 序列(应 0 位移 0 snap)
         let beforeMomentum = controller.pagingProbeDiagnostics()
-        controller.pagingProbeFeed(makeScroll(dx: -80, phase: 0, momentum: 1)!)
-        controller.pagingProbeFeed(makeScroll(dx: -80, phase: 0, momentum: 2)!)
-        controller.pagingProbeFeed(makeScroll(dx: 0, phase: 0, momentum: 3)!)
+        guard let momentumBegan = makeScroll(dx: -80, phase: 0, momentum: 1),
+              let momentumChanged = makeScroll(dx: -80, phase: 0, momentum: 2),
+              let momentumEnded = makeScroll(dx: 0, phase: 0, momentum: 3) else {
+            finishProbe("PAGINGPROBE", ok: false, detail: "failed to create synthetic momentum events")
+        }
+        controller.pagingProbeFeed(momentumBegan)
+        controller.pagingProbeFeed(momentumChanged)
+        controller.pagingProbeFeed(momentumEnded)
         let afterMomentum = controller.pagingProbeDiagnostics()
         let momentumIgnored = ["input", "scroll", "settles"].allSatisfy { key in
             diagnosticCounter(key, in: beforeMomentum)
@@ -326,7 +344,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let args = CommandLine.arguments
         let base = args.firstIndex(of: "--gridtest") ?? args.endIndex
         func intArg(_ offset: Int, default d: Int) -> Int {
-            let idx = args.index(base, offsetBy: offset)
+            let idx = base + offset
             return (args.indices.contains(idx) ? Int(args[idx]) : nil) ?? d
         }
         let gColumns = intArg(1, default: 8)
@@ -341,6 +359,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 windowController.refreshGrid()
                 let display = store.displayModel()
                 let diag = windowController.pageTestScrollDiagnostics()
+                let applied = store.config.gridColumns == gColumns
+                    && store.config.gridRows == gRows
+                    && store.config.iconSize == gIconSize
+                    && display.pageCapacity == gColumns * gRows
                 print("GRIDTEST columns=\(gColumns) rows=\(gRows) iconSize=\(gIconSize) pages=\(display.pages.count) capacity=\(display.pageCapacity) iconSize=\(store.iconSize)")
                 print("GRIDTEST \(diag)")
                 if let screenshotPath = CommandLine.arguments.last, !screenshotPath.hasPrefix("--") {
@@ -348,10 +370,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
                 store.save(original)
                 windowController.refreshGrid()
+                let restored = store.config.gridColumns == original.gridColumns
+                    && store.config.gridRows == original.gridRows
+                    && store.config.iconSize == original.iconSize
+                let searchRebuildDelta = store.searchIndexRebuildCount - rebuildBefore
                 print("GRIDTEST restored columns=\(store.config.gridColumns) rows=\(store.config.gridRows) iconSize=\(store.config.iconSize)")
-                print("GRIDTEST searchRebuildDelta=\(store.searchIndexRebuildCount - rebuildBefore) (期望 0: UI-only config 不重建搜索索引, §71)")
-                print("GRIDTEST OK")
-                NSApp.terminate(nil)
+                print("GRIDTEST searchRebuildDelta=\(searchRebuildDelta) (期望 0: UI-only config 不重建搜索索引, §71)")
+                self.finishProbe(
+                    "GRIDTEST",
+                    ok: applied && restored && searchRebuildDelta == 0,
+                    detail: "applied=\(applied) restored=\(restored) searchRebuildDelta=\(searchRebuildDelta)"
+                )
             }
         }
     }
@@ -597,11 +626,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         print("PAGETEST after: \(controller.pageTestScrollDiagnostics())")
         let sequenceOK = observedPages == [0, 1, 2, 1, 0]
         let pageWidth = controller.pageTestPageWidth()
+        let pageCount = controller.pageTestPageCount()
+        let documentWidth = controller.pageTestDocumentWidth()
         let expectedOffsets = [0, pageWidth, pageWidth * 2, pageWidth, 0]
         let offsetsOK = zip(observedOffsets, expectedOffsets).allSatisfy {
             abs($0.0 - $0.1) < 1
         }
-        let ok = controller.pageTestCurrentPage() == 0 && sequenceOK && offsetsOK
+        let geometryOK = pageWidth > 0 && pageCount >= 3
+            && documentWidth >= pageWidth * Double(pageCount)
+        let ok = controller.pageTestCurrentPage() == 0 && sequenceOK && offsetsOK && geometryOK
         // v0.1.4: 重开面板回到第一页
         _ = controller.pageTestGoTo(2)
         step {}

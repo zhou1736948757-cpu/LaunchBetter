@@ -73,6 +73,7 @@ final class GridViewController: NSViewController {
         return "content=\(Int(content.width))x\(Int(content.height)) docFrame=\(Int(doc.width))x\(Int(doc.height)) clipX=\(Int(clip.origin.x)) clipY=\(Int(clip.origin.y)) clipW=\(Int(clip.width)) sections=\(sections) items=\(items) frames=\(frames) prepare=\(layout?.prepareCount ?? 0)"
     }
     private var searchMode = false
+    private var lastAppliedLanguage = L10n.currentLanguage
     /// 退出搜索后恢复的页码。
     private var pagedPageBeforeSearch = 0
 
@@ -275,6 +276,12 @@ final class GridViewController: NSViewController {
         if store.displayRevision != lastAppliedRevision {
             lastAppliedRevision = store.displayRevision
             applyLatestData()
+            if L10n.currentLanguage != lastAppliedLanguage {
+                lastAppliedLanguage = L10n.currentLanguage
+                // Diffable keeps cells with unchanged identities. A language-only
+                // revision must still rebuild labels and accessibility strings.
+                collectionView.reloadData()
+            }
         }
     }
 
@@ -633,6 +640,10 @@ final class GridViewController: NSViewController {
     func diagnostics() -> String {
         let snapshot = dataSource.snapshot()
         return "sections=\(snapshot.numberOfSections) items=\(snapshot.itemIdentifiers.count) pageCount=\(pageCount) search=\(searchMode)"
+    }
+
+    var diagnosticSnapshotItemCount: Int {
+        dataSource.snapshot().itemIdentifiers.count
     }
 
     /// 更新页码指示点(搜索模式隐藏)。

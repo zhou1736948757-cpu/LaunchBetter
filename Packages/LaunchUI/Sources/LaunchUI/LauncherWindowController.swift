@@ -323,6 +323,14 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         gridViewController?.collectionViewRef.visibleItems().count ?? 0
     }
 
+    public func isSearchModeForDiag() -> Bool {
+        gridViewController?.isSearchMode ?? false
+    }
+
+    public func snapshotItemCountForDiag() -> Int {
+        gridViewController?.diagnosticSnapshotItemCount ?? -1
+    }
+
     /// 诊断: 手动驱动一帧(无 display link 环境, v0.1.6 §69)。
     public func dragProbeTick(_ point: NSPoint) {
         gridViewController?.dragController?.probeProcessTick(point)

@@ -408,7 +408,14 @@ public final class LauncherStore: LauncherStoring, LayoutMutationCompleting, Set
             let result = await layoutStore.reconcileWithResult(catalog: snapshot, now: Date())
             guard result.committed else {
                 // Do not publish a catalog whose required tombstone/layout update
-                // failed to persist; a later filesystem callback may retry.
+                // failed to persist. Keep a bounded-backoff retry alive even if
+                // no later filesystem callback arrives.
+                externalCatalogRefreshPending = true
+                do {
+                    try await Task.sleep(for: .milliseconds(250))
+                } catch {
+                    break
+                }
                 continue
             }
             guard await catalogActor.currentSnapshot(ifGeneration: generation) != nil else {

@@ -43,6 +43,8 @@ public actor LayoutStore {
 
     /// 启动: 加载磁盘快照(磁盘存在则权威)。损坏时备份并保留种子布局;缺失时保留种子布局。
     public func start() -> StartResult {
+        hasDurableSnapshot = false
+        lastPersistErrorDescription = nil
         do {
             if let loaded = try persistence.load() {
                 layout = loaded
@@ -91,7 +93,7 @@ public actor LayoutStore {
         return commit(result)
     }
 
-    /// 创建文件夹(合并 ≥1 个应用)。返回新 FolderID,nil = 无效。
+    /// 创建文件夹(合并至少 2 个应用)。返回新 FolderID,nil = 无效。
     public func createFolder(
         display: DisplayModel,
         name: String,

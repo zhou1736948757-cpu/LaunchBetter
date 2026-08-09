@@ -54,6 +54,52 @@ private final class IncrementalScanProbe: @unchecked Sendable {
     }
 }
 
+private final class FullScanInterleaveProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private let firstStarted = DispatchSemaphore(value: 0)
+    private let releaseFirst = DispatchSemaphore(value: 0)
+    private var calls = 0
+    let fullRecords: [AppRecord]
+
+    init(source: URL) {
+        func record(_ name: String) -> AppRecord {
+            let url = source.appendingPathComponent("\(name).app")
+            return AppRecord(
+                id: AppID(url.path)!, url: url,
+                bundleIdentifier: "com.test.\(name)", displayName: name,
+                infoPlistModificationDate: nil,
+                iconContentVersion: IconContentVersion(bundleVersion: "1")
+            )
+        }
+        fullRecords = [record("A"), record("B")]
+    }
+
+    func discover(_ sources: [URL]) -> [AppRecord] {
+        lock.lock()
+        calls += 1
+        let call = calls
+        lock.unlock()
+        if call == 1 {
+            firstStarted.signal()
+            releaseFirst.wait()
+            return [fullRecords[0]]
+        }
+        return fullRecords
+    }
+
+    func waitUntilFirstStarted() -> Bool {
+        firstStarted.wait(timeout: .now() + 2) == .success
+    }
+
+    func releaseFirstScan() { releaseFirst.signal() }
+
+    var callCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return calls
+    }
+}
+
 @Suite("AppRootFolding 事件折叠")
 struct AppRootFoldingTests {
     private let scopes = ["/Applications", "/Users/mac/Applications", "/Volumes/Dev"]
@@ -155,6 +201,32 @@ struct IncrementalReconcileTests {
         _ = await second.value
         #expect(probe.callCount == 2)
         #expect(await actor.currentSnapshot().apps.first?.displayName == "New")
+    }
+
+    @Test("全量扫描与增量提交交错时重扫,不丢失全量发现")
+    func fullScanRetriesAfterIncrementalCommit() async throws {
+        let dir = try tempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let source = try tempDirectory()
+        defer { try? FileManager.default.removeItem(at: source) }
+        let probe = FullScanInterleaveProbe(source: source)
+        let b = probe.fullRecords[1]
+        let actor = AppCatalogActor(
+            store: CatalogSnapshotStore(directory: dir),
+            sources: [source],
+            discoverSources: probe.discover,
+            discoverAppRoot: { _ in b }
+        )
+        _ = await actor.start()
+
+        let full = Task { try await actor.reconcileFromDisk() }
+        #expect(probe.waitUntilFirstStarted())
+        _ = await actor.reconcileAppRoot(b.url)
+        probe.releaseFirstScan()
+        _ = try await full.value
+
+        #expect(probe.callCount == 2)
+        #expect(await actor.currentSnapshot().apps.map(\.displayName).sorted() == ["A", "B"])
     }
 
     @Test("reconcileAppRoot: 元数据变化 → updated(图标内容版本信号)")
@@ -286,6 +358,25 @@ struct IncrementalReconcileTests {
         )
         let delta = await actor.applyChangeSummary(summary)
         #expect(delta.inserted.count == 2, "事件丢失应触发该 scope 全量重扫")
+    }
+
+
+    @Test("事件丢失摘要只有 appRoot 时仍重扫全部来源")
+    func eventLossWithOnlyAppRootRecoversAllSources() async throws {
+        let dir = try tempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let source = try tempDirectory()
+        defer { try? FileManager.default.removeItem(at: source) }
+        let actor = makeActor(dir: dir, source: source)
+        _ = await actor.start()
+        let appURL = try makeFakeApp(in: source, name: "Recovered", bundleID: "com.test.Recovered")
+
+        let summary = DirectoryMonitor.ChangeSummary(
+            dirtyScopes: [], dirtyAppRoots: [appURL.path], eventLossDetected: true
+        )
+        let delta = await actor.applyChangeSummary(summary)
+        #expect(delta.inserted.count == 1)
+        #expect(await actor.currentSnapshot().apps.first?.displayName == "Recovered")
     }
 }
 

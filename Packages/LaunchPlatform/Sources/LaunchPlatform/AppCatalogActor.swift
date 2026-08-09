@@ -108,28 +108,31 @@ public actor AppCatalogActor {
     /// 后台全量对账: 枚举磁盘 → 计算增量 → 更新快照 → 原子持久化。
     /// 枚举在后台执行器进行,不阻塞 actor。
     public func reconcileFromDisk() async throws -> CatalogDelta {
-        let capturedSources = sources
-        let capturedGeneration = generation
-        let discoverSources = discoverSources
-        let discovered = await Task.detached(priority: .utility) {
-            discoverSources(capturedSources)
-        }.value
+        while true {
+            let capturedSources = sources
+            let capturedGeneration = generation
+            let discoverSources = discoverSources
+            let discovered = await Task.detached(priority: .utility) {
+                discoverSources(capturedSources)
+            }.value
 
-        // actor 在 detached 扫描期间可重入处理 FSEvents 增量。若代数已变化，
-        // 丢弃旧全量结果，避免覆盖更晚的安装/删除事件。
-        guard generation == capturedGeneration else { return CatalogDelta() }
+            // Actor may process an incremental FSEvent while detached discovery
+            // is running. Rescan against that newer generation instead of
+            // dropping the full reconciliation and permanently missing changes.
+            guard generation == capturedGeneration else { continue }
 
-        let delta = ReconcileEngine.delta(from: snapshot, to: discovered)
-        snapshot = CatalogSnapshot(apps: discovered)
-        generation += 1
+            let delta = ReconcileEngine.delta(from: snapshot, to: discovered)
+            snapshot = CatalogSnapshot(apps: discovered)
+            generation += 1
 
-        do {
-            try store.save(snapshot)
-            lastPersistErrorDescription = nil
-        } catch {
-            lastPersistErrorDescription = String(describing: error)
+            do {
+                try store.save(snapshot)
+                lastPersistErrorDescription = nil
+            } catch {
+                lastPersistErrorDescription = String(describing: error)
+            }
+            return delta
         }
-        return delta
     }
 
     // MARK: - 增量对账(FSEvents, §71-72)
@@ -137,13 +140,10 @@ public actor AppCatalogActor {
     /// 处理目录监控变更摘要: scoped reconcile(仅受影响应用/目录), 不触发全量扫描。
     public func applyChangeSummary(_ summary: DirectoryMonitor.ChangeSummary) async -> CatalogDelta {
         var delta = CatalogDelta()
-        // 事件丢失 → 受影响 scope 全量重扫(恢复机制, §72)
+        // Event loss invalidates the summarized paths, including summaries that
+        // contain only app roots. Recover from every configured source.
         if summary.eventLossDetected {
-            for scope in summary.dirtyScopes {
-                let scoped = await reconcileScope(URL(fileURLWithPath: scope))
-                delta = delta.merged(with: scoped)
-            }
-            return delta
+            return await recoverAllScopes()
         }
         for scope in summary.dirtyScopes {
             let scoped = await reconcileScope(URL(fileURLWithPath: scope))
