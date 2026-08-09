@@ -21,12 +21,12 @@
 
 ## Current Phase
 
-**v0.2.3 hardening candidate — 自动化门禁完成，尚未发布。**
+**v0.2.3 hardening — 已完成并发布。**
 
 - 基线: `v0.2.2` / `9ee1264`
-- 工作分支: `agent/v0.2.3-hardening`
-- 候选状态: Release 构建与 ad-hoc 签名验证通过；等待用户完成实体触控板 P0 验收
-- 发布约束: 人工 P0 验收前不创建 GitHub tag/release
+- 发布分支: `main`
+- 发布状态: Release 构建、ad-hoc 签名、自动化门禁及用户 P0 验收均已通过
+- GitHub: `v0.2.3` tag/release 已准备发布
 
 ## v0.2.3 关键成果(自动化已验证)
 
@@ -77,17 +77,17 @@
 
 ## Current Task
 
-- 安装 v0.2.3 候选版并交给用户执行 P0 人工检查清单；通过后再创建正式 GitHub v0.2.3
+- v0.2.3 已安装并完成 P0 人工验收；后续进入 parity gap 规划
 - 本阶段不扩展的 parity gap: 本地化应用名元数据、自定义来源完整流程、自定义热键录制器、
   设置扩展、垂直布局
 
 ## Current Branch
 
-agent/v0.2.3-hardening
+main
 
 ## Last Known Good Commit
 
-9ee1264 (`v0.2.2` 发布基线；v0.2.3 候选改动尚未正式发布)
+v0.2.3 release commit (tag `v0.2.3`); 基线为 `v0.2.2` / `9ee1264`
 
 ## Stage 1 关键成果(已验证)
 
@@ -194,15 +194,14 @@ agent/v0.2.3-hardening
 ## GitHub / Release Status
 
 - 仓库: github.com/zhou1736948757-cpu/LaunchBetter (**PUBLIC**)
-- 当前正式版本: **v0.2.2 (`9ee1264`)**
-- v0.2.3: 本地 hardening candidate；不得在人工 P0 验收前 push tag 或创建 release
+- 当前正式版本: **v0.2.3**
+- v0.2.2 基线: `9ee1264`
+- v0.2.3: hardening、自动化门禁和用户 P0 验收完成
 
 ## Next Actions
 
-1. 用户执行 v0.2.3 P0 人工检查: 鼠标/三指重排、建文件夹、加入/重排/拖出/自动解散、取消、跨页
-2. 重启确认文件夹、顺序和重命名持久化；切换 en/zh-Hans/zh-Hant 检查即时刷新
-3. 人工门禁通过后创建并推送正式 v0.2.3 tag/release；此前只保留本地候选提交
-4. 后续版本再处理 parity gap: 本地化应用名、自定义来源、热键录制、设置扩展、垂直布局
+1. 后续版本处理 parity gap: 本地化应用名、自定义来源、热键录制、设置扩展、垂直布局
+2. 继续观察混合缩放显示器上的文件夹子项拖拽清晰度与持久化拒绝反馈
 
 ## Watchdog 状态(规则自检已启用)
 
