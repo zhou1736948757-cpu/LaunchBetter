@@ -13,13 +13,14 @@ public enum PagingTuning {
     /// 一次手势最多翻一页: 跟手位移钳制在 ±页宽。
     public static let maxGestureDisplacementPages: CGFloat = 1.0
 
-    /// 跟手阻尼/灵敏度(v0.1.7): 页面位移 = 手指位移 × 该系数。
-    /// 1.0 = 1:1; 0.85 = 手指滑满一页, 页面跟 85%(稍"省力"、不易过头)。
-    public static let followSensitivity: CGFloat = 0.85
+    /// 跟手阻尼/灵敏度: 页面位移 = 手指位移 × 该系数。
+    /// 1.0 = 1:1; >1 = 页面比手指移动更多(更轻松); <1 = 页面比手指慢(阻尼感强)。
+    /// v0.1.10: 用户实测 0.85 偏费力 → 1.1(同样距离页面移动更多, 更轻松)。
+    public static let followSensitivity: CGFloat = 1.1
 
     /// 松手吸附: 位移达到页宽的该比例即翻页。
-    /// v0.1.9: 0.30 → 0.21 → 0.18 → 0.15(用户实机反馈, 越滑越少即翻页)。
-    public static let displacementThreshold: CGFloat = 0.15
+    /// v0.1.10: 用户实机调参, 0.15 → 0.18(配合 followSensitivity 1.1 平衡误翻)。
+    public static let displacementThreshold: CGFloat = 0.18
 
     /// 松手吸附: fling 最小方向性位移(页宽比例), 防止零位移误翻。
     public static let flingMinimumDisplacementPages: CGFloat = 0.12
