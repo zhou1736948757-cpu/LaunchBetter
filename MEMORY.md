@@ -21,7 +21,22 @@
 
 ## Current Phase
 
-**v0.1.12 — 用户实测调参: followSensitivity 1.3, flingVelocityThreshold 650, displacementThreshold 0.15**, 已安装 /Applications, tag v0.1.12
+**v0.2.1 — Stage 2 完成: Legacy Feature Parity Matrix + Three-Finger Drag(复用 DragController)**, 已安装 /Applications, tag v0.2.1
+
+## Stage 2 关键成果(已验证)
+
+- **Parity Matrix**(Docs/FeatureParity/LaunchHistory-Parity-Matrix.md): 27 项全部源码证据审计;
+  "LaunchHistory" 仅是缓存目录名, 无 launch history/recent/count(不凭名字推断)
+- **Three-Finger Drag**: ThreeFingerDragRecognizer(LaunchCore 纯逻辑, 对齐旧语义
+  count=3/0.005/0.15/2帧, 12 测试); 单一 MTDevice 订阅 finger-count 路由(3指拖动/4+指 pinch);
+  复用 DragController(输入源互斥 .mouse/.threeFinger; changed coalescing 防主线程积压);
+  指针位置语义与旧行为一致
+- VERIFIED_PARITY 21 项(四指 0.18/0.2、热角 10/0.3/1.0、热键、壁纸、搜索、文件夹等);
+  PARTIAL 4 项(自定义来源/context menu/热键预设/设置); NOT_PROVEN 2 项(launch history/vertical paging);
+  MISSING 2 项(本地化应用名/垂直布局, 留下一阶段)
+- 测试: 96 + 66(新增 12)全绿; build/smoke/pagetest/threefingerdiag OK; Luna 评审 0 BLOCKER 0 MAJOR
+- 报告: Docs/PhaseReports/stage-02-legacy-interaction-parity.md
+- **待用户实机三指验证(§24 Test A-H)**
 
 ## v0.1.6 关键成果(已验证)
 
