@@ -54,6 +54,7 @@ public enum L10n {
         case cornerShow
         case cornerHide
         case cornerToggle
+        case pageOf
     }
 
     nonisolated(unsafe) private static let zhHans: [Key: String] = [
@@ -76,6 +77,7 @@ public enum L10n {
         .permissionMessage: "四指捏合手势需要“输入监控”权限才能工作。\n请点击“打开系统设置”，在“隐私与安全性” → “输入监控”中启用 LaunchBetter，然后回到应用。",
         .later: "稍后", .none: "无",
         .cornerShow: "显示启动器", .cornerHide: "隐藏启动器", .cornerToggle: "切换启动器",
+        .pageOf: "第 %@ 页，共 %@ 页",
     ]
 
     nonisolated(unsafe) private static let zhHant: [Key: String] = [
@@ -98,6 +100,7 @@ public enum L10n {
         .permissionMessage: "四指捏合手勢需要「輸入監控」權限才能運作。\n請點擊「開啟系統設定」，在「隱私權與安全性」→「輸入監控」中啟用 LaunchBetter，然後返回應用程式。",
         .later: "稍後", .none: "無",
         .cornerShow: "顯示啟動器", .cornerHide: "隱藏啟動器", .cornerToggle: "切換啟動器",
+        .pageOf: "第 %@ 頁，共 %@ 頁",
     ]
 
     nonisolated(unsafe) private static let english: [Key: String] = [
@@ -120,6 +123,7 @@ public enum L10n {
         .permissionMessage: "The four-finger pinch gesture requires Input Monitoring permission.\nClick “Open System Settings”, then enable LaunchBetter in Privacy & Security → Input Monitoring and return to the app.",
         .later: "Later", .none: "None",
         .cornerShow: "Show Launcher", .cornerHide: "Hide Launcher", .cornerToggle: "Toggle Launcher",
+        .pageOf: "Page %@ of %@",
     ]
 
     nonisolated(unsafe) private static var language: AppLanguage = .system

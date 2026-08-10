@@ -165,7 +165,8 @@ final class GridViewController: NSViewController {
         // 页码指示点(底部居中)
         let dots = NSStackView()
         dots.orientation = .horizontal
-        dots.spacing = 8
+        // 24pt 交互区 + 负间距 → 视觉点间距保持 ~14pt(原 6pt 点 + 8pt 间距)
+        dots.spacing = -10
         dots.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(dots)
         NSLayoutConstraint.activate([
@@ -659,7 +660,7 @@ final class GridViewController: NSViewController {
         dataSource.snapshot().itemIdentifiers.count
     }
 
-    /// 更新页码指示点(搜索模式隐藏)。
+    /// 更新页码指示点(搜索模式隐藏)。页点可点击, 复用 paging engine(Stage A8)。
     private func updatePageDots() {
         guard let pageDots else { return }
         for dot in pageDotViews {
@@ -668,16 +669,17 @@ final class GridViewController: NSViewController {
         pageDotViews = []
         guard !searchMode, pageCount > 1 else { return }
         for index in 0..<pageCount {
-            let dot = NSView()
-            dot.wantsLayer = true
-            dot.layer?.cornerRadius = 3
+            let dot = PageDotView()
             dot.translatesAutoresizingMaskIntoConstraints = false
-            dot.widthAnchor.constraint(equalToConstant: 6).isActive = true
-            dot.heightAnchor.constraint(equalToConstant: 6).isActive = true
+            dot.widthAnchor.constraint(equalToConstant: 24).isActive = true
+            dot.heightAnchor.constraint(equalToConstant: 24).isActive = true
+            dot.setAccessibilityLabel(L10n.format(.pageOf, "\(index + 1)", "\(pageCount)"))
             let active = index == currentPage
-            dot.layer?.backgroundColor = (active
-                ? NSColor.white
-                : NSColor.white.withAlphaComponent(0.4)).cgColor
+            dot.setActive(active)
+            // 点击 → 现有 paging engine(startSettle), 不手动动画/不改 currentPage
+            dot.onClick = { [weak self] in
+                self?.paging.startSettle(toPage: index)
+            }
             pageDots.addArrangedSubview(dot)
             pageDotViews.append(dot)
         }

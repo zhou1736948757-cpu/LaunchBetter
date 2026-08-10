@@ -635,34 +635,22 @@ private final class FolderThumbnailView: NSVisualEffectView {
     }
 }
 
-/// 单元格根视图: 感知窗口/屏幕变更(显示器切换 → backing scale 变化)。
-/// viewDidMoveToWindow 只在挂载时触发; 跨显示器移动需监听 screen 变化通知(评审 M3)。
+/// 单元格根视图: 感知 backing scale 变化(显示器切换 → Retina 变体重请求)。
+/// 使用标准 AppKit 生命周期 viewDidChangeBackingProperties()(系统在 scale 变化时
+/// 直接回调, 零全局通知; Stage A7 替代 per-cell didChangeScreenNotification)。
 private final class CellRootView: NSView {
     var onWindowChange: (() -> Void)?
     var onScreenChange: (() -> Void)?
-    private var screenObserver: NSObjectProtocol?
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        if let screenObserver {
-            NotificationCenter.default.removeObserver(screenObserver)
-            self.screenObserver = nil
-        }
-        if let window {
-            screenObserver = NotificationCenter.default.addObserver(
-                forName: NSWindow.didChangeScreenNotification,
-                object: window,
-                queue: .main
-            ) { [weak self] _ in
-                MainActor.assumeIsolated {
-                    self?.onScreenChange?()
-                }
-            }
-        }
         onWindowChange?()
     }
 
-    // 注: 不在此 deinit 移除观察者(Swift 6 隔离限制, 非 Sendable token)。
-    // 观察者随窗口销毁自动清理; 弱引用回调保证单元格释放后无副作用。
-    // 重复挂窗时 viewDidMoveToWindow 会先移除旧观察者。
+    /// 标准回调: backing properties(含 backingScaleFactor)变化时触发。
+    /// 同 scale 显示器切换不会调用; 1x↔2x 会调用。lastRequestedScale guard 防重复请求。
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        onScreenChange?()
+    }
 }
