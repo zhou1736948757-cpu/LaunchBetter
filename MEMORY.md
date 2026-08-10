@@ -21,7 +21,28 @@
 
 ## Current Phase
 
-**Stage A(Post-v0.2.3 架构+隐形性能整合)完成 — Luna 0B/0M PASS。进入 Stage B(功能补齐)。**
+**Post-v0.2.3 整合(Stage A 架构+性能 / B 功能补齐 / C RC 硬化)完成 — 发布 v0.3.0。**
+
+## Stage A/B/C 成果(已验证)
+
+- **Stage A(架构+隐形性能)**: RetryBackoff capped[250ms..30s]; drag 热路径去每帧
+  setDragSourceHidden + 单次 hit-test; snapshot index cache 测量 defer(13.66us/call 稳态0);
+  DiskCacheWriter 磁盘写离首屏 + live 无二次光栅化; Retina viewDidChangeBackingProperties;
+  可点击页点(复用 startSettle); FolderViewController 去 reloadData; LayoutStore 去假 DisplayModel;
+  诊断提取 Diagnostics/; DragController 拆 6 文件; A13 defer; A14 DisplayItem 稳定身份
+  (folder=FolderID, children=payload, 无假 delete/insert)
+- **Stage B(功能)**: 本地化应用名(.lproj/InfoPlist.strings/CFBundle*, schemaVersion 升级,
+  语言切换即时, OpenStep plist 解析已验证); 自定义来源端到端(动态源+monitor scopes,
+  sourceGeneration 防幽灵应用); 右键菜单 Reveal in Finder/Get Info; 设置 About;
+  B4 热键录制 defer; B6 垂直布局 defer(Luna 设计门)
+- **Stage C(RC 硬化)**: 生命周期审计 14 资源(engine stop 清回调/display link teardown);
+  压力测试 100/250/500 apps; CI(GitHub Actions macOS); 并发评审修复:
+  Multitouch box owner token + 设备订阅同锁串行化 + restart/stop 生命周期代数 +
+  sourceGeneration/DirectoryMonitor streamGeneration(幽灵应用)
+- 测试: Core 140 / Platform 127 / UI 56 全绿; build OK; 探针全过
+- 报告: Docs/PhaseReports/stage-03-post-v0.2.3-consolidation.md
+- 待实机: 三指/四指手感、页点点击、本地化名实机抽查、Get Info 授权弹窗(manual)
+
 
 ## Stage A 成果(已验证)
 
