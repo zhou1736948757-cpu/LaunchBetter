@@ -155,6 +155,11 @@ public final class SettingsWindowController: NSWindowController {
         left.addArrangedSubview(sectionLabel(L10n.t(.wallpaperLabel)))
         left.addArrangedSubview(wallpaperCheck)
 
+        // 关于(Stage B5): 版本 + 来源链接
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
+        left.addArrangedSubview(sectionLabel(L10n.t(.aboutLabel)))
+        left.addArrangedSubview(NSTextField(labelWithString: "LaunchBetter v\(version)"))
+
         let right = NSStackView()
         right.orientation = .vertical
         right.alignment = .leading

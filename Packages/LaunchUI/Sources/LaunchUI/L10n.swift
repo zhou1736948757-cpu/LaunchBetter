@@ -57,6 +57,7 @@ public enum L10n {
         case cornerHide
         case cornerToggle
         case pageOf
+        case aboutLabel
     }
 
     nonisolated(unsafe) private static let zhHans: [Key: String] = [
@@ -81,6 +82,7 @@ public enum L10n {
         .later: "稍后", .none: "无",
         .cornerShow: "显示启动器", .cornerHide: "隐藏启动器", .cornerToggle: "切换启动器",
         .pageOf: "第 %@ 页，共 %@ 页",
+        .aboutLabel: "关于",
     ]
 
     nonisolated(unsafe) private static let zhHant: [Key: String] = [
@@ -105,6 +107,7 @@ public enum L10n {
         .later: "稍後", .none: "無",
         .cornerShow: "顯示啟動器", .cornerHide: "隱藏啟動器", .cornerToggle: "切換啟動器",
         .pageOf: "第 %@ 頁，共 %@ 頁",
+        .aboutLabel: "關於",
     ]
 
     nonisolated(unsafe) private static let english: [Key: String] = [
@@ -129,6 +132,7 @@ public enum L10n {
         .later: "Later", .none: "None",
         .cornerShow: "Show Launcher", .cornerHide: "Hide Launcher", .cornerToggle: "Toggle Launcher",
         .pageOf: "Page %@ of %@",
+        .aboutLabel: "About",
     ]
 
     nonisolated(unsafe) private static var language: AppLanguage = .system
