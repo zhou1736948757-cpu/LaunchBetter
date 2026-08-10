@@ -522,6 +522,22 @@ final class GridViewController: NSViewController {
             trash.representedObject = id
             trash.target = self
             menu.addItem(trash)
+
+            menu.addItem(.separator())
+
+            let reveal = NSMenuItem(
+                title: L10n.t(.revealInFinder), action: #selector(revealInFinder(_:)), keyEquivalent: ""
+            )
+            reveal.representedObject = id
+            reveal.target = self
+            menu.addItem(reveal)
+
+            let getInfo = NSMenuItem(
+                title: L10n.t(.getInfo), action: #selector(getInfo(_:)), keyEquivalent: ""
+            )
+            getInfo.representedObject = id
+            getInfo.target = self
+            menu.addItem(getInfo)
         case .folder(let id):
             let rename = NSMenuItem(
                 title: L10n.t(.rename), action: #selector(renameFolder(_:)), keyEquivalent: ""
@@ -586,6 +602,37 @@ final class GridViewController: NSViewController {
         alert.addButton(withTitle: L10n.t(.cancel))
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         store.moveToTrash(appID)
+    }
+
+    @objc private func revealInFinder(_ sender: NSMenuItem) {
+        guard let appID = sender.representedObject as? AppID else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([fileURL(for: appID)])
+    }
+
+    @objc private func getInfo(_ sender: NSMenuItem) {
+        guard let appID = sender.representedObject as? AppID else { return }
+        let script = NSAppleScript(source: getInfoAppleScriptSource(for: appID))
+        var error: NSDictionary?
+        script?.executeAndReturnError(&error)
+        if let error {
+            print("GETINFO_FAILED appID=\(appID) error=\(error)")
+        }
+    }
+
+    /// 规范 AppID → 文件 URL(路径身份, 无 shell 拼接)。
+    func fileURL(for appID: AppID) -> URL {
+        URL(fileURLWithPath: appID.rawValue)
+    }
+
+    /// Get Info 的 AppleScript 源(字符串安全编码, 不执行; 无 shell)。
+    ///
+    /// AppleScript 字符串内转义 `\` 与 `"`, 路径经 POSIX file 构造,
+    /// 不经过 osascript/shell, 无注入面。
+    func getInfoAppleScriptSource(for appID: AppID) -> String {
+        let escaped = appID.rawValue
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        return "tell application \"Finder\" to open information window of (POSIX file \"\(escaped)\")"
     }
 
     private func promptForName(defaultValue: String, titleKey: L10n.Key) -> String? {

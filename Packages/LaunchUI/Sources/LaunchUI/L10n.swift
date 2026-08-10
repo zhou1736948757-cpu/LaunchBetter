@@ -25,6 +25,8 @@ public enum L10n {
         case hideApp
         case unhideApp
         case moveToTrash
+        case revealInFinder
+        case getInfo
         case ok
         case cancel
         case noFolders
@@ -65,6 +67,7 @@ public enum L10n {
         .dropIntoFolder: "放入 %@", .createFolderWith: "与 %@ 建立文件夹",
         .rename: "重命名…", .renameApp: "重命名…", .dissolveFolder: "解散文件夹",
         .hideApp: "隐藏应用", .unhideApp: "取消隐藏", .moveToTrash: "移到废纸篓…",
+        .revealInFinder: "在访达中显示", .getInfo: "显示简介",
         .ok: "确定", .cancel: "取消", .noFolders: "(无文件夹)",
         .gridSection: "网格", .columnsLabel: "列数", .rowsLabel: "行数",
         .iconSizeLabel: "图标尺寸", .showLabelsLabel: "显示标签", .languageLabel: "语言",
@@ -88,6 +91,7 @@ public enum L10n {
         .dropIntoFolder: "放入 %@", .createFolderWith: "與 %@ 建立檔案夾",
         .rename: "重新命名…", .renameApp: "重新命名…", .dissolveFolder: "解散檔案夾",
         .hideApp: "隱藏應用程式", .unhideApp: "取消隱藏", .moveToTrash: "移到垃圾桶…",
+        .revealInFinder: "在 Finder 中顯示", .getInfo: "顯示簡介",
         .ok: "確定", .cancel: "取消", .noFolders: "(沒有檔案夾)",
         .gridSection: "網格", .columnsLabel: "欄數", .rowsLabel: "列數",
         .iconSizeLabel: "圖示大小", .showLabelsLabel: "顯示標籤", .languageLabel: "語言",
@@ -111,6 +115,7 @@ public enum L10n {
         .dropIntoFolder: "Drop into %@", .createFolderWith: "Create a folder with %@",
         .rename: "Rename…", .renameApp: "Rename…", .dissolveFolder: "Dissolve Folder",
         .hideApp: "Hide App", .unhideApp: "Unhide", .moveToTrash: "Move to Trash…",
+        .revealInFinder: "Reveal in Finder", .getInfo: "Get Info",
         .ok: "OK", .cancel: "Cancel", .noFolders: "(No folders)",
         .gridSection: "Grid", .columnsLabel: "Columns", .rowsLabel: "Rows",
         .iconSizeLabel: "Icon Size", .showLabelsLabel: "Show Labels", .languageLabel: "Language",
