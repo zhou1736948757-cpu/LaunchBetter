@@ -21,7 +21,33 @@
 
 ## Current Phase
 
-**v0.3.6 — 网格可用内容区 + flipped 坐标根修复 + 自定义 Settings 圆角正方形按钮。已完成 Debug/Release 构建与三包测试。**
+**v0.3.7 → interaction/folder/motion 基线推进中(未发布新版本)。**
+
+当前状态:
+- 提交: `709e757` interaction: isolate settings input ownership
+- 提交: `ee6d8ee` folder: inline title rename via long-press, remove header buttons
+- 提交: `(最新)` motion tokens + reduce-motion + launcher transition lifecycle
+- 提交: `(最新)` interaction: gate keyboard/three-finger, paging suspend, shield idempotency (Luna M1-M5)
+
+## 本阶段已完成(已验证)
+
+- **Settings 交互所有权(用户实测 bug)**: `LauncherInteractionSurface`(launcher/folder/settings) + 父窗口 `SettingsInteractionShield` 消费完整鼠标序列 + 三指门控 + grid 拖拽/点击/翻页门控; Settings 打开前 cancelDrag + 关闭 folder + 暂停分页; 关闭单一 cleanup 路径(settingsController.onClose, 移除 deinit 兜底, 解决 Luna deinit finding)。
+  - `--settingsownershipprobe` 22 项断言全过(三指 blocked / 根拖拽 blocked / 无 overlay / 无隐藏源 / 空白点击只关设置 / 关闭恢复 / 之后可用)。
+- **Folder 清理**: 移除 Rename/Dissolve 可见按钮; 标题重居中; 长按(0.5s/6pt)NSPressGestureRecognizer 内联重命名(Enter 提交/Escape 取消/失焦提交/空名恢复/持久化失败恢复权威名); 标题即时按压反馈(0.98 缩放); 无障碍自定义动作 "重命名文件夹"; 标题/编辑器同几何无跳变。
+- **2→1 自动解散**: `LayoutEditor.moveOutOfFolder` 已在同一候选快照原子实现(剩余 child 占原槽 + 删记录); 3→2/2→1/隐藏/持久化失败/重启全部已有测试覆盖。
+- **Motion 基础**: `MotionTokens`(pressFeedback/standard/spatial/momentumSettle spring specs) + `MotionEnvironment`(Reduce Motion/Transparency/Contrast 实时读取) + `LauncherTransitionLifecycle`(generation 防过期 show/hide completion)集成 show()/hide()。
+- **Luna 设计门(M1-M5 已修)**: 键盘+三指 update/end 门控; shield 幂等 + 失活兜底; Folder 外点击同序列防护(ClickableCollectionView 无配对 mouseDown 的 mouseUp 忽略); Folder/Settings 进入暂停分页状态机。
+- 测试: LaunchCore 143 / LaunchUI 64(新增过渡生命周期 + mouse-session)/ LaunchPlatform 127; Debug build OK。
+
+## 本阶段环境限制(已验证)
+
+- `AXIsProcessTrusted()=false` → 无法注入真实 CGEvent(需系统辅助功能权限), computer-use/orca 也看不到启动器窗口(AX 不可见)。
+- 无头 nohup 启动时窗口 alpha 卡 0(动画不运行), v0.3.7 干净构建同样如此 → 本环境截图/视觉验证降级。
+- 视觉验证代之以: 程序化断言探针(权威) + 既有 v0.3.7 截图证据; 后续需用户在实机上完成视觉 gate。
+
+## 下一步(未开始)
+
+- Folder 空间过渡(source-anchored, 可中断, 无效源 fallback)、Launcher 呈现/解散动效、Settings 呈现/关闭动效、Cell 按下反馈、拖拽 grab offset 审计、Paging 三细节(1:1/动量投影/非线性橡皮筋)、Reduce Transparency/Contrast 响应、性能 profile、可视化验证、Luna 终审。
 
 ## v0.3.6 Changes
 
