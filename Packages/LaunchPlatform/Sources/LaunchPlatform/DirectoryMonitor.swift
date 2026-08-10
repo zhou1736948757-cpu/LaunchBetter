@@ -39,6 +39,11 @@ public final class DirectoryMonitor: @unchecked Sendable {
     private var pendingScopes: Set<String> = []
     private var pendingAppRoots: Set<String> = []
     private var pendingEventLoss = false
+    /// 流代数: stop()/reconfigure 递增。旧代数的 pending 整体丢弃,
+    /// 防止已移除 scope 的陈旧路径随新摘要交付(幽灵应用)。
+    private var streamGeneration: UInt64 = 0
+    /// pending 所属代数(交付前校验是否仍为当前代数)。
+    private var pendingGeneration: UInt64 = 0
     private var debounceWork: DispatchWorkItem?
     private let queue = DispatchQueue(label: "dev.launchbetter.fsevents", qos: .utility)
 
@@ -88,6 +93,11 @@ public final class DirectoryMonitor: @unchecked Sendable {
 
     public func stop() {
         lock.lock()
+        streamGeneration &+= 1
+        pendingScopes = []
+        pendingAppRoots = []
+        pendingEventLoss = false
+        pendingGeneration = streamGeneration
         debounceWork?.cancel()
         debounceWork = nil
         lock.unlock()
@@ -142,8 +152,12 @@ public final class DirectoryMonitor: @unchecked Sendable {
         monitor.process(paths: paths, flags: flags)
     }
 
-    private func process(paths: [String], flags: [FSEventStreamEventFlags]) {
-        let scopes = currentScopes()
+    /// 处理一批 FSEvents(回调线程)。internal 供测试确定性注入批次(重配竞态)。
+    func process(paths: [String], flags: [FSEventStreamEventFlags]) {
+        lock.lock()
+        let scopes = self.scopes
+        let generation = streamGeneration
+        lock.unlock()
         if ProcessInfo.processInfo.environment["FSEVENTS_DEBUG"] != nil {
             for index in 0..<paths.count {
                 fputs("FSEVENTS_DEBUG path=\(paths[index]) flag=\(flags[index])\n", stderr)
@@ -173,9 +187,15 @@ public final class DirectoryMonitor: @unchecked Sendable {
             }
         }
         lock.lock()
+        // 回调可能来自已停止的旧流: 重配/停止后到达的批次整批丢弃。
+        guard generation == streamGeneration else {
+            lock.unlock()
+            return
+        }
         pendingScopes.formUnion(scopesDirty)
         pendingAppRoots.formUnion(appRoots)
         pendingEventLoss = pendingEventLoss || loss
+        pendingGeneration = generation
         lock.unlock()
         scheduleDebounce()
     }
@@ -193,6 +213,14 @@ public final class DirectoryMonitor: @unchecked Sendable {
 
     private func deliverPending() {
         lock.lock()
+        // 交付时若配置已重配/停止, 丢弃该代 pending(防御; 正常路径 stop 已清空)。
+        guard pendingGeneration == streamGeneration else {
+            pendingScopes = []
+            pendingAppRoots = []
+            pendingEventLoss = false
+            lock.unlock()
+            return
+        }
         let summary = ChangeSummary(
             dirtyScopes: pendingScopes,
             dirtyAppRoots: pendingAppRoots,

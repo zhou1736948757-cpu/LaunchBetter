@@ -39,6 +39,9 @@ public actor AppCatalogActor {
 
     private var snapshot: CatalogSnapshot
     private var generation: Int = 0
+    /// 源集合代数: 每次 sources 实际变更(即使无应用 delta)递增。
+    /// 独立于 snapshot generation: 防旧源集合的并发全量扫描在重配后提交(M3)。
+    private var sourceGeneration: UInt64 = 0
     /// Incremental scans are globally ordered. Actor reentrancy around detached
     /// filesystem work must not allow an older event to commit after a newer one.
     private var incrementalTail: Task<CatalogDelta, Never>?
@@ -117,6 +120,7 @@ public actor AppCatalogActor {
         while true {
             let capturedSources = sources
             let capturedGeneration = generation
+            let capturedSourceGeneration = sourceGeneration
             let discoverSources = discoverSources
             let discovered = Self.deduplicated(
                 await Task.detached(priority: .utility) {
@@ -124,10 +128,13 @@ public actor AppCatalogActor {
                 }.value
             )
 
-            // Actor may process an incremental FSEvent while detached discovery
-            // is running. Rescan against that newer generation instead of
-            // dropping the full reconciliation and permanently missing changes.
-            guard generation == capturedGeneration else { continue }
+            // Actor may process an incremental FSEvent or a source update while
+            // detached discovery is running. Rescan against that newer state
+            // instead of dropping the full reconciliation and permanently
+            // missing changes. Source-only updates bump sourceGeneration even
+            // when they carry no app delta, so a stale-source scan cannot commit.
+            guard generation == capturedGeneration,
+                  sourceGeneration == capturedSourceGeneration else { continue }
 
             let delta = ReconcileEngine.delta(from: snapshot, to: discovered)
             snapshot = CatalogSnapshot(apps: discovered)
@@ -204,9 +211,11 @@ public actor AppCatalogActor {
             let delta = ReconcileEngine.delta(from: snapshot, to: newSnapshot.apps)
             guard !delta.isEmpty else {
                 sources = newSources
+                sourceGeneration &+= 1
                 return delta
             }
             sources = newSources
+            sourceGeneration &+= 1
             snapshot = newSnapshot
             generation += 1
 
@@ -223,6 +232,7 @@ public actor AppCatalogActor {
     // MARK: - 增量对账(FSEvents, §71-72)
 
     /// 处理目录监控变更摘要: scoped reconcile(仅受影响应用/目录), 不触发全量扫描。
+    /// 摘要中的路径必须属于当前配置源(重配/停止后旧源路径被丢弃, 防御防幽灵)。
     public func applyChangeSummary(_ summary: DirectoryMonitor.ChangeSummary) async -> CatalogDelta {
         var delta = CatalogDelta()
         // Event loss invalidates the summarized paths, including summaries that
@@ -231,10 +241,12 @@ public actor AppCatalogActor {
             return await recoverAllScopes()
         }
         for scope in summary.dirtyScopes {
+            guard isConfiguredSource(scope) else { continue }
             let scoped = await reconcileScope(URL(fileURLWithPath: scope))
             delta = delta.merged(with: scoped)
         }
         for appRoot in summary.dirtyAppRoots {
+            guard isUnderConfiguredSource(appRoot) else { continue }
             let scoped = await reconcileAppRoot(URL(fileURLWithPath: appRoot))
             delta = delta.merged(with: scoped)
         }
@@ -262,13 +274,16 @@ public actor AppCatalogActor {
     private func performReconcileAppRoot(_ appRootURL: URL) async -> CatalogDelta {
         while true {
             let capturedGeneration = generation
+            let capturedSourceGeneration = sourceGeneration
+            guard isUnderConfiguredSource(appRootURL.path) else { return CatalogDelta() }
             let discoverAppRoot = discoverAppRoot
             let record = await Task.detached(priority: .utility) {
                 discoverAppRoot(appRootURL)
             }.value
-            // Another incremental/full scan committed while this actor was
-            // reentrant. Rescan this same root so an older result cannot win.
-            guard generation == capturedGeneration else { continue }
+            // Another incremental/full scan committed or the source set changed
+            // while this actor was reentrant. Rescan so an older result cannot win.
+            guard generation == capturedGeneration,
+                  sourceGeneration == capturedSourceGeneration else { continue }
             let discovered = record.map { [$0] } ?? []
             return applyIncremental(discovered, appRootPath: appRootURL.path)
         }
@@ -295,13 +310,17 @@ public actor AppCatalogActor {
     private func performReconcileScope(_ scopeURL: URL) async -> CatalogDelta {
         while true {
             let capturedGeneration = generation
+            let capturedSourceGeneration = sourceGeneration
+            // scope 已不再是配置源(重配/移除): 禁止对非当前 source 执行 reconcile。
+            guard isConfiguredSource(scopeURL.path) else { return CatalogDelta() }
             let discoverSources = discoverSources
             let discovered = await Task.detached(priority: .utility) {
                 discoverSources([scopeURL])
             }.value
             // Preserve disjoint updates too: retry this scope against the latest
             // generation instead of merely dropping a result when any scan wins.
-            guard generation == capturedGeneration else { continue }
+            guard generation == capturedGeneration,
+                  sourceGeneration == capturedSourceGeneration else { continue }
             return applyIncremental(discovered, scopePrefix: scopeURL.path + "/")
         }
     }
@@ -317,6 +336,26 @@ public actor AppCatalogActor {
         return idPath == appRootPath
             || idPath == "/private" + appRootPath
             || appRootPath == "/private" + idPath
+    }
+
+    /// scope 路径是否仍是当前配置源(规范化比较, 容忍 /var 与 /private/var)。
+    private func isConfiguredSource(_ scopePath: String) -> Bool {
+        let canonical = PathCanonicalizer.canonicalPath(from: URL(fileURLWithPath: scopePath))
+        return sources.contains { $0.path == canonical }
+    }
+
+    /// .app 根是否位于任一当前配置源之下(容忍 /var 与 /private/var 表示差异)。
+    private func isUnderConfiguredSource(_ appPath: String) -> Bool {
+        let path = PathCanonicalizer.canonicalPath(from: URL(fileURLWithPath: appPath))
+        return sources.contains { source in
+            let sourcePath = source.path
+            if path.hasPrefix(sourcePath + "/") { return true }
+            // 源是 /private 形式而应用路径未解析(realpath 回退纯文本), 或反之。
+            let plain = sourcePath.hasPrefix("/private")
+                ? String(sourcePath.dropFirst("/private".count))
+                : "/private" + sourcePath
+            return path.hasPrefix(plain + "/")
+        }
     }
 
     /// 源目录直接归属判断: 应用是该源目录的顶层 .app(容忍 /var 与 /private/var 差异)。

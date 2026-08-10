@@ -217,6 +217,126 @@ struct CustomSourceActorTests {
         let ids = result.snapshot.apps.map(\.bundleIdentifier)
         #expect(ids == ["com.test.AA"], "移除源应用不得在重启后残留")
     }
+
+    @Test("移除源后: 旧源 scope 摘要不执行 reconcile(防幽灵, M2)")
+    func removedSourceSummaryNotReconciled() async throws {
+        let dir = try tempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let sourceA = try tempDirectory()
+        defer { try? FileManager.default.removeItem(at: sourceA) }
+        let sourceB = try tempDirectory()
+        defer { try? FileManager.default.removeItem(at: sourceB) }
+        let actor = AppCatalogActor(
+            store: CatalogSnapshotStore(directory: dir), sources: [sourceA, sourceB]
+        )
+        _ = await actor.start()
+        try makeFakeApp(in: sourceA, name: "AA", bundleID: "com.test.AA")
+        try makeFakeApp(in: sourceB, name: "BB", bundleID: "com.test.BB")
+        _ = try await actor.reconcileFromDisk()
+        _ = await actor.updateSources([sourceA])
+        #expect((await actor.currentSnapshot().apps.map(\.bundleIdentifier)) == ["com.test.AA"])
+
+        // 旧源 B 的 scope 摘要: 禁止 reconcile, 不得把 BB 重新插回
+        let stale = DirectoryMonitor.ChangeSummary(
+            dirtyScopes: [PathCanonicalizer.canonicalPath(from: sourceB)],
+            dirtyAppRoots: [], eventLossDetected: false
+        )
+        let delta = await actor.applyChangeSummary(stale)
+        #expect(delta.isEmpty)
+        #expect((await actor.currentSnapshot().apps.map(\.bundleIdentifier)) == ["com.test.AA"])
+
+        // 正控制: 当前源 A 的 scope 摘要仍被处理(幂等无变化)
+        let current = DirectoryMonitor.ChangeSummary(
+            dirtyScopes: [PathCanonicalizer.canonicalPath(from: sourceA)],
+            dirtyAppRoots: [], eventLossDetected: false
+        )
+        let delta2 = await actor.applyChangeSummary(current)
+        #expect(delta2.isEmpty, "当前源重扫幂等无变化")
+        #expect((await actor.currentSnapshot().apps.map(\.bundleIdentifier)) == ["com.test.AA"])
+    }
+}
+
+private final class SourceRemovalInterleaveProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private let firstStarted = DispatchSemaphore(value: 0)
+    private let releaseFirst = DispatchSemaphore(value: 0)
+    private var calls = 0
+    private let recordA: AppRecord
+    private let recordB: AppRecord
+
+    init(sourceA: URL, sourceB: URL) {
+        recordA = Self.makeRecord(sourceA, "A")
+        recordB = Self.makeRecord(sourceB, "B")
+    }
+
+    private static func makeRecord(_ source: URL, _ name: String) -> AppRecord {
+        let url = source.appendingPathComponent("\(name).app")
+        return AppRecord(
+            id: AppID(url.path)!, url: url,
+            bundleIdentifier: "com.test.\(name)", displayName: name,
+            infoPlistModificationDate: nil,
+            iconContentVersion: IconContentVersion(bundleVersion: "1")
+        )
+    }
+
+    func discover(_ sources: [URL]) -> [AppRecord] {
+        lock.lock()
+        calls += 1
+        let call = calls
+        lock.unlock()
+        if call == 1 {
+            firstStarted.signal()
+            releaseFirst.wait()
+            return [recordA, recordB]
+        }
+        return [recordA]
+    }
+
+    func waitUntilFirstStarted() -> Bool {
+        firstStarted.wait(timeout: .now() + 2) == .success
+    }
+
+    func releaseFirstScan() { releaseFirst.signal() }
+
+    var callCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return calls
+    }
+}
+
+@Suite("AppCatalogActor 源集合变更并发安全(Stage C C5)")
+struct SourceGenerationSafetyTests {
+    @Test("阻塞全量扫描期间移除无 delta 源: 释放后旧源应用不提交(M3)")
+    func fullScanStaleSourceNotCommitted() async throws {
+        let dir = try tempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let sourceA = try tempDirectory()
+        defer { try? FileManager.default.removeItem(at: sourceA) }
+        let sourceB = try tempDirectory()
+        defer { try? FileManager.default.removeItem(at: sourceB) }
+        let probe = SourceRemovalInterleaveProbe(sourceA: sourceA, sourceB: sourceB)
+        let actor = AppCatalogActor(
+            store: CatalogSnapshotStore(directory: dir),
+            sources: [sourceA, sourceB],
+            discoverSources: probe.discover
+        )
+        _ = await actor.start()
+
+        let full = Task { try await actor.reconcileFromDisk() }
+        #expect(probe.waitUntilFirstStarted())
+
+        // 扫描期间移除 sourceB(B 下无应用 → delta 为空, 走无增量路径)
+        let delta = await actor.updateSources([sourceA])
+        #expect(delta.isEmpty)
+
+        probe.releaseFirstScan()
+        _ = try await full.value
+
+        #expect(probe.callCount == 2, "旧源集合扫描必须重扫, 不得用旧源提交")
+        let names = await actor.currentSnapshot().apps.map(\.displayName)
+        #expect(names == ["A"], "重配后提交结果不得包含已移除源的 B")
+    }
 }
 
 @Suite("DirectoryMonitor 动态 scope 重配(Stage B §B2)")
@@ -224,6 +344,23 @@ struct DirectoryMonitorReconfigureTests {
     private actor MatchFlag {
         private(set) var matched = false
         func mark() { matched = true }
+    }
+
+    private final class SummaryRecorder: @unchecked Sendable {
+        private let lock = NSLock()
+        private var summaries: [DirectoryMonitor.ChangeSummary] = []
+        func record(_ summary: DirectoryMonitor.ChangeSummary) {
+            lock.lock()
+            summaries.append(summary)
+            lock.unlock()
+        }
+        func drain() -> [DirectoryMonitor.ChangeSummary] {
+            lock.lock()
+            defer { lock.unlock() }
+            let captured = summaries
+            summaries = []
+            return captured
+        }
     }
 
     @Test("reconfigure 增加监控根后, 新源事件被折叠")
@@ -302,5 +439,64 @@ struct DirectoryMonitorReconfigureTests {
         }
         monitor.stop()
         #expect(found, "相同 scope 重配不应停止监控")
+    }
+
+    @Test("重配移除源: 旧源 pending 被丢弃, 新事件不含旧源(M2)")
+    func reconfigureDropsRemovedSourcePending() async throws {
+        let sourceA = try tempDirectory()
+        defer { try? FileManager.default.removeItem(at: sourceA) }
+        let sourceB = try tempDirectory()
+        defer { try? FileManager.default.removeItem(at: sourceB) }
+        let canonicalA = PathCanonicalizer.canonicalPath(from: sourceA)
+        let canonicalB = PathCanonicalizer.canonicalPath(from: sourceB)
+
+        let monitor = DirectoryMonitor(scopes: [sourceA.path, sourceB.path], latency: 0.1)
+        let recorder = SummaryRecorder()
+        monitor.onChange = { recorder.record($0) }
+
+        // 重配前已积累的旧源 B pending(模拟旧流回调)
+        monitor.process(paths: [canonicalB + "/Old.app"], flags: [0])
+        // 重配: 移除 B → stop 递增代数并丢弃旧代数 pending
+        monitor.reconfigure(scopes: [sourceA.path])
+        // 新流事件
+        monitor.process(paths: [canonicalA + "/New.app"], flags: [0])
+
+        // 等待去抖(0.5s)+ 余量
+        try await Task.sleep(for: .milliseconds(1200))
+        monitor.stop()
+
+        let appRoots = recorder.drain().flatMap { Array($0.dirtyAppRoots) }
+        #expect(appRoots.contains(canonicalA + "/New.app"), "新源事件应交付")
+        #expect(!appRoots.contains(canonicalB + "/Old.app"), "旧源 pending 不得随新摘要交付")
+    }
+
+    @Test("重配后批次含旧源路径: 折叠忽略, 摘要不含旧源(M2)")
+    func postReconfigureBatchIgnoresRemovedSource() async throws {
+        let sourceA = try tempDirectory()
+        defer { try? FileManager.default.removeItem(at: sourceA) }
+        let sourceB = try tempDirectory()
+        defer { try? FileManager.default.removeItem(at: sourceB) }
+        let canonicalA = PathCanonicalizer.canonicalPath(from: sourceA)
+        let canonicalB = PathCanonicalizer.canonicalPath(from: sourceB)
+
+        let monitor = DirectoryMonitor(scopes: [sourceA.path], latency: 0.1)
+        let recorder = SummaryRecorder()
+        monitor.onChange = { recorder.record($0) }
+
+        // 单一批次混合: 已移除源 B 路径 + 当前源 A 路径(按当前 scope 折叠)
+        monitor.process(
+            paths: [canonicalB + "/Ghost.app", canonicalA + "/Live.app"],
+            flags: [0, 0]
+        )
+
+        try await Task.sleep(for: .milliseconds(1200))
+        monitor.stop()
+
+        let summaries = recorder.drain()
+        let appRoots = summaries.flatMap { Array($0.dirtyAppRoots) }
+        let scopes = summaries.flatMap { Array($0.dirtyScopes) }
+        #expect(appRoots.contains(canonicalA + "/Live.app"))
+        #expect(!appRoots.contains(canonicalB + "/Ghost.app"))
+        #expect(!scopes.contains(canonicalB), "已移除源不得作为 scopeDirty 交付")
     }
 }
