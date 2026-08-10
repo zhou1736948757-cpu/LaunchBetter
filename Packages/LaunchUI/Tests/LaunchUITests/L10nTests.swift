@@ -217,16 +217,17 @@ struct L10nTests {
         #expect(card.accessibilityLabel() == folderLabel)
         #expect(card.accessibilityHelp() == folderHelp)
 
+        // 可见 Rename/Dissolve 按钮已移除; 重命名走标题长按/无障碍自定义动作。
         let buttons = views.compactMap { $0 as? NSButton }
-        let renameButton = try #require(buttons.first { $0.title == renameTitle })
-        #expect(renameButton.accessibilityHelp() == renameHelp)
-        let dissolveButton = try #require(buttons.first { $0.title == dissolveTitle })
-        #expect(dissolveButton.accessibilityHelp() == dissolveHelp)
+        #expect(!buttons.contains { $0.title == renameTitle })
+        #expect(!buttons.contains { $0.title == dissolveTitle })
 
         let title = try #require(
             views.compactMap { $0 as? NSTextField }.first { $0.stringValue == "Test Folder" }
         )
         #expect(title.accessibilityLabel() == folderLabel)
+        let customActions = title.accessibilityCustomActions() ?? []
+        #expect(customActions.contains { $0.name == renameHelp })
     }
 
     private func descendants(of view: NSView) -> [NSView] {

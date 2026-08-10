@@ -3,7 +3,7 @@ import LaunchCore
 
 /// 文件夹视图: 显示文件夹内应用(单页网格),并承接文件夹内的局部操作。
 @MainActor
-final class FolderViewController: NSViewController {
+final class FolderViewController: NSViewController, NSTextFieldDelegate {
     private let panelMetrics = FolderPanelMetrics.self
     private let store: any LauncherStoring
     private let iconProvider: (any IconImageProviding)?
@@ -18,9 +18,8 @@ final class FolderViewController: NSViewController {
     private var rootView: FolderRootView!
     private var cardShadowView: NSView!
     private var visualCardView: NSVisualEffectView!
-    private var titleLabel: NSTextField!
-    private var dissolveButton: NSButton!
-    private var renameButton: NSButton!
+    private var titleLabel: FolderTitleLabel!
+    private var editField: NSTextField?
     private var collectionView: ClickableCollectionView!
     private var scrollView: NSScrollView!
     private var dataSource: NSCollectionViewDiffableDataSource<Int, DisplayModel.DisplayItem>!
@@ -113,44 +112,23 @@ final class FolderViewController: NSViewController {
         visualCardView = card
         root.cardView = cardShadowView
 
-        let dissolveButton = NSButton(
-            title: L10n.t(.dissolveFolder), target: self, action: #selector(dissolveTapped)
-        )
-        self.dissolveButton = dissolveButton
-        dissolveButton.bezelStyle = .texturedRounded
-        dissolveButton.setAccessibilityHelp(L10n.t(.dissolveFolder))
-        card.addSubview(dissolveButton)
-        dissolveButton.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            dissolveButton.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -24),
-            dissolveButton.topAnchor.constraint(equalTo: card.topAnchor, constant: 20),
-        ])
-
-        let renameButton = NSButton(
-            title: L10n.t(.rename), target: self, action: #selector(renameTapped)
-        )
-        self.renameButton = renameButton
-        renameButton.bezelStyle = .texturedRounded
-        renameButton.setAccessibilityHelp(L10n.t(.renameFolderHelp))
-        card.addSubview(renameButton)
-        renameButton.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            renameButton.trailingAnchor.constraint(equalTo: dissolveButton.leadingAnchor, constant: -8),
-            renameButton.topAnchor.constraint(equalTo: card.topAnchor, constant: 20),
-        ])
-
-        titleLabel = NSTextField(labelWithString: store.folderName(for: folderID))
+        // 标题: 居中, 长按重命名(无可见 Rename/Dissolve 按钮)。
+        titleLabel = FolderTitleLabel(string: store.folderName(for: folderID))
         titleLabel.font = .boldSystemFont(ofSize: 24)
-        titleLabel.alignment = .center
-        titleLabel.lineBreakMode = .byTruncatingTail
         titleLabel.setAccessibilityLabel(L10n.format(.folderLabel, store.folderName(for: folderID)))
+        titleLabel.onPressFeedback = { [weak self] pressed in
+            self?.applyTitlePressFeedback(pressed)
+        }
+        titleLabel.onRenameActivate = { [weak self] in
+            self?.beginTitleEditing()
+        }
         card.addSubview(titleLabel)
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
             titleLabel.topAnchor.constraint(equalTo: card.topAnchor, constant: 24),
             titleLabel.centerXAnchor.constraint(equalTo: card.centerXAnchor),
             titleLabel.leadingAnchor.constraint(greaterThanOrEqualTo: card.leadingAnchor, constant: 24),
-            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: renameButton.leadingAnchor, constant: -16),
+            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: card.trailingAnchor, constant: -24),
         ])
 
         // 子项网格: 可垂直滚动,左右保留安全边距,避免子项超出容量或操作栏重叠。
@@ -277,10 +255,6 @@ final class FolderViewController: NSViewController {
         titleLabel.setAccessibilityLabel(L10n.format(.folderLabel, name))
         visualCardView?.setAccessibilityLabel(L10n.format(.folderLabel, name))
         visualCardView?.setAccessibilityHelp(L10n.t(.folderContentsHelp))
-        dissolveButton?.title = L10n.t(.dissolveFolder)
-        dissolveButton?.setAccessibilityHelp(L10n.t(.dissolveFolder))
-        renameButton?.title = L10n.t(.rename)
-        renameButton?.setAccessibilityHelp(L10n.t(.renameFolderHelp))
     }
 
     private func refresh() {
@@ -579,68 +553,100 @@ final class FolderViewController: NSViewController {
     }
 
     @objc private func renameTapped() {
-        guard store.folderChildren(folderID) != nil else {
-            closeFolder()
+        beginTitleEditing()
+    }
+
+    /// 标题按下/恢复的克制反馈(不弹、不缩整个卡片)。
+    private func applyTitlePressFeedback(_ pressed: Bool) {
+        guard !isClosing else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        if pressed {
+            titleLabel.layer?.setAffineTransform(CGAffineTransform(scaleX: 0.98, y: 0.98))
+            titleLabel.alphaValue = 0.75
+        } else {
+            titleLabel.layer?.setAffineTransform(.identity)
+            titleLabel.alphaValue = 1
+        }
+        CATransaction.commit()
+    }
+
+    /// 长按标题 → 内联编辑(与标题同几何, 无跳变)。
+    private func beginTitleEditing() {
+        guard editField == nil,
+              let card = visualCardView,
+              store.folderChildren(folderID) != nil else { return }
+        let editor = NSTextField(string: store.folderName(for: folderID))
+        editor.font = titleLabel.font
+        editor.alignment = .center
+        editor.isBordered = false
+        editor.drawsBackground = false
+        editor.focusRingType = .none
+        editor.delegate = self
+        editor.frame = titleLabel.frame
+        editor.autoresizingMask = []
+        card.addSubview(editor, positioned: .above, relativeTo: titleLabel)
+        titleLabel.isHidden = true
+        applyTitlePressFeedback(false)
+        editField = editor
+        view.window?.makeFirstResponder(editor)
+        editor.currentEditor()?.selectAll(nil)
+    }
+
+    /// 结束内联编辑。commit=false 取消并恢复原标题。
+    private func endTitleEditing(commit: Bool) {
+        guard let editor = editField else { return }
+        editField = nil
+        let candidate = editor.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        editor.removeFromSuperview()
+        titleLabel.isHidden = false
+
+        guard commit else { return }
+        guard !candidate.isEmpty else {
+            refreshLocalizedPresentation()
             return
         }
+        guard candidate != store.folderName(for: folderID) else { return }
 
-        let alert = NSAlert()
-        alert.messageText = L10n.t(.rename)
-        alert.informativeText = store.folderName(for: folderID)
-        let field = NSTextField(string: store.folderName(for: folderID))
-        field.frame = NSRect(x: 0, y: 0, width: 280, height: 24)
-        alert.accessoryView = field
-        alert.addButton(withTitle: L10n.t(.ok))
-        alert.addButton(withTitle: L10n.t(.cancel))
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-
-        let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty else { return }
         if let completingStore = store as? any LayoutMutationCompleting {
-            renameButton.isEnabled = false
-            completingStore.renameFolder(folderID, to: name) { [weak self] committed in
+            completingStore.renameFolder(folderID, to: candidate) { [weak self] committed in
                 guard let self else { return }
-                self.renameButton.isEnabled = true
                 if committed {
-                    self.refreshLocalizedPresentation(folderName: name)
+                    self.refreshLocalizedPresentation(folderName: candidate)
                 } else {
+                    // 持久化失败: 恢复权威存储名, 不假装成功。
+                    self.refreshLocalizedPresentation()
                     self.refresh()
                 }
             }
         } else {
-            store.renameFolder(folderID, to: name)
-            refreshLocalizedPresentation(folderName: name)
+            store.renameFolder(folderID, to: candidate)
+            refreshLocalizedPresentation(folderName: candidate)
         }
     }
 
-    @objc private func dissolveTapped() {
-        guard store.folderChildren(folderID) != nil else {
-            closeFolder()
-            return
-        }
+    // MARK: - NSTextFieldDelegate(内联重命名)
 
-        let alert = NSAlert()
-        alert.messageText = L10n.t(.dissolveFolder)
-        alert.informativeText = store.folderName(for: folderID)
-        alert.addButton(withTitle: L10n.t(.ok))
-        alert.addButton(withTitle: L10n.t(.cancel))
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-
-        if let completingStore = store as? any LayoutMutationCompleting {
-            dissolveButton.isEnabled = false
-            completingStore.dissolveFolder(folderID) { [weak self] committed in
-                guard let self else { return }
-                self.dissolveButton.isEnabled = true
-                if committed {
-                    self.closeFolder()
-                } else {
-                    self.refresh()
-                }
-            }
-        } else {
-            store.dissolveFolder(folderID)
-            closeFolder()
+    func control(
+        _ control: NSControl,
+        textView: NSTextView,
+        doCommandBy commandSelector: Selector
+    ) -> Bool {
+        if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+            endTitleEditing(commit: true)
+            return true
         }
+        if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
+            endTitleEditing(commit: false)
+            return true
+        }
+        return false
+    }
+
+    func controlTextDidEndEditing(_ obj: Notification) {
+        // 失焦(含 Enter 触发的 resign) → 仍处于编辑状态则提交有效名称。
+        guard editField != nil else { return }
+        endTitleEditing(commit: true)
     }
 
     private func stableColorIndex(_ key: String) -> Int {
@@ -659,6 +665,80 @@ struct FolderPanelMetrics: Equatable {
 
     static func iconPointSize(for configuredSize: Int) -> Int {
         min(max(16, configuredSize), iconSizeLimit)
+    }
+}
+
+/// 文件夹标题: 即时按压反馈 + 长按触发内联重命名 + 无障碍自定义动作。
+private final class FolderTitleLabel: NSTextField {
+    /// 按压反馈(按下 true / 恢复 false)。
+    var onPressFeedback: ((Bool) -> Void)?
+    /// 长按达标 → 激活内联重命名。
+    var onRenameActivate: (() -> Void)?
+
+    private let pressRecognizer = NSPressGestureRecognizer(
+        target: self, action: #selector(handlePress(_:))
+    )
+    private var pointerInside = false
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        isEditable = false
+        isSelectable = false
+        isBordered = false
+        drawsBackground = false
+        focusRingType = .none
+        alignment = .center
+        lineBreakMode = .byTruncatingTail
+        pressRecognizer.minimumPressDuration = 0.5
+        pressRecognizer.allowableMovement = 6
+        addGestureRecognizer(pressRecognizer)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    @objc private func handlePress(_ recognizer: NSPressGestureRecognizer) {
+        switch recognizer.state {
+        case .began:
+            onRenameActivate?()
+        case .ended, .cancelled, .failed:
+            onPressFeedback?(false)
+        default:
+            break
+        }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        pointerInside = true
+        onPressFeedback?(true)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        if !bounds.contains(point) {
+            pointerInside = false
+            onPressFeedback?(false)
+        }
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        pointerInside = false
+        onPressFeedback?(false)
+    }
+
+    // 无障碍: 移除可见按钮后仍可重命名。
+    override func accessibilityCustomActions() -> [NSAccessibilityCustomAction]? {
+        let action = NSAccessibilityCustomAction(
+            name: L10n.t(.renameFolderHelp),
+            target: self,
+            selector: #selector(renameFromAccessibility)
+        )
+        return [action]
+    }
+
+    @objc private func renameFromAccessibility() {
+        onRenameActivate?()
     }
 }
 
