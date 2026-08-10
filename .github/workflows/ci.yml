@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, stage-*, fix/* ]
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      - name: Generate project
+        run: xcodegen generate
+
+      - name: LaunchCore tests
+        run: cd Packages/LaunchCore && swift test
+
+      - name: LaunchPlatform tests
+        run: cd Packages/LaunchPlatform && swift test
+
+      - name: LaunchUI tests
+        run: cd Packages/LaunchUI && swift test
+
+      - name: Debug build
+        run: xcodebuild -project LaunchBetter.xcodeproj -scheme LaunchBetter build -configuration Debug
+
+      - name: Release build
+        run: xcodebuild -project LaunchBetter.xcodeproj -scheme LaunchBetter build -configuration Release
