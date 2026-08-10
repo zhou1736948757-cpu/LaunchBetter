@@ -26,29 +26,36 @@ enum PageTestProbe {
             print("PAGETEST \(label) scrollX=\(Int(scrollX)) currentPage=\(page) pageCount=\(count) pageWidth=\(Int(pageW)) documentWidth=\(Int(docW))")
         }
         print("PAGETEST before: \(controller.pageTestScrollDiagnostics())")
+        // 序列自适应页数(用户网格设置可变, 如 6×8=48 → 2 页): 0→1→(若≥3页→2)→1→0
+        let pageCount = controller.pageTestPageCount()
         report("p0")
         step { _ = controller.pageTestGoTo(1) }
         report("p1")
-        step { _ = controller.pageTestGoTo(2) }
-        report("p2")
-        step { _ = controller.pageTestGoTo(1) }
-        report("p3")
+        if pageCount >= 3 {
+            step { _ = controller.pageTestGoTo(2) }
+            report("p2")
+            step { _ = controller.pageTestGoTo(1) }
+            report("p3")
+        }
         step { _ = controller.pageTestGoTo(0) }
         report("p4")
         print("PAGETEST after: \(controller.pageTestScrollDiagnostics())")
-        let sequenceOK = observedPages == [0, 1, 2, 1, 0]
+        let lastVisited = pageCount >= 3 ? 2 : 1
+        let sequenceOK = observedPages.first == 0 && observedPages.last == 0
+            && observedPages.max() == lastVisited && observedPages.contains(1)
         let pageWidth = controller.pageTestPageWidth()
-        let pageCount = controller.pageTestPageCount()
-        let documentWidth = controller.pageTestDocumentWidth()
-        let expectedOffsets = [0, pageWidth, pageWidth * 2, pageWidth, 0]
+        let expectedOffsets = pageCount >= 3
+            ? [0, pageWidth, pageWidth * 2, pageWidth, 0]
+            : [0, pageWidth, 0]
         let offsetsOK = zip(observedOffsets, expectedOffsets).allSatisfy {
             abs($0.0 - $0.1) < 1
         }
-        let geometryOK = pageWidth > 0 && pageCount >= 3
+        let documentWidth = controller.pageTestDocumentWidth()
+        let geometryOK = pageWidth > 0 && pageCount >= 2
             && documentWidth >= pageWidth * Double(pageCount)
         let ok = controller.pageTestCurrentPage() == 0 && sequenceOK && offsetsOK && geometryOK
         // v0.1.4: 重开面板回到第一页
-        _ = controller.pageTestGoTo(2)
+        _ = controller.pageTestGoTo(lastVisited)
         step {}
         let reset = controller.pageTestHideShowReset()
         step {}

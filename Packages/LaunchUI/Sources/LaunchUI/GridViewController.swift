@@ -122,7 +122,8 @@ final class GridViewController: NSViewController {
     }
 
     // 几何参数(唯一来源, 供 GridGeometry 构建; 与 PagingGridLayout 共享语义)
-    private let cellSize: CGFloat = 96
+    /// 单元格边长 = 图标尺寸 + 标签空间(用户反馈: 图标最大档时标签被挤进图标内)。
+    private var cellSize: CGFloat { CGFloat(store.iconSize) + 28 }
     private let horizontalSpacing: CGFloat = 28
     private let verticalSpacing: CGFloat = 28
     private var iconSize: CGFloat { CGFloat(store.iconSize) }

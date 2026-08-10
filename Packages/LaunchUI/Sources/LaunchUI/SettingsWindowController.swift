@@ -33,6 +33,8 @@ public final class SettingsWindowController: NSWindowController {
         window.backgroundColor = NSColor(calibratedWhite: 0.14, alpha: 1)
         window.isOpaque = true
         window.titlebarAppearsTransparent = true
+        // 拖动面板空白区域即移动设置窗口, 不会把事件透传/误触发底下的启动器应用(v0.3.4)
+        window.isMovableByWindowBackground = true
         super.init(window: window)
         buildContent()
     }
@@ -254,8 +256,8 @@ public final class SettingsWindowController: NSWindowController {
     private func buildSourcesSection() -> NSStackView {
         sourcesData = config.customSourceDirectories
         let scroll = NSScrollView()
-        scroll.heightAnchor.constraint(equalToConstant: 120).isActive = true
-        scroll.widthAnchor.constraint(equalToConstant: 240).isActive = true
+        scroll.heightAnchor.constraint(equalToConstant: 200).isActive = true
+        scroll.widthAnchor.constraint(equalToConstant: 300).isActive = true
         sourcesList = NSTableView()
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("src"))
         column.width = 220
@@ -280,8 +282,8 @@ public final class SettingsWindowController: NSWindowController {
     private func buildHiddenSection() -> NSStackView {
         hiddenData = config.hiddenAppIDs
         let scroll = NSScrollView()
-        scroll.heightAnchor.constraint(equalToConstant: 120).isActive = true
-        scroll.widthAnchor.constraint(equalToConstant: 240).isActive = true
+        scroll.heightAnchor.constraint(equalToConstant: 260).isActive = true
+        scroll.widthAnchor.constraint(equalToConstant: 300).isActive = true
         hiddenList = NSTableView()
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("hid"))
         column.width = 220

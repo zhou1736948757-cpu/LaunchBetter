@@ -9,6 +9,8 @@ public final class HotCornerMonitor: @unchecked Sendable {
     private var timer: Timer?
     private var dwellStart: Date?
     private var lastActionAt: Date?
+    /// 当前已触发动作的角(触发后鼠标仍在同角不重复触发, 离开才重置)。
+    private var activeCorner: String?
     private let lock = NSLock()
 
     /// 动作回调(主线程)。
@@ -50,16 +52,23 @@ public final class HotCornerMonitor: @unchecked Sendable {
         let frame = screen.frame
         let tolerance: CGFloat = 24
         var detected: HotCornerAction?
+        var cornerKey: String?
         let top = frame.maxY - point.y < tolerance
         let bottom = point.y - frame.minY < tolerance
         let left = point.x - frame.minX < tolerance
         let right = frame.maxX - point.x < tolerance
-        if top && left { detected = corners.topLeft }
-        else if top && right { detected = corners.topRight }
-        else if bottom && left { detected = corners.bottomLeft }
-        else if bottom && right { detected = corners.bottomRight }
+        if top && left { detected = corners.topLeft; cornerKey = "topLeft" }
+        else if top && right { detected = corners.topRight; cornerKey = "topRight" }
+        else if bottom && left { detected = corners.bottomLeft; cornerKey = "bottomLeft" }
+        else if bottom && right { detected = corners.bottomRight; cornerKey = "bottomRight" }
         else {
+            // 离开角: 重置 dwell 与 activeCorner(允许下次再触发)
             dwellStart = nil
+            activeCorner = nil
+            return
+        }
+        // 鼠标仍停留在同一角(已触发过)→ 不重复触发(toggle 不会闪开关)
+        if activeCorner == cornerKey {
             return
         }
         guard let detected, detected != HotCornerAction.none else {
@@ -76,6 +85,7 @@ public final class HotCornerMonitor: @unchecked Sendable {
         if let last = lastActionAt, Date().timeIntervalSince(last) < 1.0 { return }
         lastActionAt = Date()
         dwellStart = nil
+        activeCorner = cornerKey
         onAction?(detected)
     }
 }

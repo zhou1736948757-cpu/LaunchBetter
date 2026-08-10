@@ -20,6 +20,7 @@
 		6C94E77306BCF04C683B5052 /* ThreeFingerDragCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A257A4CDFADF5CB520111144 /* ThreeFingerDragCoordinator.swift */; };
 		78FF293876DA8791FD534F60 /* LaunchCore in Frameworks */ = {isa = PBXBuildFile; productRef = 022C22583EB95E8DB7E533DA /* LaunchCore */; };
 		79B6670C538DFA802D10D915 /* SearchProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41D011887390646903EE3FD2 /* SearchProbe.swift */; };
+		7C08D416C24B4866D93AFBE0 /* HotCornerProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82E562164F9BB08DB2E906F3 /* HotCornerProbe.swift */; };
 		97CAF62410D849C74D1ED8FE /* LaunchUI in Frameworks */ = {isa = PBXBuildFile; productRef = BFBADDC8868444DA8FEB4241 /* LaunchUI */; };
 		A6AA30F397E682609E5C3255 /* PagingProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B4157109522440A6D3DE67B /* PagingProbe.swift */; };
 		BB5EC826ACB1AF62EE21847B /* IconImageAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E4FB7BAF0189E406E0361FE /* IconImageAdapter.swift */; };
@@ -47,6 +48,7 @@
 		780898346943FE4934897076 /* DependencyContainer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DependencyContainer.swift; sourceTree = "<group>"; };
 		7F48F69D4EFE02FA4BFC2085 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		81C0075A1B63A8F22F018945 /* SettingsShotProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsShotProbe.swift; sourceTree = "<group>"; };
+		82E562164F9BB08DB2E906F3 /* HotCornerProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotCornerProbe.swift; sourceTree = "<group>"; };
 		977BB904E1D1E96A25A079FC /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		A07D65125EC0696A81DDDC45 /* LaunchUI */ = {isa = PBXFileReference; lastKnownFileType = folder; name = LaunchUI; path = Packages/LaunchUI; sourceTree = SOURCE_ROOT; };
 		A0FFF73145C9A2D72A52E604 /* IconProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IconProbe.swift; sourceTree = "<group>"; };
@@ -114,6 +116,7 @@
 				A777C8C802C7A13E24A11B75 /* DragProbe.swift */,
 				DD3B97AB82BA34BFBECBC19A /* FolderProbe.swift */,
 				A8DB7EDB939C825095D4B69F /* GridProbe.swift */,
+				82E562164F9BB08DB2E906F3 /* HotCornerProbe.swift */,
 				A0FFF73145C9A2D72A52E604 /* IconProbe.swift */,
 				E330AC7D7E44DC67CC602785 /* PageTestProbe.swift */,
 				1B4157109522440A6D3DE67B /* PagingProbe.swift */,
@@ -209,6 +212,7 @@
 				5DFA92948154CC32FFCDD121 /* DragProbe.swift in Sources */,
 				25C2502D95D0B5D76D7B1074 /* FolderProbe.swift in Sources */,
 				41F580BE145D8D7248580D9B /* GridProbe.swift in Sources */,
+				7C08D416C24B4866D93AFBE0 /* HotCornerProbe.swift in Sources */,
 				BB5EC826ACB1AF62EE21847B /* IconImageAdapter.swift in Sources */,
 				675955509B1028D0217C78C8 /* IconProbe.swift in Sources */,
 				C7367F5C43E434A600DE07D2 /* LauncherStore.swift in Sources */,

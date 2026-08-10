@@ -30,12 +30,21 @@ final class GridGeometryTests: XCTestCase {
     }
 
     func testGridExtentCentered() {
-        let g = makeGeometry(columns: 7, rows: 6, pageWidth: 1200, pageHeight: 800)
+        // 网格能放下时垂直居中(可用区 = 页高 - 顶部留白100 - 底部留白40)
+        let g = makeGeometry(columns: 7, rows: 6, pageWidth: 1200, pageHeight: 1000)
         // 网格宽 = 7*96 + 6*28 = 840; 网格高 = 6*96 + 5*28 = 716
         XCTAssertEqual(g.gridWidth, 840)
         XCTAssertEqual(g.gridHeight, 716)
         XCTAssertEqual(g.gridOrigin.x, (1200 - 840) / 2)
-        XCTAssertEqual(g.gridOrigin.y, (800 - 716) / 2)
+        XCTAssertEqual(g.gridOrigin.y, (1000 - 716) / 2)
+    }
+
+    func testGridOverflowClampsTopInset() {
+        // 网格超高(放不下)时顶固定于搜索栏下方, 不溢出顶部
+        let g = makeGeometry(columns: 7, rows: 8, pageWidth: 1200, pageHeight: 800)
+        // 8 行网格高 = 8*96 + 7*28 = 964 > 800-100-40=660 → 放不下
+        let top = g.gridOrigin.y + g.gridHeight
+        XCTAssertEqual(top, 800 - 100) // 网格顶恰在搜索栏区域下缘, 不顶出搜索栏
     }
 
     // MARK: - frame(forSlot:in:)

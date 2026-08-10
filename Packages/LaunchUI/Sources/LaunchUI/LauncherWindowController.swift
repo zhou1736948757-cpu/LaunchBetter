@@ -17,6 +17,8 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
     private var gridViewController: GridViewController!
     private var folderViewController: FolderViewController?
     private let searchField = NSSearchField()
+    private var searchFieldWidthConstraint: NSLayoutConstraint?
+    private var searchFieldHeightConstraint: NSLayoutConstraint?
     private var dragController: DragController?
     private var backgroundLayer = CALayer()
     private var dimLayer = CALayer()
@@ -127,10 +129,16 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         // 避开刘海屏 notch(用户实测 v0.1.3 重叠): 安全区动态下移(v0.1.4)
         let screen = window.screen ?? NSScreen.main
         let topInset = max(0, screen?.safeAreaInsets.top ?? 0)
+        // 搜索栏等比大小(宽 = 标尺, 高 = 宽/16; 居中, 顶部固定)——用户要求"斜着拉等比例"
+        let size = CGFloat(store.searchBarWidth)
+        let height = max(22, size / 16)
+        searchFieldWidthConstraint = searchField.widthAnchor.constraint(equalToConstant: size)
+        searchFieldHeightConstraint = searchField.heightAnchor.constraint(equalToConstant: height)
         NSLayoutConstraint.activate([
             searchField.topAnchor.constraint(equalTo: root.topAnchor, constant: 24 + topInset),
             searchField.centerXAnchor.constraint(equalTo: root.centerXAnchor),
-            searchField.widthAnchor.constraint(equalToConstant: CGFloat(store.searchBarWidth)),
+            searchFieldWidthConstraint!,
+            searchFieldHeightConstraint!,
         ])
 
         // 设置入口: 右上角齿轮(用户反馈"没有设置页面的进入框, 怎么改语言")。
@@ -212,6 +220,18 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
     }
 
     /// 壁纸背景: 内存命中同步应用(热显示零延迟), 否则后台渲染(§62 模式)。
+    /// 设置即时生效(Stage v0.3.4): 壁纸模糊强度 + 搜索栏大小。
+    /// 由应用层在 onConfigChange 时调用(设置里改滑条立即反映)。
+    public func reapplyVisualConfig() {
+        if let window {
+            updateBackground(for: window)
+        }
+        let size = CGFloat(store.searchBarWidth)
+        let height = max(22, size / 16)
+        searchFieldWidthConstraint?.constant = size
+        searchFieldHeightConstraint?.constant = height
+    }
+
     private func updateBackground(for window: NSWindow) {
         guard let provider = wallpaperProvider, let screen = window.screen else { return }
         let request = WallpaperProvider.RenderRequest(
@@ -258,6 +278,11 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
 
     public func hide() {
         guard visible else { return }
+        // 设置作为 child window 打开时, 点击启动器空白只关闭设置, 不退出启动器(用户要求 v0.3.4)。
+        // (设置窗口已因 resign key 自动 close; 此处防止启动器随之 hide)
+        if let window, let children = window.childWindows, !children.isEmpty {
+            return
+        }
         visible = false
         onVisibilityChange?(false)
         // M4: 隐藏时终止拖拽(display link/overlay 清理)

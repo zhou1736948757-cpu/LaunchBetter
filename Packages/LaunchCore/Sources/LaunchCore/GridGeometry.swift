@@ -51,11 +51,29 @@ public struct GridGeometry: Sendable, Equatable {
         CGFloat(rows) * cellSize + CGFloat(rows - 1) * verticalSpacing
     }
 
-    /// 网格原点: 页内网格起点(页 0 文档坐标, 垂直居中)。
+    /// 顶部留白(pt): 搜索栏区域(网格不得顶出搜索栏, v0.3.4)。
+    public let topInset: CGFloat
+
+    /// 底部留白(pt): 页点区域。
+    public let bottomInset: CGFloat
+
+    /// 网格原点: 页内网格起点(页 0 文档坐标)。
+    /// 网格高度正常时垂直居中(限制在 [bottomInset, 顶部留白] 内);
+    /// 网格超高时顶部固定于 topInset 之下(不顶出搜索栏), 底部允许溢出。
     public var gridOrigin: CGPoint {
-        CGPoint(
+        let centered = (pageHeight - gridHeight) / 2
+        let minY = bottomInset
+        let maxY = pageHeight - topInset - gridHeight
+        let y: CGFloat
+        if maxY < minY {
+            // 网格放不下: 顶固定于搜索栏下方(网格顶 = pageHeight - topInset), 底部溢出。
+            y = maxY
+        } else {
+            y = min(max(centered, minY), maxY)
+        }
+        return CGPoint(
             x: (pageWidth - gridWidth) / 2,
-            y: (pageHeight - gridHeight) / 2
+            y: y
         )
     }
 
@@ -77,6 +95,8 @@ public struct GridGeometry: Sendable, Equatable {
         self.verticalSpacing = verticalSpacing
         self.pageWidth = pageWidth
         self.pageHeight = pageHeight
+        self.topInset = 100
+        self.bottomInset = 40
     }
 
     /// 页 p 的文档坐标原点 x。

@@ -47,6 +47,7 @@ public final class ActivationCoordinator {
     }
 
     private func reconfigureHotCorners(_ corners: HotCornerConfig) {
+        hotCornerConfigSnapshot = corners
         hotCornerMonitor?.stop()
         hotCornerMonitor = nil
         let hasAction = corners.topLeft != .none || corners.topRight != .none
@@ -65,6 +66,23 @@ public final class ActivationCoordinator {
     }
 
     private var hotCornerConfigSnapshot: HotCornerConfig?
+
+    /// 热角诊断(v0.3.4): 配置 + monitor 状态 + 当前鼠标所在角。
+    public func hotCornerDiagnostics() -> String {
+        let corners = hotCornerConfigSnapshot
+        let point = NSEvent.mouseLocation
+        var detected = "outside"
+        if let screen = NSScreen.screens.first(where: { $0.frame.contains(point) }) {
+            let f = screen.frame
+            let top = f.maxY - point.y < 24, bottom = point.y - f.minY < 24
+            let left = point.x - f.minX < 24, right = f.maxX - point.x < 24
+            if top && left { detected = "topLeft" }
+            else if top && right { detected = "topRight" }
+            else if bottom && left { detected = "bottomLeft" }
+            else if bottom && right { detected = "bottomRight" }
+        }
+        return "config=\(String(describing: corners)) monitorRunning=\(hotCornerMonitor != nil) mouse=\(Int(point.x)),\(Int(point.y)) corner=\(detected)"
+    }
 
     private func handleCornerAction(_ action: HotCornerAction) {
         switch action {

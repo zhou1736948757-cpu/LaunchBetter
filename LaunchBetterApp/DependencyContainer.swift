@@ -138,9 +138,10 @@ public final class DependencyContainer {
             hotkey: GlobalHotkey()
         )
         activation.start()
-        // 设置变更即时生效(热键/热角/语言)
-        store.onConfigChange = { [weak activation] config in
+        // 设置变更即时生效(热键/热角/语言/壁纸模糊/搜索栏大小)
+        store.onConfigChange = { [weak activation, weak windowController] config in
             activation?.reconfigure(with: config)
+            windowController?.reapplyVisualConfig()
         }
         activation.reconfigure(with: store.config)
         self.activationCoordinator = activation
