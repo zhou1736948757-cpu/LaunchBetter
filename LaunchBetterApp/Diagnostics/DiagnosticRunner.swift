@@ -65,6 +65,10 @@ enum DiagnosticRunner {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
                 GridProbe.run(container: container)
             }
+        } else if CommandLine.arguments.contains("--sourcesprobe") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                SourcesProbe.run(container: container)
+            }
         }
     }
 

@@ -84,6 +84,23 @@ public final class DependencyContainer {
         directoryMonitor.start()
         self.directoryMonitor = directoryMonitor
 
+        // 自定义源目录变更即时生效(Stage B §B2):
+        // 设置保存(持久化)后 → 动态重配 monitor scopes → catalog 增量重扫新源/对账移除源。
+        store.onCustomSourcesChange = { [weak catalogActor, weak directoryMonitor, weak store] customPaths in
+            let fullSources = AppDiscoveryService.defaultSources + customPaths.map {
+                URL(fileURLWithPath: $0, isDirectory: true)
+            }
+            directoryMonitor?.reconfigure(scopes: fullSources.map(\.path))
+            Task {
+                guard let delta = await catalogActor?.updateSources(fullSources), !delta.isEmpty else {
+                    return
+                }
+                await MainActor.run {
+                    store?.catalogDidChangeExternally()
+                }
+            }
+        }
+
         // 窗口控制器单实例(激活协调器与冒烟共享)
         let wallpaperProvider = WallpaperProvider(
             cachesURL: cachesDir

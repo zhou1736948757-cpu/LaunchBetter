@@ -32,7 +32,8 @@ public actor AppCatalogActor {
     }
 
     private let store: CatalogSnapshotStore
-    private let sources: [URL]
+    /// 当前源集合(规范化 + 去重)。设置中自定义源增删后经 `updateSources` 动态更新。
+    private var sources: [URL]
     private let discoverSources: @Sendable ([URL]) -> [AppRecord]
     private let discoverAppRoot: @Sendable (URL) -> AppRecord?
 
@@ -57,7 +58,7 @@ public actor AppCatalogActor {
         }
     ) {
         self.store = store
-        self.sources = sources
+        self.sources = Self.normalizedSources(sources)
         self.discoverSources = discoverSources
         self.discoverAppRoot = discoverAppRoot
         self.snapshot = CatalogSnapshot(apps: [])
@@ -105,6 +106,11 @@ public actor AppCatalogActor {
         generation == expected ? snapshot : nil
     }
 
+    /// 当前源集合(规范化 + 去重后)。
+    public func currentSources() async -> [URL] {
+        sources
+    }
+
     /// 后台全量对账: 枚举磁盘 → 计算增量 → 更新快照 → 原子持久化。
     /// 枚举在后台执行器进行,不阻塞 actor。
     public func reconcileFromDisk() async throws -> CatalogDelta {
@@ -112,9 +118,11 @@ public actor AppCatalogActor {
             let capturedSources = sources
             let capturedGeneration = generation
             let discoverSources = discoverSources
-            let discovered = await Task.detached(priority: .utility) {
-                discoverSources(capturedSources)
-            }.value
+            let discovered = Self.deduplicated(
+                await Task.detached(priority: .utility) {
+                    discoverSources(capturedSources)
+                }.value
+            )
 
             // Actor may process an incremental FSEvent while detached discovery
             // is running. Rescan against that newer generation instead of
@@ -123,6 +131,83 @@ public actor AppCatalogActor {
 
             let delta = ReconcileEngine.delta(from: snapshot, to: discovered)
             snapshot = CatalogSnapshot(apps: discovered)
+            generation += 1
+
+            do {
+                try store.save(snapshot)
+                lastPersistErrorDescription = nil
+            } catch {
+                lastPersistErrorDescription = String(describing: error)
+            }
+            return delta
+        }
+    }
+
+    // MARK: - 动态源集合(Stage B §B2)
+
+    /// 更新源集合(设置中自定义源增删后调用)。
+    ///
+    /// 生命周期契约(§B2): 保留 generation 防陈旧 + durable-before-publish。
+    /// - 新增源: 增量枚举该目录(不覆盖其余源应用状态)
+    /// - 移除源: 移除该源直接枚举的应用(嵌套/其余源仍枚举的应用保留, 防重叠误删与幽灵项)
+    /// - 规范化 + 去重(与默认源、自定义源互相去重; 重叠不产生重复 AppID)
+    public func updateSources(_ newSources: [URL]) async -> CatalogDelta {
+        let normalized = Self.normalizedSources(newSources)
+        guard normalized != sources else { return CatalogDelta() }
+
+        incrementalRequestSequence &+= 1
+        let request = incrementalRequestSequence
+        let previous = incrementalTail
+        let task = Task { [weak self] () -> CatalogDelta in
+            _ = await previous?.value
+            guard let self else { return CatalogDelta() }
+            return await self.performUpdateSources(newSources: normalized)
+        }
+        incrementalTail = task
+        let result = await task.value
+        if request == incrementalRequestSequence {
+            incrementalTail = nil
+        }
+        return result
+    }
+
+    private func performUpdateSources(newSources: [URL]) async -> CatalogDelta {
+        while true {
+            let current = sources
+            let added = newSources.filter { !current.contains($0) }
+            let removed = current.filter { !newSources.contains($0) }
+            let capturedGeneration = generation
+            var discoveredAdded: [AppRecord] = []
+            for scope in added {
+                let discoverSources = discoverSources
+                let found = await Task.detached(priority: .utility) {
+                    discoverSources([scope])
+                }.value
+                discoveredAdded.append(contentsOf: found)
+            }
+            // 扫描期间若有其他对账提交, 以最新状态重算(陈旧防护)。
+            guard generation == capturedGeneration else { continue }
+
+            let deduped = Self.deduplicated(discoveredAdded)
+
+            var apps = snapshot.apps
+            apps = apps.filter { record in
+                let ownedByRemoved = removed.contains { sourceDirectlyOwns(record.id.rawValue, $0.path) }
+                return !ownedByRemoved
+            }
+            for record in deduped {
+                apps.removeAll { $0.id == record.id }
+                apps.append(record)
+            }
+
+            let newSnapshot = CatalogSnapshot(apps: apps)
+            let delta = ReconcileEngine.delta(from: snapshot, to: newSnapshot.apps)
+            guard !delta.isEmpty else {
+                sources = newSources
+                return delta
+            }
+            sources = newSources
+            snapshot = newSnapshot
             generation += 1
 
             do {
@@ -234,11 +319,50 @@ public actor AppCatalogActor {
             || appRootPath == "/private" + idPath
     }
 
+    /// 源目录直接归属判断: 应用是该源目录的顶层 .app(容忍 /var 与 /private/var 差异)。
+    /// 仅移除被移除源"直接枚举"的应用(嵌套应用属更深层源, 不误删)。
+    private func sourceDirectlyOwns(_ appPath: String, _ sourcePath: String) -> Bool {
+        let prefix = sourcePath + "/"
+        if appPath.hasPrefix(prefix) {
+            return !appPath.dropFirst(prefix.count).contains("/")
+        }
+        let privatePrefix = "/private" + prefix
+        if appPath.hasPrefix(privatePrefix) {
+            return !appPath.dropFirst(privatePrefix.count).contains("/")
+        }
+        return false
+    }
+
+    /// 按 AppID 去重发现记录(重叠源对同一 .app 枚举多次, 保证不产生重复 AppID)。
+    private static func deduplicated(_ records: [AppRecord]) -> [AppRecord] {
+        var seen = Set<AppID>()
+        var result: [AppRecord] = []
+        for record in records.sorted(by: { $0.id.rawValue < $1.id.rawValue }) {
+            if seen.insert(record.id).inserted {
+                result.append(record)
+            }
+        }
+        return result
+    }
+
+    /// 源集合规范化 + 去重: realpath 收敛(不存在路径回退纯文本), 重复路径仅保留一次。
+    private static func normalizedSources(_ urls: [URL]) -> [URL] {
+        var seen = Set<String>()
+        var result: [URL] = []
+        for url in urls {
+            let canonical = PathCanonicalizer.canonicalPath(from: url)
+            guard seen.insert(canonical).inserted else { continue }
+            result.append(URL(fileURLWithPath: canonical, isDirectory: true))
+        }
+        return result.sorted { $0.path < $1.path }
+    }
+
     private func applyIncremental(
-        _ discovered: [AppRecord],
+        _ rawDiscovered: [AppRecord],
         scopePrefix: String? = nil,
         appRootPath: String? = nil
     ) -> CatalogDelta {
+        let discovered = Self.deduplicated(rawDiscovered)
         let currentByID = Dictionary(uniqueKeysWithValues: snapshot.apps.map { ($0.id, $0) })
         var inserted: [AppRecord] = []
         var updated: [AppRecord] = []

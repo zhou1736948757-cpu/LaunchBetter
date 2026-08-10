@@ -37,6 +37,9 @@ public final class LauncherStore: LauncherStoring, LayoutMutationCompleting, Set
     /// 配置变更回调(热键/语言/热角即时生效接线)。
     public var onConfigChange: ((AppConfiguration) -> Void)?
 
+    /// 自定义源目录变更回调(Stage B §B2): 设置保存后触发目录重扫与 monitor 重配。
+    public var onCustomSourcesChange: (([String]) -> Void)?
+
     private let catalogActor: AppCatalogActor
     private let layoutStore: LayoutStore
     private let settingsStore: SettingsStore
@@ -462,6 +465,8 @@ public final class LauncherStore: LauncherStoring, LayoutMutationCompleting, Set
         let searchMetadataChanged =
             config.customDisplayNames != self.config.customDisplayNames
             || config.language != self.config.language
+        let customSourcesChanged =
+            config.customSourceDirectories != self.config.customSourceDirectories
         do {
             try settingsStore.save(config)
         } catch {
@@ -472,6 +477,9 @@ public final class LauncherStore: LauncherStoring, LayoutMutationCompleting, Set
         L10n.configure(language: config.language)
         if searchMetadataChanged {
             rebuildSearchIndex()
+        }
+        if customSourcesChanged {
+            onCustomSourcesChange?(config.customSourceDirectories)
         }
         bumpRevision()
         onConfigChange?(config)

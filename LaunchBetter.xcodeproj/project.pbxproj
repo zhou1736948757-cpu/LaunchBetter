@@ -10,6 +10,7 @@
 		0B378C547F12199B13A4441B /* PageTestProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = E330AC7D7E44DC67CC602785 /* PageTestProbe.swift */; };
 		0D5A02D46D0122A622298A74 /* ActivationCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C34AB424D5AF0AE055AF24D /* ActivationCoordinator.swift */; };
 		25C2502D95D0B5D76D7B1074 /* FolderProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD3B97AB82BA34BFBECBC19A /* FolderProbe.swift */; };
+		401B68E8866EB99900FE74A1 /* SourcesProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E84932645B8B51425FF3EA5 /* SourcesProbe.swift */; };
 		40267ECAAC0CD44BA23BFD9F /* DiagnosticRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2B7C15B26E035D2F86D16C6 /* DiagnosticRunner.swift */; };
 		41F580BE145D8D7248580D9B /* GridProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8DB7EDB939C825095D4B69F /* GridProbe.swift */; };
 		48E665E349277229DE1CA8D7 /* ThreeFingerProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C2AB3A60C689596001DB5D2 /* ThreeFingerProbe.swift */; };
@@ -41,6 +42,7 @@
 		41D011887390646903EE3FD2 /* SearchProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchProbe.swift; sourceTree = "<group>"; };
 		5363485EFF16DF98D8CCB975 /* LauncherWindowCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LauncherWindowCoordinator.swift; sourceTree = "<group>"; };
 		5E4FB7BAF0189E406E0361FE /* IconImageAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IconImageAdapter.swift; sourceTree = "<group>"; };
+		6E84932645B8B51425FF3EA5 /* SourcesProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourcesProbe.swift; sourceTree = "<group>"; };
 		780898346943FE4934897076 /* DependencyContainer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DependencyContainer.swift; sourceTree = "<group>"; };
 		7F48F69D4EFE02FA4BFC2085 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		977BB904E1D1E96A25A079FC /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
@@ -115,6 +117,7 @@
 				1B4157109522440A6D3DE67B /* PagingProbe.swift */,
 				41D011887390646903EE3FD2 /* SearchProbe.swift */,
 				FE80D899386FA134055791B3 /* SmokeProbe.swift */,
+				6E84932645B8B51425FF3EA5 /* SourcesProbe.swift */,
 				1C2AB3A60C689596001DB5D2 /* ThreeFingerProbe.swift */,
 			);
 			path = Diagnostics;
@@ -211,6 +214,7 @@
 				A6AA30F397E682609E5C3255 /* PagingProbe.swift in Sources */,
 				79B6670C538DFA802D10D915 /* SearchProbe.swift in Sources */,
 				F8D3BA3975E69CD862B869D8 /* SmokeProbe.swift in Sources */,
+				401B68E8866EB99900FE74A1 /* SourcesProbe.swift in Sources */,
 				6C94E77306BCF04C683B5052 /* ThreeFingerDragCoordinator.swift in Sources */,
 				48E665E349277229DE1CA8D7 /* ThreeFingerProbe.swift in Sources */,
 				D787CB7DB7A8142C2793057B /* main.swift in Sources */,

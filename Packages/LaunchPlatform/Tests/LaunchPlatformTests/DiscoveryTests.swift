@@ -36,6 +36,23 @@ func makeFakeApp(
     return appURL
 }
 
+/// 向应用写入 `<loc>.lproj/InfoPlist.strings`。
+func writeInfoPlistStrings(
+    to appURL: URL,
+    localization: String,
+    strings: [String: String]
+) throws {
+    let dir = appURL
+        .appendingPathComponent("Contents", isDirectory: true)
+        .appendingPathComponent("Resources", isDirectory: true)
+        .appendingPathComponent("\(localization).lproj", isDirectory: true)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let data = try PropertyListSerialization.data(
+        fromPropertyList: strings, format: .xml, options: 0
+    )
+    try data.write(to: dir.appendingPathComponent("InfoPlist.strings"))
+}
+
 @Suite("PathCanonicalizer 文件系统收敛")
 struct PathCanonicalizerTests {
     @Test("相对组件标准化")
@@ -165,6 +182,74 @@ struct AppDiscoveryServiceTests {
         let canonicalPath = PathCanonicalizer.canonicalPath(from: appURL)
         #expect(record.id.rawValue == canonicalPath)
         #expect(record.url == URL(fileURLWithPath: canonicalPath))
+    }
+
+    @Test("本地化名从 lproj InfoPlist.strings 提取(键为 locale)")
+    func localizedNamesParsed() throws {
+        let dir = try tempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let appURL = try makeFakeApp(
+            in: dir, name: "Safari", bundleID: "com.apple.Safari", displayName: "Safari"
+        )
+        try writeInfoPlistStrings(
+            to: appURL, localization: "en",
+            strings: ["CFBundleDisplayName": "Safari", "CFBundleName": "Safari"]
+        )
+        try writeInfoPlistStrings(
+            to: appURL, localization: "zh-Hans", strings: ["CFBundleDisplayName": "浏览器"]
+        )
+        try writeInfoPlistStrings(
+            to: appURL, localization: "zh-Hant", strings: ["CFBundleName": "瀏覽器"]
+        )
+
+        let record = try #require(AppDiscoveryService.makeRecord(from: appURL))
+        #expect(record.localizedNames == [
+            "en": "Safari", "zh-Hans": "浏览器", "zh-Hant": "瀏覽器",
+        ])
+        #expect(record.displayName == "Safari")
+    }
+
+    @Test("strings 内 CFBundleName 回退, 基础名不受影响")
+    func localizedNameFallbackWithinStrings() throws {
+        let dir = try tempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let appURL = try makeFakeApp(in: dir, name: "Foo", bundleID: "com.test.Foo")
+        try writeInfoPlistStrings(
+            to: appURL, localization: "en", strings: ["CFBundleName": "Foo English"]
+        )
+
+        let record = try #require(AppDiscoveryService.makeRecord(from: appURL))
+        #expect(record.localizedNames == ["en": "Foo English"])
+        #expect(record.displayName == "Foo")
+    }
+
+    @Test("无 lproj 目录 → 空本地化名")
+    func noLocalization() throws {
+        let dir = try tempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let appURL = try makeFakeApp(in: dir, name: "Foo", bundleID: "com.test.Foo")
+        let record = try #require(AppDiscoveryService.makeRecord(from: appURL))
+        #expect(record.localizedNames.isEmpty)
+    }
+
+    @Test("畸形 InfoPlist.strings 的本地化被跳过")
+    func malformedStringsSkipped() throws {
+        let dir = try tempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let appURL = try makeFakeApp(in: dir, name: "Foo", bundleID: "com.test.Foo")
+        let bad = appURL
+            .appendingPathComponent("Contents", isDirectory: true)
+            .appendingPathComponent("Resources", isDirectory: true)
+            .appendingPathComponent("bad.lproj", isDirectory: true)
+        try FileManager.default.createDirectory(at: bad, withIntermediateDirectories: true)
+        try "this is not a plist".write(
+            to: bad.appendingPathComponent("InfoPlist.strings"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let record = try #require(AppDiscoveryService.makeRecord(from: appURL))
+        #expect(record.localizedNames.isEmpty)
     }
 }
 

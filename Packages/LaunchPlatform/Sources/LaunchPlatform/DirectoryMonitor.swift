@@ -31,7 +31,8 @@ public final class DirectoryMonitor: @unchecked Sendable {
         }
     }
 
-    private let scopes: [String]
+    /// 当前监控根(规范化; 由 `lock` 保护读写, FSEvents 回调线程读取)。
+    private var scopes: [String]
     private let latency: TimeInterval
     private var stream: FSEventStreamRef?
     private let lock = NSLock()
@@ -58,6 +59,7 @@ public final class DirectoryMonitor: @unchecked Sendable {
 
     public func start() {
         guard stream == nil else { return }
+        let scopesToWatch = currentScopes()
         var context = FSEventStreamContext(
             version: 0,
             info: Unmanaged.passUnretained(self).toOpaque(),
@@ -73,7 +75,7 @@ public final class DirectoryMonitor: @unchecked Sendable {
             kCFAllocatorDefault,
             DirectoryMonitor.streamCallback,
             &context,
-            scopes as CFArray,
+            scopesToWatch as CFArray,
             FSEventStreamEventId(kFSEventStreamEventIdSinceNow),
             latency,
             flags
@@ -97,6 +99,31 @@ public final class DirectoryMonitor: @unchecked Sendable {
         }
     }
 
+    /// 动态更新监控根(设置中自定义源增删后调用)。
+    ///
+    /// 仅在 scope 集合实际变化时重建 FSEventStream(新增/移除源目录)。
+    /// 旧流已停止且 pending 去重, 回调不会携带已移除 scope 的陈旧摘要。
+    public func reconfigure(scopes newScopes: [String]) {
+        let normalized = newScopes.map {
+            PathCanonicalizer.canonicalPath(from: URL(fileURLWithPath: $0))
+        }
+        lock.lock()
+        let changed = normalized != scopes
+        if changed {
+            scopes = normalized
+        }
+        lock.unlock()
+        guard changed else { return }
+        stop()
+        start()
+    }
+
+    private func currentScopes() -> [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return scopes
+    }
+
     // MARK: - 回调处理
 
     private static let streamCallback: FSEventStreamCallback = {
@@ -116,12 +143,13 @@ public final class DirectoryMonitor: @unchecked Sendable {
     }
 
     private func process(paths: [String], flags: [FSEventStreamEventFlags]) {
+        let scopes = currentScopes()
         if ProcessInfo.processInfo.environment["FSEVENTS_DEBUG"] != nil {
             for index in 0..<paths.count {
                 fputs("FSEVENTS_DEBUG path=\(paths[index]) flag=\(flags[index])\n", stderr)
             }
         }
-        var scopes = Set<String>()
+        var scopesDirty = Set<String>()
         var appRoots = Set<String>()
         var loss = false
         for index in 0..<paths.count {
@@ -133,19 +161,19 @@ public final class DirectoryMonitor: @unchecked Sendable {
                 || (flag & UInt32(kFSEventStreamEventFlagEventIdsWrapped)) != 0 {
                 loss = true
             }
-            switch AppRootFolding.fold(paths[index], scopes: self.scopes) {
+            switch AppRootFolding.fold(paths[index], scopes: scopes) {
             case .scopeDirty(let scope):
-                scopes.insert(scope)
+                scopesDirty.insert(scope)
             case .appRoot(let root):
                 appRoots.insert(root)
             case .ignored:
                 if ProcessInfo.processInfo.environment["FSEVENTS_DEBUG"] != nil {
-                    fputs("FSEVENTS_DEBUG ignored path=\(paths[index]) scopes=\(self.scopes)\n", stderr)
+                    fputs("FSEVENTS_DEBUG ignored path=\(paths[index]) scopes=\(scopes)\n", stderr)
                 }
             }
         }
         lock.lock()
-        pendingScopes.formUnion(scopes)
+        pendingScopes.formUnion(scopesDirty)
         pendingAppRoots.formUnion(appRoots)
         pendingEventLoss = pendingEventLoss || loss
         lock.unlock()
