@@ -9,7 +9,7 @@ enum GridDragSourceIdentity: Equatable {
         switch item {
         case .app(let id):
             self = .app(id)
-        case .folder(let id, _):
+        case .folder(let id):
             self = .folder(id)
         }
     }
@@ -129,6 +129,10 @@ final class GridViewController: NSViewController {
 
     /// 上次应用的显示修订(无变化跳过 full snapshot, Stage 1 §30)。
     private var lastAppliedRevision: UInt64 = .max
+
+    /// 上次应用的文件夹 payload(可见子项, §A14)。子项变化只 reload 对应 folder
+    /// item(identity 不变 → 无 delete/insert、无 flicker), 不整表重建。
+    private var lastAppliedFolderPayloads: [FolderID: [AppID]] = [:]
 
     init(store: any LauncherStoring, iconProvider: (any IconImageProviding)?) {
         self.store = store
@@ -253,7 +257,7 @@ final class GridViewController: NSViewController {
             if createFolderTargetAppID == id {
                 cell.setCreateFolderTargetHighlighted(true, active: createFolderTargetIsActive)
             }
-        case .folder(let id, _):
+        case .folder(let id):
             let children = store.folderChildren(id) ?? []
             cell.configureFolder(
                 displayName: store.folderName(for: id),
@@ -370,6 +374,18 @@ final class GridViewController: NSViewController {
             snapshot.appendSections([pageIndex])
             snapshot.appendItems(page, toSection: pageIndex)
         }
+        // §A14: folder 身份稳定, 子项 payload 独立刷新。已显示的 folder 的可见子项
+        // 变化 → reload 该 item(重新 configure → 缩略图/子项更新), identity 不变。
+        // 新出现/已消失的 folder 走 insert/delete, 无需 reload。
+        let folderPayloads = display.folderChildrenPayload
+        let changed = folderPayloads.keys.filter { id in
+            guard let previous = lastAppliedFolderPayloads[id] else { return false }
+            return folderPayloads[id] != previous
+        }
+        if !changed.isEmpty {
+            snapshot.reloadItems(changed.map(Item.folder))
+        }
+        lastAppliedFolderPayloads = folderPayloads
         pageCount = max(1, display.pages.count)
         currentPage = min(currentPage, pageCount - 1)
         dataSource.apply(snapshot, animatingDifferences: false)
@@ -446,7 +462,7 @@ final class GridViewController: NSViewController {
         switch item {
         case .app(let id):
             store.launch(id)
-        case .folder(let id, _):
+        case .folder(let id):
             onOpenFolder?(id)
         }
     }
@@ -506,7 +522,7 @@ final class GridViewController: NSViewController {
             trash.representedObject = id
             trash.target = self
             menu.addItem(trash)
-        case .folder(let id, _):
+        case .folder(let id):
             let rename = NSMenuItem(
                 title: L10n.t(.rename), action: #selector(renameFolder(_:)), keyEquivalent: ""
             )
@@ -868,7 +884,7 @@ final class GridViewController: NSViewController {
         let local = collectionView.convert(point, from: nil)
         guard let indexPath = collectionView.indexPathForItem(at: local),
               let item = dataSource.itemIdentifier(for: indexPath),
-              case .folder(let id, _) = item else {
+              case .folder(let id) = item else {
             return nil
         }
         return id
@@ -888,7 +904,7 @@ final class GridViewController: NSViewController {
         switch item {
         case .app(let id):
             return .app(id)
-        case .folder(let id, _):
+        case .folder(let id):
             return .folder(id)
         }
     }

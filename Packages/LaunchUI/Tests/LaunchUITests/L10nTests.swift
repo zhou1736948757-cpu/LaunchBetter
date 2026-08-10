@@ -267,8 +267,9 @@ private final class FolderLocalizationTestStore: LauncherStoring {
 
     func displayModel() -> DisplayModel {
         DisplayModel(
-            pages: [[.folder(folderID, visibleChildren: [appID])]],
-            pageCapacity: gridColumns * gridRows
+            pages: [[.folder(folderID)]],
+            pageCapacity: gridColumns * gridRows,
+            folderChildrenPayload: [folderID: [appID]]
         )
     }
 

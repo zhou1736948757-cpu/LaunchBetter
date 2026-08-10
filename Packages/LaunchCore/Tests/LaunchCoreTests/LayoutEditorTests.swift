@@ -403,13 +403,15 @@ struct LayoutEditorTests {
             #expect(result.layout.pages == [[
                 .app(ids[0]), .app(ids[1]), .folder(result.folderID)
             ]])
-            #expect(DisplayModel(
+            let displayAfter = DisplayModel(
                 catalog: catalog(apps(16).map(\.rawValue)),
                 layout: result.layout,
                 config: { var c = config(); c.hiddenAppIDs = [ids[0]]; return c }()
-            ).flatSlots == [
-                .app(ids[1]), .folder(result.folderID, visibleChildren: [ids[2], ids[3]])
+            )
+            #expect(displayAfter.flatSlots == [
+                DisplayModel.DisplayItem.app(ids[1]), .folder(result.folderID)
             ])
+            #expect(displayAfter.folderVisibleChildren(result.folderID) == [ids[2], ids[3]])
             expectUniqueAppOccurrences(result.layout)
         }
 
@@ -424,13 +426,15 @@ struct LayoutEditorTests {
             #expect(result.layout.pages == [[
                 .app(ids[1]), .app(ids[0]), .folder(result.folderID)
             ]])
-            #expect(DisplayModel(
+            let displayAfter = DisplayModel(
                 catalog: catalog(apps(16).map(\.rawValue)),
                 layout: result.layout,
                 config: { var c = config(); c.hiddenAppIDs = [ids[0]]; return c }()
-            ).flatSlots == [
-                .app(ids[1]), .folder(result.folderID, visibleChildren: [ids[2], ids[3]])
+            )
+            #expect(displayAfter.flatSlots == [
+                DisplayModel.DisplayItem.app(ids[1]), .folder(result.folderID)
             ])
+            #expect(displayAfter.folderVisibleChildren(result.folderID) == [ids[2], ids[3]])
             expectUniqueAppOccurrences(result.layout)
         }
 
@@ -445,13 +449,15 @@ struct LayoutEditorTests {
             #expect(result.layout.pages == [[
                 .app(ids[0]), .folder(result.folderID), .app(ids[3])
             ]])
-            #expect(DisplayModel(
+            let displayAfter = DisplayModel(
                 catalog: catalog(apps(16).map(\.rawValue)),
                 layout: result.layout,
                 config: { var c = config(); c.hiddenAppIDs = [ids[0]]; return c }()
-            ).flatSlots == [
-                .folder(result.folderID, visibleChildren: [ids[1], ids[2]]), .app(ids[3])
+            )
+            #expect(displayAfter.flatSlots == [
+                DisplayModel.DisplayItem.folder(result.folderID), .app(ids[3])
             ])
+            #expect(displayAfter.folderVisibleChildren(result.folderID) == [ids[1], ids[2]])
             expectUniqueAppOccurrences(result.layout)
         }
     }
@@ -474,13 +480,15 @@ struct LayoutEditorTests {
             #expect(result.layout.pages == [[
                 .app(missing), .app(ids[1]), .folder(result.folderID)
             ]])
-            #expect(DisplayModel(
+            let displayAfter = DisplayModel(
                 catalog: catalog(apps(16).map(\.rawValue)),
                 layout: result.layout,
                 config: config()
-            ).flatSlots == [
-                .app(ids[1]), .folder(result.folderID, visibleChildren: [ids[2], ids[3]])
+            )
+            #expect(displayAfter.flatSlots == [
+                DisplayModel.DisplayItem.app(ids[1]), .folder(result.folderID)
             ])
+            #expect(displayAfter.folderVisibleChildren(result.folderID) == [ids[2], ids[3]])
             #expect(result.layout.missingApps[missing] == state)
             expectUniqueAppOccurrences(result.layout)
         }
@@ -497,13 +505,15 @@ struct LayoutEditorTests {
             #expect(result.layout.pages == [[
                 .app(ids[1]), .app(missing), .folder(result.folderID)
             ]])
-            #expect(DisplayModel(
+            let displayAfter = DisplayModel(
                 catalog: catalog(apps(16).map(\.rawValue)),
                 layout: result.layout,
                 config: config()
-            ).flatSlots == [
-                .app(ids[1]), .folder(result.folderID, visibleChildren: [ids[2], ids[3]])
+            )
+            #expect(displayAfter.flatSlots == [
+                DisplayModel.DisplayItem.app(ids[1]), .folder(result.folderID)
             ])
+            #expect(displayAfter.folderVisibleChildren(result.folderID) == [ids[2], ids[3]])
             #expect(result.layout.missingApps[missing] == state)
             expectUniqueAppOccurrences(result.layout)
         }
@@ -680,8 +690,9 @@ struct LayoutEditorTests {
         )
         #expect(createdDisplay.pages == [
             [.app(ids[1]), .app(ids[2])],
-            [.app(ids[3]), .folder(created.folderID, visibleChildren: [ids[4], ids[5]])],
+            [.app(ids[3]), .folder(created.folderID)],
         ])
+        #expect(createdDisplay.folderVisibleChildren(created.folderID) == [ids[4], ids[5]])
         #expect(created.layout.referencedAppIDs == createLayout.referencedAppIDs)
         expectUniqueAppOccurrences(created.layout)
 
@@ -760,8 +771,9 @@ struct LayoutEditorTests {
         let createdUnhiddenDisplay = makeDisplay(layout: createdUnhidden)
         #expect(createdUnhiddenDisplay.flatSlots == [
             .app(hidden), .app(missing), .app(ids[2]),
-            .folder(created.folderID, visibleChildren: [ids[3], ids[4]])
+            .folder(created.folderID)
         ])
+        #expect(createdUnhiddenDisplay.folderVisibleChildren(created.folderID) == [ids[3], ids[4]])
 
         let dissolveFolderID = folderID("PersistDissolve")
         let dissolveLayout = layout(

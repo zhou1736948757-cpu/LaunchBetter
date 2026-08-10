@@ -139,7 +139,7 @@ struct FolderExitMouseSessionTests {
 
         let point = NSPoint(x: 120, y: 180)
         drag.beginDrag(
-            item: .folder(store.folderID, visibleChildren: [store.appID]),
+            item: .folder(store.folderID),
             at: point,
             inputSource: .threeFinger
         )
@@ -187,8 +187,9 @@ private final class FolderExitTestStore: LauncherStoring {
 
     func displayModel() -> DisplayModel {
         DisplayModel(
-            pages: [[.folder(folderID, visibleChildren: [appID])]],
-            pageCapacity: gridColumns * gridRows
+            pages: [[.folder(folderID)]],
+            pageCapacity: gridColumns * gridRows,
+            folderChildrenPayload: [folderID: [appID]]
         )
     }
 

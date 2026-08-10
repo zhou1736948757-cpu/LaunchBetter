@@ -186,7 +186,7 @@ struct DragHotPathTests {
         let (window, grid, _) = try makeDragSession(
             items: [
                 .app(first),
-                .folder(folderID, visibleChildren: [second]),
+                .folder(folderID),
                 .app(second),
             ]
         )
@@ -211,7 +211,7 @@ struct DragHotPathTests {
         let folderID = FolderID("folder://drop")!
         let child = AppID("/Applications/FolderDropChild.app")!
         let store = DragHotPathTestStore(
-            items: [.app(first), .folder(folderID, visibleChildren: [child])]
+            items: [.app(first), .folder(folderID)]
         )
         let grid = GridViewController(store: store, iconProvider: nil)
         let window = NSWindow(

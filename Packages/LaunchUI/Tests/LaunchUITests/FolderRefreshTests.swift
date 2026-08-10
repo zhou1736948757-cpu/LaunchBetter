@@ -265,8 +265,9 @@ private final class FolderRefreshTestStore: LauncherStoring {
 
     func displayModel() -> DisplayModel {
         DisplayModel(
-            pages: [[.folder(folderID, visibleChildren: appIDs)]],
-            pageCapacity: gridColumns * gridRows
+            pages: [[.folder(folderID)]],
+            pageCapacity: gridColumns * gridRows,
+            folderChildrenPayload: [folderID: appIDs]
         )
     }
 

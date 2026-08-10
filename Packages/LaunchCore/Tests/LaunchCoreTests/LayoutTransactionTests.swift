@@ -172,10 +172,11 @@ struct LayoutTransactionTests {
         )
         let r = try! #require(result)
         #expect(r.display.pages[0] == [
-            .folder(f, visibleChildren: [ids[2], ids[3]]),
+            .folder(f),
             .app(ids[0]),
             .app(ids[1]),
         ])
+        #expect(r.display.folderVisibleChildren(f) == [ids[2], ids[3]])
     }
 
     // MARK: - Folder membership
@@ -194,8 +195,9 @@ struct LayoutTransactionTests {
         let r = try! #require(result)
         #expect(r.display.pages[0] == [
             .app(ids[0]),
-            .folder(f, visibleChildren: [ids[2], ids[1]]),
+            .folder(f),
         ])
+        #expect(r.display.folderVisibleChildren(f) == [ids[2], ids[1]])
         #expect(r.mutation == .addToFolder(app: ids[2], folder: f, at: 0))
         // 无重复: 显示槽位中 ids[2] 只出现在文件夹子项
         #expect(r.display.flatSlots.compactMap { item -> AppID? in
@@ -251,8 +253,9 @@ struct LayoutTransactionTests {
         #expect(r.display.pages[0] == [
             .app(ids[2]),
             .app(ids[0]),
-            .folder(f, visibleChildren: [ids[1]]),
+            .folder(f),
         ])
+        #expect(r.display.folderVisibleChildren(f) == [ids[1]])
         #expect(r.mutation == .moveOutOfFolder(app: ids[2], from: f, toDisplayIndex: 0))
     }
 

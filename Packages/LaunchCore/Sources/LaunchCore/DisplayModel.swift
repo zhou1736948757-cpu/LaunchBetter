@@ -12,9 +12,11 @@ import Foundation
 /// NSCollectionView 不得假设 Catalog 顺序 == 显示顺序。
 /// DisplayModel 是派生值,不作为持久状态。
 public struct DisplayModel: Sendable, Equatable {
+    /// 显示项身份(§A14): folder 用稳定 FolderID 身份, 子项作独立 payload。
+    /// 子项变化不得改变 folder 的 Diffable 身份 → 无 delete/insert、无 flicker。
     public enum DisplayItem: Sendable, Equatable, Hashable {
         case app(AppID)
-        case folder(FolderID, visibleChildren: [AppID])
+        case folder(FolderID)
     }
 
     /// 分页显示结构。
@@ -29,6 +31,10 @@ public struct DisplayModel: Sendable, Equatable {
     /// 派生输入: 缺失应用集(墓碑,显示过滤器)。
     public let missingAppIDs: Set<AppID>
 
+    /// 文件夹可见子项 payload(独立于 DisplayItem 身份; 仅含显示中的文件夹)。
+    /// folder 项在 pages 中只放 FolderID; 子项从此查询, 不编入 Hashable 身份。
+    public let folderChildrenPayload: [FolderID: [AppID]]
+
     /// 从 Catalog + Layout + Configuration 派生。
     public init(catalog: CatalogSnapshot, layout: LayoutSnapshot, config: AppConfiguration) {
         let capacity = config.gridColumns * config.gridRows
@@ -41,6 +47,7 @@ public struct DisplayModel: Sendable, Equatable {
         let isInvisible: (AppID) -> Bool = { missing.contains($0) || hidden.contains($0) }
 
         var derived: [DisplayItem] = []
+        var folderPayloads: [FolderID: [AppID]] = [:]
         for page in layout.pages {
             for item in page {
                 switch item {
@@ -52,25 +59,30 @@ public struct DisplayModel: Sendable, Equatable {
                     guard let folder = layout.folders[folderID] else { continue }
                     let visible = folder.children.filter { !isInvisible($0) }
                     if !visible.isEmpty {
-                        derived.append(.folder(folderID, visibleChildren: visible))
+                        derived.append(.folder(folderID))
+                        folderPayloads[folderID] = visible
                     }
                 }
             }
         }
         pages = Self.chunk(derived, capacity: pageCapacity)
+        self.folderChildrenPayload = folderPayloads
     }
 
     /// 直构已分页结构(引擎重分块 / 布局恢复 / 测试用)。
+    /// folder 项为身份(.folder(FolderID)); 子项 payload 经 folderChildrenPayload 传入。
     public init(
         pages: [[DisplayItem]],
         pageCapacity: Int,
         hiddenAppIDs: Set<AppID> = [],
-        missingAppIDs: Set<AppID> = []
+        missingAppIDs: Set<AppID> = [],
+        folderChildrenPayload: [FolderID: [AppID]] = [:]
     ) {
         self.pages = pages
         self.pageCapacity = max(1, pageCapacity)
         self.hiddenAppIDs = hiddenAppIDs
         self.missingAppIDs = missingAppIDs
+        self.folderChildrenPayload = folderChildrenPayload
     }
 
     private static func chunk(
@@ -100,15 +112,8 @@ public struct DisplayModel: Sendable, Equatable {
         }
     }
 
-    /// 文件夹的可见子项;文件夹不在显示中时返回 nil。
+    /// 文件夹的可见子项 payload;文件夹不在显示中时返回 nil。
     public func folderVisibleChildren(_ id: FolderID) -> [AppID]? {
-        for page in pages {
-            for item in page {
-                if case .folder(let fid, let children) = item, fid == id {
-                    return children
-                }
-            }
-        }
-        return nil
+        folderChildrenPayload[id]
     }
 }

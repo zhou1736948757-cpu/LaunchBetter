@@ -355,12 +355,12 @@ public enum LayoutEditor {
 
     // MARK: - 工具
 
-    /// DisplayItem → LayoutItem(文件夹丢弃可见子项)。
+    /// DisplayItem → LayoutItem(文件夹身份即 FolderID)。
     private static func layoutItem(from item: DisplayModel.DisplayItem) -> LayoutItem {
         switch item {
         case .app(let id):
             return .app(id)
-        case .folder(let id, _):
+        case .folder(let id):
             return .folder(id)
         }
     }
@@ -371,7 +371,7 @@ public enum LayoutEditor {
             switch slot {
             case .app(let id):
                 return .app(id)
-            case .folder(let id, _):
+            case .folder(let id):
                 return .folder(id)
             }
         }

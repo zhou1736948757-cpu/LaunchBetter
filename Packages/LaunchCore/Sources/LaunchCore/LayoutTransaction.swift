@@ -103,6 +103,7 @@ public struct LayoutTransaction {
 
     /// 把页面槽位中的应用放入文件夹 children 的指定位置。
     /// 应用必须位于页面槽位(不在任何文件夹内),文件夹必须显示中。
+    /// folder 项保持稳定身份(.folder(FolderID)); 子项变化经 folderChildrenPayload 独立传递。
     public static func moveIntoFolder(
         display: DisplayModel,
         app: AppID,
@@ -117,18 +118,19 @@ public struct LayoutTransaction {
         let appIndex = flatIndex(of: .app(app), in: working)!
         working.remove(at: appIndex)
         let adjustedFolderIndex = folderIndex - (appIndex < folderIndex ? 1 : 0)
-        guard case .folder(let fid, let children) = working[adjustedFolderIndex] else {
+        guard case .folder(let fid) = working[adjustedFolderIndex] else {
             return nil
         }
-        let clampedAt = min(max(0, at), children.count)
-        var newChildren = children
+        let currentChildren = display.folderVisibleChildren(fid) ?? []
+        let clampedAt = min(max(0, at), currentChildren.count)
+        var newChildren = currentChildren
         newChildren.insert(app, at: clampedAt)
-        working[adjustedFolderIndex] = .folder(fid, visibleChildren: newChildren)
-
+        // 身份不变: folder 槽位仍是 .folder(fid); payload 单独更新。
         return finalize(
             display: display,
             slots: working,
-            mutation: .addToFolder(app: app, folder: folder, at: clampedAt)
+            mutation: .addToFolder(app: app, folder: folder, at: clampedAt),
+            folderPayloads: [fid: newChildren]
         )
     }
 
@@ -142,8 +144,9 @@ public struct LayoutTransaction {
     ) -> DropResult? {
         let slots = display.flatSlots
         guard let folderIndex = folderSlotIndex(folder, in: slots) else { return nil }
-        guard case .folder(let fid, var children) = slots[folderIndex],
-              let childIndex = children.firstIndex(of: app) else {
+        guard case .folder(let fid) = slots[folderIndex] else { return nil }
+        var children = display.folderVisibleChildren(fid) ?? []
+        guard let childIndex = children.firstIndex(of: app) else {
             return nil
         }
         children.remove(at: childIndex)
@@ -152,16 +155,16 @@ public struct LayoutTransaction {
         if children.isEmpty {
             // 无可见子项 → 文件夹从显示中隐藏(布局保留,由对账器决定解散)
             working.remove(at: folderIndex)
-        } else {
-            working[folderIndex] = .folder(fid, visibleChildren: children)
         }
+        // 有剩余子项时 folder 槽位保持 .folder(fid) 身份不变。
         let insertAt = clampedTarget(to, capacity: display.pageCapacity, count: working.count)
         working.insert(.app(app), at: insertAt)
 
         return finalize(
             display: display,
             slots: working,
-            mutation: .moveOutOfFolder(app: app, from: folder, toDisplayIndex: insertAt)
+            mutation: .moveOutOfFolder(app: app, from: folder, toDisplayIndex: insertAt),
+            folderPayloads: [fid: children]
         )
     }
 
@@ -175,7 +178,7 @@ public struct LayoutTransaction {
             switch (source, slot) {
             case (.app(let a), .app(let b)):
                 return a == b
-            case (.folder(let a), .folder(let b, _)):
+            case (.folder(let a), .folder(let b)):
                 return a == b
             default:
                 return false
@@ -188,7 +191,7 @@ public struct LayoutTransaction {
         in slots: [DisplayModel.DisplayItem]
     ) -> Int? {
         slots.firstIndex { slot in
-            if case .folder(let fid, _) = slot {
+            if case .folder(let fid) = slot {
                 return fid == folder
             }
             return false
@@ -218,14 +221,25 @@ public struct LayoutTransaction {
     private static func finalize(
         display: DisplayModel,
         slots: [DisplayModel.DisplayItem],
-        mutation: LayoutMutation
+        mutation: LayoutMutation,
+        folderPayloads: [FolderID: [AppID]] = [:]
     ) -> DropResult {
         let newPages = chunk(slots, capacity: display.pageCapacity)
+        // payload 合并: 起始 = 输入 display 的 payload; 空数组覆盖 = 移除该文件夹 payload。
+        var payload = display.folderChildrenPayload
+        for (fid, children) in folderPayloads {
+            if children.isEmpty {
+                payload[fid] = nil
+            } else {
+                payload[fid] = children
+            }
+        }
         let newDisplay = DisplayModel(
             pages: newPages,
             pageCapacity: display.pageCapacity,
             hiddenAppIDs: display.hiddenAppIDs,
-            missingAppIDs: display.missingAppIDs
+            missingAppIDs: display.missingAppIDs,
+            folderChildrenPayload: payload
         )
         let changed = changedPages(between: display.pages, and: newPages)
         return DropResult(display: newDisplay, mutation: mutation, changedPages: changed)
