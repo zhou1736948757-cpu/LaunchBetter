@@ -21,7 +21,19 @@
 
 ## Current Phase
 
-**v0.3.3 — 系统性中文名修复(语言代码规范化) + 设置 sliders + 热角放大。已安装 /Applications。**
+**v0.3.4 — 热角修复 + 设置即时生效 + 网格溢出修复 + 设置拖动。已安装 /Applications。**
+
+## v0.3.4 修复(用户实测)
+
+- 热角: active-corner guard(停在角上只触发一次, toggle 不再闪开关); 左上角 toggleLauncher 正常
+- 壁纸模糊强度 / 搜索栏大小修改即时生效(reapplyVisualConfig on onConfigChange)
+- 搜索栏等比缩放(宽+高, 居中)
+- cellSize = iconSize + 28(图标最大档标签不被挤进图标)
+- GridGeometry gridOrigin top/bottom inset(网格不顶出搜索栏)
+- 设置打开时点击启动器只关设置不退出(hide guard child)
+- 设置窗口 isMovableByWindowBackground(拖动面板空白移动, 不透传)
+- pagetest 自适应页数
+- 测试: Core 143 / Platform 127 / UI 56
 
 ## v0.3.3 修复(用户实测)
 
