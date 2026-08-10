@@ -21,7 +21,7 @@
 
 ## Current Phase
 
-**v0.3.4 — 热角修复 + 设置即时生效 + 网格溢出修复 + 设置拖动。已安装 /Applications。**
+**v0.3.5 — 设置齿轮优化(玻璃/systemBlue/hover/pressed)。已安装 /Applications。**
 
 ## v0.3.4 修复(用户实测)
 
