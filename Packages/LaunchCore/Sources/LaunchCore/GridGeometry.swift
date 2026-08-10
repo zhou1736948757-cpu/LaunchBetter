@@ -14,6 +14,9 @@ import Foundation
 ///
 /// 纯计算结构: 不依赖 AppKit, 可在不启动启动器的情况下完整测试。
 public struct GridGeometry: Sendable, Equatable {
+    /// 搜索/文件夹搜索内容的内部边距; chrome gap 由窗口层另行负责。
+    public static let defaultSearchPadding: CGFloat = 24
+
     /// 每页列数。
     public let columns: Int
 
@@ -58,20 +61,32 @@ public struct GridGeometry: Sendable, Equatable {
     /// 底部保留区(pt): 页点 + 底部安全间距, 网格不得压住页点。
     public let bottomInset: CGFloat
 
+    /// 网格可用的内容区域(文档坐标, y-down)。
+    /// `topInset`/`bottomInset` 都从同一个文档顶部/底部语义测量, 避免
+    /// 在调用方重新解释上下边界。
+    public var availableContentRect: CGRect {
+        CGRect(
+            x: 0,
+            y: topInset,
+            width: pageWidth,
+            height: max(0, pageHeight - topInset - bottomInset)
+        )
+    }
+
     /// 网格原点: 页内网格起点(页 0 文档坐标)。
-    /// 网格在 [bottomInset, pageHeight - topInset] 的**可用内容区**内垂直居中
-    /// (顶部已保留给搜索框, 底部已保留给页点);
-    /// 网格超高时顶部固定于 topInset 之下(不顶出搜索框), 底部允许溢出。
+    /// 网格在 `availableContentRect` 内垂直居中(顶部已保留给搜索框,
+    /// 底部已保留给页点); 网格超高时保持顶部安全区, 底部允许溢出。
     public var gridOrigin: CGPoint {
-        let centered = (pageHeight - gridHeight) / 2
-        let minY = bottomInset
-        let maxY = pageHeight - topInset - gridHeight
+        let available = availableContentRect
+        let minY = available.minY
+        let maxY = available.maxY - gridHeight
+        let centeredY = available.minY + (available.height - gridHeight) / 2
         let y: CGFloat
         if maxY < minY {
-            // 网格放不下: 顶固定于搜索栏下方(网格顶 = pageHeight - topInset), 底部溢出。
-            y = maxY
+            // 网格放不下时优先保护顶部搜索区, 底部再允许溢出。
+            y = minY
         } else {
-            y = min(max(centered, minY), maxY)
+            y = min(max(centeredY, minY), maxY)
         }
         return CGPoint(
             x: (pageWidth - gridWidth) / 2,
@@ -216,13 +231,17 @@ public struct GridGeometry: Sendable, Equatable {
     }
 
     /// 搜索模式文档尺寸: 内容不足一页时保持一页高度, 溢出时按行数增长。
-    /// 返回高度含上下内边距。
-    public func searchContentSize(forItemCount count: Int, padding: CGFloat = 24) -> CGSize {
+    /// 顶部保留区只在文档顶部应用一次; 后续滚动行不重复占用。
+    public func searchContentSize(
+        forItemCount count: Int,
+        padding: CGFloat = GridGeometry.defaultSearchPadding
+    ) -> CGSize {
         let rowsNeeded = searchRowsNeeded(forItemCount: count)
         guard rowsNeeded > 0 else {
             return CGSize(width: pageWidth, height: pageHeight)
         }
-        let contentHeight = CGFloat(rowsNeeded) * cellSize
+        let contentHeight = topInset
+            + CGFloat(rowsNeeded) * cellSize
             + CGFloat(max(0, rowsNeeded - 1)) * verticalSpacing
             + padding * 2
         return CGSize(
@@ -231,14 +250,18 @@ public struct GridGeometry: Sendable, Equatable {
         )
     }
 
-    /// 搜索模式槽位 frame(文档坐标, y-down: 第 0 行在最上, 顶部锚定)。
-    public func searchFrame(forIndex index: Int, itemCount: Int, padding: CGFloat = 24) -> CGRect {
+    /// 搜索模式槽位 frame(文档坐标, y-down): 第 0 行从可用内容区顶部开始。
+    public func searchFrame(
+        forIndex index: Int,
+        itemCount: Int,
+        padding: CGFloat = GridGeometry.defaultSearchPadding
+    ) -> CGRect {
         let col = index % columns
         let row = index / columns
         let stepX = cellSize + horizontalSpacing
         let stepY = cellSize + verticalSpacing
         let x = (pageWidth - gridWidth) / 2 + CGFloat(col) * stepX
-        let y = padding + CGFloat(row) * stepY
+        let y = availableContentRect.minY + padding + CGFloat(row) * stepY
         return CGRect(x: x, y: y, width: cellSize, height: cellSize)
     }
 }

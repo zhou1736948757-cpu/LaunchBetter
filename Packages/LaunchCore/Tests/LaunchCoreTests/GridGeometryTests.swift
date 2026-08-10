@@ -33,48 +33,81 @@ final class GridGeometryTests: XCTestCase {
     }
 
     func testGridExtentCentered() {
-        // 网格能放下时垂直居中(可用区 = 页高 - 顶部留白160 - 底部留白40)
+        // 网格能放下时在可用内容区内垂直居中。
         let g = makeGeometry(columns: 7, rows: 6, pageWidth: 1200, pageHeight: 1200)
         // 网格宽 = 7*96 + 6*28 = 840; 网格高 = 6*96 + 5*28 = 716
         XCTAssertEqual(g.gridWidth, 840)
         XCTAssertEqual(g.gridHeight, 716)
         XCTAssertEqual(g.gridOrigin.x, (1200 - 840) / 2)
-        XCTAssertEqual(g.gridOrigin.y, (1200 - 716) / 2)
+        XCTAssertEqual(g.availableContentRect, CGRect(x: 0, y: 160, width: 1200, height: 1000))
+        XCTAssertEqual(g.gridOrigin.y, 160 + (1000 - 716) / 2)
     }
 
     func testGridOverflowClampsTopInset() {
-        // 网格超高(放不下)时顶固定于搜索栏下方, 不溢出顶部
+        // 网格超高(放不下)时顶固定于搜索栏下方, 底部允许溢出。
         let g = makeGeometry(columns: 7, rows: 8, pageWidth: 1200, pageHeight: 800)
-        // 8 行网格高 = 8*96 + 7*28 = 964 > 800-100-40=660 → 放不下
-        let top = g.gridOrigin.y + g.gridHeight
-        XCTAssertEqual(top, 800 - 160) // 网格顶恰在搜索栏区域下缘(topInset 160), 不顶出搜索栏
+        // 8 行网格高 = 8*96 + 7*28 = 964 > 800-160-40=600 → 放不下
+        XCTAssertEqual(g.gridOrigin.y, g.topInset)
+        XCTAssertEqual(g.frame(forSlot: 0, in: 0).minY, g.topInset)
+    }
+
+    func testFirstRowFrameStartsAtTopInset() {
+        let g = makeGeometry(pageHeight: 1000, topInset: 160, bottomInset: 40)
+        let first = g.frame(forSlot: 0, in: 0)
+
+        // Flipped document coordinates: minY is the visual top edge.
+        XCTAssertGreaterThanOrEqual(first.minY, g.topInset)
     }
 
     // MARK: - 可用内容区(v0.3.6: 保留区参数化)
 
     func testCustomTopInsetShiftsGridTop() {
-        // 自定义 topInset 生效: 网格放不下时顶 = pageHeight - topInset
+        // 自定义 topInset 生效: 网格放不下时顶 = topInset。
         let g = makeGeometry(columns: 7, rows: 8, pageWidth: 1200, pageHeight: 900, topInset: 200)
         // 网格高 = 964 > 900 - 200 - 40 = 660 → 放不下 → 顶固定于保留区下缘
-        XCTAssertEqual(g.gridOrigin.y + g.gridHeight, 900 - 200)
+        XCTAssertEqual(g.gridOrigin.y, 200)
     }
 
     func testContentInsetsCenterInAvailableArea() {
-        // 网格放得下时, 在 [bottomInset, pageHeight - topInset] 可用区内垂直居中
+        // 网格放得下时, 在 [topInset, pageHeight - bottomInset] 可用区内垂直居中
         let g = makeGeometry(pageWidth: 1200, pageHeight: 1000, topInset: 120, bottomInset: 44)
-        // 网格高 = 716; centered = (1000-716)/2 = 142; 允许范围 [44, 1000-120-716=164]
-        XCTAssertEqual(g.gridOrigin.y, 142)
-        XCTAssertGreaterThanOrEqual(g.gridOrigin.y, 44)
-        XCTAssertLessThanOrEqual(g.gridOrigin.y + g.gridHeight, 1000 - 120)
+        // 网格高 = 716; 可用区高 = 836; expected = 120 + (836-716)/2 = 180
+        XCTAssertEqual(g.gridOrigin.y, 180)
+        XCTAssertGreaterThanOrEqual(g.gridOrigin.y, 120)
+        XCTAssertLessThanOrEqual(g.gridOrigin.y + g.gridHeight, 1000 - 44)
         // 网格顶位于保留区下缘之下(不与搜索框/页点冲突)
         XCTAssertGreaterThan(g.gridOrigin.y, 120)
     }
 
-    func testSearchModeIgnoresContentInsets() {
-        // 搜索模式顶部锚定(padding 24), 不受保留区影响 → 搜索结果不被搜索框遮挡
+    func testLastRowStaysAboveBottomInsetWhenGridFits() {
+        let g = makeGeometry(pageHeight: 1200, topInset: 160, bottomInset: 50)
+        let last = g.frame(forSlot: g.pageCapacity - 1, in: 0)
+        XCTAssertLessThanOrEqual(last.maxY, g.pageHeight - g.bottomInset)
+    }
+
+    func testAsymmetricInsetsCenterInAvailableArea() {
+        let g = makeGeometry(pageHeight: 1200, topInset: 180, bottomInset: 30)
+        let expected = 180 + (1200 - 180 - 30 - g.gridHeight) / 2
+        XCTAssertEqual(g.gridOrigin.y, expected)
+        XCTAssertGreaterThanOrEqual(g.frame(forSlot: 0, in: 0).minY, 180)
+        XCTAssertLessThanOrEqual(g.frame(forSlot: g.pageCapacity - 1, in: 0).maxY, 1200 - 30)
+    }
+
+    func testSearchModeStartsBelowTopReservation() {
+        // 搜索模式第 0 行也必须避开启动器搜索框。
         let g = makeGeometry(pageWidth: 1200, pageHeight: 800, topInset: 200, bottomInset: 60)
         let frame = g.searchFrame(forIndex: 0, itemCount: 50)
-        XCTAssertEqual(frame.minY, 24)
+        XCTAssertEqual(frame.minY, g.availableContentRect.minY + 24)
+        XCTAssertGreaterThanOrEqual(frame.minY, g.availableContentRect.minY)
+    }
+
+    func testPointToSlotMatchesMultipleFrameCenters() {
+        let g = makeGeometry(columns: 7, rows: 6, pageWidth: 1200, pageHeight: 1000)
+        for slot in [0, 1, 7, 13, 41] {
+            let frame = g.frame(forSlot: slot, in: 0)
+            let center = CGPoint(x: frame.midX, y: frame.midY)
+            XCTAssertEqual(g.slot(forDocumentPoint: center), slot)
+        }
     }
 
     // MARK: - frame(forSlot:in:)
@@ -236,8 +269,8 @@ final class GridGeometryTests: XCTestCase {
         let g = makeGeometry(columns: 7, rows: 6, pageWidth: 1200, pageHeight: 800)
         let size = g.searchContentSize(forItemCount: 100)
         XCTAssertEqual(size.width, 1200)
-        // 15 行 * 96 + 14 * 28 + 48 边距
-        let expected = 15 * 96 + 14 * 28 + 48
+        // 顶部保留区 + 15 行 * 96 + 14 * 28 + 48 边距
+        let expected = 160 + 15 * 96 + 14 * 28 + 48
         XCTAssertEqual(size.height, CGFloat(expected))
         XCTAssertGreaterThan(size.height, 800)
     }
@@ -251,7 +284,11 @@ final class GridGeometryTests: XCTestCase {
             // 全部结果必须位于文档矩形内(可滚动访问, Stage 1 §11)
             XCTAssertTrue(size.width > frame.maxX || size.width >= frame.maxX, "idx \(index) 超宽")
             XCTAssertTrue(size.height >= frame.maxY + 1, "idx \(index) 超高 frame=\(frame) size=\(size)")
-            XCTAssertGreaterThanOrEqual(frame.minY, 0, "idx \(index) 越下界")
+            XCTAssertGreaterThanOrEqual(
+                frame.minY,
+                g.availableContentRect.minY + 24,
+                "idx \(index) 越顶部保留区"
+            )
         }
     }
 
@@ -259,9 +296,9 @@ final class GridGeometryTests: XCTestCase {
         let g = makeGeometry(columns: 7, rows: 6, pageWidth: 1200, pageHeight: 800)
         let frame0 = g.searchFrame(forIndex: 0, itemCount: 100)
         let frame7 = g.searchFrame(forIndex: 7, itemCount: 100) // 第二行
-        // y-down: 行 0 在最上(更小的 y)
+        // y-down: 行 0 在最上(更小的 y), 但仍位于顶部保留区之后。
         XCTAssertLessThan(frame0.minY, frame7.minY)
-        XCTAssertEqual(frame0.minY, 24) // padding 顶部锚定
+        XCTAssertEqual(frame0.minY, g.availableContentRect.minY + 24)
         // 同列: x 相同
         XCTAssertEqual(frame0.minX, frame7.minX)
     }

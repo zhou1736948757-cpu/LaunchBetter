@@ -14,7 +14,9 @@ struct FolderDropGeometryTests {
             horizontalSpacing: 20,
             verticalSpacing: 20,
             pageWidth: 364,
-            pageHeight: pageHeight
+            pageHeight: pageHeight,
+            topInset: 0,
+            bottomInset: 0
         )
     }
 
@@ -113,7 +115,9 @@ struct PagingGridFolderSearchGeometryTests {
             horizontalSpacing: 20,
             verticalSpacing: 20,
             pageWidth: 364,
-            pageHeight: pageHeight
+            pageHeight: pageHeight,
+            topInset: 0,
+            bottomInset: 0
         )
     }
 

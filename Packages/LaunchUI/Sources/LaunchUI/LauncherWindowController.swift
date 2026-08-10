@@ -1,6 +1,56 @@
 import AppKit
+import CoreGraphics
 import LaunchCore
 import QuartzCore
+
+/// 启动器运行时布局证据(所有 rect 已转换到 contentView 坐标系)。
+public struct LauncherLayoutDiagnostics {
+    public let searchRectInContent: CGRect
+    public let firstRowRectInContent: CGRect
+    public let pageDotsRectInContent: CGRect?
+    public let settingsButtonRectInContent: CGRect
+    public let settingsButtonBounds: CGRect
+    public let firstRowDocumentRect: CGRect
+    public let intendedSearchGridGap: CGFloat
+    public let actualSearchGridGap: CGFloat
+    public let searchGridOverlap: Bool
+    public let contentViewIsFlipped: Bool
+    public let collectionViewIsFlipped: Bool
+    public let searchMode: Bool
+
+    public var settingsBoundsAreSquare: Bool {
+        abs(settingsButtonBounds.width - settingsButtonBounds.height) <= 0.5
+    }
+
+    public var settingsFrameIsSquare: Bool {
+        abs(settingsButtonRectInContent.width - settingsButtonRectInContent.height) <= 0.5
+    }
+
+    public var isValid: Bool {
+        !searchGridOverlap
+            && actualSearchGridGap + 0.5 >= intendedSearchGridGap
+            && abs(settingsButtonBounds.width - 40) <= 0.5
+            && abs(settingsButtonBounds.height - 40) <= 0.5
+            && settingsBoundsAreSquare
+            && settingsFrameIsSquare
+    }
+}
+
+private enum LauncherChromeMetrics {
+    static let searchTopMargin: CGFloat = 24
+    static let settingsTopMargin: CGFloat = 20
+    static let searchMinimumHeight: CGFloat = 22
+    static let searchAspectRatio: CGFloat = 16
+    static let searchToGridGap: CGFloat = 24
+    static let searchContentPadding: CGFloat = GridGeometry.defaultSearchPadding
+    static let pageDotHitHeight: CGFloat = 24
+    static let pageDotBottomMargin: CGFloat = 12
+    static let gridBottomGap: CGFloat = 8
+
+    static func searchHeight(for width: CGFloat) -> CGFloat {
+        max(searchMinimumHeight, width / searchAspectRatio)
+    }
+}
 
 /// 启动器窗口控制器: 组装搜索栏 + 网格 + 窗口生命周期。
 ///
@@ -19,6 +69,8 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
     private let searchField = NSSearchField()
     private var searchFieldWidthConstraint: NSLayoutConstraint?
     private var searchFieldHeightConstraint: NSLayoutConstraint?
+    private var searchFieldTopConstraint: NSLayoutConstraint?
+    private var settingsButtonTopConstraint: NSLayoutConstraint?
     private var settingsButtonView: SettingsButton?
     private var dragController: DragController?
     private var backgroundLayer = CALayer()
@@ -74,6 +126,15 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
                 self?.hide()
             }
         }
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.didChangeScreenNotification,
+            object: window,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.updateChromeLayoutForCurrentScreen()
+            }
+        }
         let root = NSView()
         root.wantsLayer = true
 
@@ -120,9 +181,6 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
             grid.view.topAnchor.constraint(equalTo: root.topAnchor),
             grid.view.bottomAnchor.constraint(equalTo: root.bottomAnchor),
         ])
-        // 网格可用内容区: 顶部 = 安全区 + 搜索框偏移 + 搜索框实际高 + 安全间距;
-        // 底部 = 页点(24+12) + 底部安全间距。网格基于此垂直布局(不顶出搜索框/不压页点)。
-        applyContentInsets()
 
         searchField.delegate = self
         searchField.placeholderString = L10n.t(.searchPlaceholder)
@@ -130,16 +188,18 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         searchField.sendsSearchStringImmediately = true
         root.addSubview(searchField)
         searchField.translatesAutoresizingMaskIntoConstraints = false
-        // 避开刘海屏 notch(用户实测 v0.1.3 重叠): 安全区动态下移(v0.1.4)
-        let screen = window.screen ?? NSScreen.main
-        let topInset = max(0, screen?.safeAreaInsets.top ?? 0)
-        // 搜索栏等比大小(宽 = 标尺, 高 = 宽/16; 居中, 顶部固定)——用户要求"斜着拉等比例"
+        // 搜索栏等比大小(宽 = 标尺, 高 = 宽/16; 居中)。顶部 safe area
+        // 由 updateChromeLayoutForCurrentScreen() 与网格保留区统一更新。
         let size = CGFloat(store.searchBarWidth)
-        let height = max(22, size / 16)
+        let height = LauncherChromeMetrics.searchHeight(for: size)
         searchFieldWidthConstraint = searchField.widthAnchor.constraint(equalToConstant: size)
         searchFieldHeightConstraint = searchField.heightAnchor.constraint(equalToConstant: height)
+        searchFieldTopConstraint = searchField.topAnchor.constraint(
+            equalTo: root.topAnchor,
+            constant: 0
+        )
         NSLayoutConstraint.activate([
-            searchField.topAnchor.constraint(equalTo: root.topAnchor, constant: 24 + topInset),
+            searchFieldTopConstraint!,
             searchField.centerXAnchor.constraint(equalTo: root.centerXAnchor),
             searchFieldWidthConstraint!,
             searchFieldHeightConstraint!,
@@ -152,14 +212,19 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         settingsButtonView = settingsButton
         root.addSubview(settingsButton)
         settingsButton.translatesAutoresizingMaskIntoConstraints = false
+        settingsButtonTopConstraint = settingsButton.topAnchor.constraint(
+            equalTo: root.topAnchor,
+            constant: 0
+        )
         NSLayoutConstraint.activate([
             settingsButton.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -16),
-            settingsButton.topAnchor.constraint(equalTo: root.topAnchor, constant: 20 + topInset),
+            settingsButtonTopConstraint!,
             settingsButton.widthAnchor.constraint(equalToConstant: 40),
             settingsButton.heightAnchor.constraint(equalToConstant: 40),
         ])
 
         window.contentView = root
+        updateChromeLayoutForCurrentScreen()
         (window as? LauncherWindow)?.onKeyDown = { [weak self] event in
             self?.handleKeyDown(event)
         }
@@ -197,8 +262,8 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         guard let window, let launcherWindow = window as? LauncherWindow else { return }
         launcherWindow.showOnScreen(containing: NSEvent.mouseLocation)
         onVisibilityChange?(true)
-        // 换屏后安全区可能变化 → 重新应用可用内容区(搜索框/页点保留量)
-        applyContentInsets()
+        // 换屏后安全区可能变化: 同时更新搜索框、设置按钮与网格保留区。
+        updateChromeLayoutForCurrentScreen()
         // 语言可能已变更: 刷新本地化文案
         searchField.placeholderString = L10n.t(.searchPlaceholder)
         updateBackground(for: window)
@@ -220,54 +285,151 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
     }
 
     /// 壁纸背景: 内存命中同步应用(热显示零延迟), 否则后台渲染(§62 模式)。
-    /// 布局诊断(Stage v0.3.6): 设置按钮/搜索栏/网格首排坐标, 验证不重叠。
+    /// 布局诊断: 设置按钮/搜索栏/网格首排坐标, 均使用实际 view frame。
     public func settingsButtonFrameDiagnostics() -> String {
-        guard let b = settingsButtonView else { return "nil" }
+        guard let b = settingsButtonView, let contentView = window?.contentView else { return "nil" }
+        contentView.layoutSubtreeIfNeeded()
         let bounds = b.bounds
-        let inWindow = b.convert(b.bounds, to: window?.contentView)
+        let inContent = b.convert(b.bounds, to: contentView)
         let constraints = b.constraints
             .map { String(Int($0.constant)) }
             .joined(separator: ",")
-        return "bounds=\(Int(bounds.width))x\(Int(bounds.height)) inContent=\(Int(inWindow.minX)),\(Int(inWindow.minY)) \(Int(inWindow.width))x\(Int(inWindow.height)) constraints=\(constraints)"
+        return "bounds=\(bounds) frameInContent=\(inContent) constraints=\(constraints)"
     }
 
     public func searchFieldFrameDiagnostics() -> String {
         guard let contentView = window?.contentView else { return "nil" }
+        contentView.layoutSubtreeIfNeeded()
         let f = searchField.convert(searchField.bounds, to: contentView)
-        return "top=\(Int(f.minY)) bottom=\(Int(f.maxY)) h=\(Int(f.height))"
+        return "rectInContent=\(f) contentFlipped=\(contentView.isFlipped)"
     }
 
     public func gridFirstRowTopDiagnostics() -> String {
-        guard let grid = gridViewController else { return "nil" }
-        // 第一排(屏幕顶部)图标顶部屏幕 y = 窗口高 - (网格顶文档 y)
-        let docTop = grid.firstRowTopDocumentY()
-        let winH = window?.contentView?.bounds.height ?? 0
-        return "firstRowTopScreen=\(Int(winH - docTop)) doc=\(Int(docTop))"
+        guard let grid = gridViewController,
+              let contentView = window?.contentView,
+              let firstRow = grid.firstRowFrame(in: contentView),
+              let documentFrame = grid.firstRowDocumentFrame() else {
+            return "nil"
+        }
+        return "rectInContent=\(firstRow) rectInDocument=\(documentFrame) collectionFlipped=\(grid.collectionViewRef.isFlipped)"
     }
 
     public func contentInsetsDiagnostics() -> String {
         gridViewController?.contentInsetsDiagnostics() ?? "nil"
     }
 
-    /// 网格可用内容区保留量(唯一入口, v0.3.6)。
-    ///
-    /// 顶部保留 = 刘海安全区 + 搜索框顶部偏移(24) + 搜索框实际高度 + 搜索框与首排的安全间距(24);
-    /// 底部保留 = 页点交互区(24 高 + 12 底部偏移) + 底部安全间距(8) + 底部安全区。
-    /// 这些值喂给 GridGeometry(唯一几何真值), 网格在可用区内垂直居中。
-    private func currentContentInsets() -> (top: CGFloat, bottom: CGFloat) {
-        let screen = window?.screen ?? NSScreen.main
-        let safeTop = max(0, screen?.safeAreaInsets.top ?? 0)
-        let safeBottom = max(0, screen?.safeAreaInsets.bottom ?? 0)
-        let searchHeight = max(22, CGFloat(store.searchBarWidth) / 16)
-        let top = safeTop + 24 + searchHeight + 24
-        let bottom = safeBottom + (24 + 12) + 8
+    /// 运行时 frame invariant: 所有矩形先转入同一个 contentView 坐标系。
+    public func runtimeLayoutDiagnostics() -> LauncherLayoutDiagnostics? {
+        guard let contentView = window?.contentView,
+              let grid = gridViewController,
+              let settingsButton = settingsButtonView,
+              let firstRow = grid.firstRowFrame(in: contentView),
+              let firstRowDocument = grid.firstRowDocumentFrame() else {
+            return nil
+        }
+        contentView.layoutSubtreeIfNeeded()
+
+        let searchRect = searchField.convert(searchField.bounds, to: contentView)
+        let settingsRect = settingsButton.convert(settingsButton.bounds, to: contentView)
+        let pageDotsRect = grid.pageDotsFrame(in: contentView)
+        let gap: CGFloat
+        if contentView.isFlipped {
+            gap = visualTop(of: firstRow, in: contentView)
+                - visualBottom(of: searchRect, in: contentView)
+        } else {
+            gap = visualBottom(of: searchRect, in: contentView)
+                - visualTop(of: firstRow, in: contentView)
+        }
+
+        return LauncherLayoutDiagnostics(
+            searchRectInContent: searchRect,
+            firstRowRectInContent: firstRow,
+            pageDotsRectInContent: pageDotsRect,
+            settingsButtonRectInContent: settingsRect,
+            settingsButtonBounds: settingsButton.bounds,
+            firstRowDocumentRect: firstRowDocument,
+            intendedSearchGridGap: LauncherChromeMetrics.searchToGridGap
+                + (grid.isSearchMode ? LauncherChromeMetrics.searchContentPadding : 0),
+            actualSearchGridGap: gap,
+            searchGridOverlap: searchRect.intersects(firstRow),
+            contentViewIsFlipped: contentView.isFlipped,
+            collectionViewIsFlipped: grid.collectionViewRef.isFlipped,
+            searchMode: grid.isSearchMode
+        )
+    }
+
+    /// 诊断用: 将系统指针移动到设置按钮中心, 供 --showstay --hover-settings 截图。
+    public func movePointerToSettingsButtonForDiagnostic() {
+        guard let window, let contentView = window.contentView,
+              let settingsButton = settingsButtonView else { return }
+        contentView.layoutSubtreeIfNeeded()
+        let pointInWindow = settingsButton.convert(
+            NSPoint(x: settingsButton.bounds.midX, y: settingsButton.bounds.midY),
+            to: nil
+        )
+        let pointOnScreen = window.convertPoint(toScreen: pointInWindow)
+        guard let screen = window.screen else { return }
+        CGWarpMouseCursorPosition(
+            CGPoint(x: pointOnScreen.x, y: screen.frame.maxY - pointOnScreen.y)
+        )
+    }
+
+    /// 诊断用: 打开当前主网格中的第一个文件夹, 验证 overlay 不改变主网格布局。
+    @discardableResult
+    public func openFirstFolderForDiagnostic() -> Bool {
+        guard let folder = gridViewController?.allItems().compactMap({ item -> FolderID? in
+            if case .folder(let id) = item { return id }
+            return nil
+        }).first else {
+            return false
+        }
+        openFolder(folder)
+        window?.contentView?.layoutSubtreeIfNeeded()
+        return true
+    }
+
+    private func visualTop(of rect: CGRect, in view: NSView) -> CGFloat {
+        view.isFlipped ? rect.minY : rect.maxY
+    }
+
+    private func visualBottom(of rect: CGRect, in view: NSView) -> CGFloat {
+        view.isFlipped ? rect.maxY : rect.minY
+    }
+
+    /// 当前屏幕的内容保留量。safe area、搜索框约束和 GridGeometry 共用这一组值。
+    private func currentContentInsets(
+        for safeArea: NSEdgeInsets,
+        searchHeight: CGFloat
+    ) -> (top: CGFloat, bottom: CGFloat) {
+        let safeTop = max(0, safeArea.top)
+        let safeBottom = max(0, safeArea.bottom)
+        let top = safeTop
+            + LauncherChromeMetrics.searchTopMargin
+            + searchHeight
+            + LauncherChromeMetrics.searchToGridGap
+        let bottom = safeBottom
+            + LauncherChromeMetrics.pageDotHitHeight
+            + LauncherChromeMetrics.pageDotBottomMargin
+            + LauncherChromeMetrics.gridBottomGap
         return (top, bottom)
     }
 
-    /// 把当前保留量应用到网格(搜索框尺寸变化/窗口尺寸变化时重新应用)。
-    private func applyContentInsets() {
-        let insets = currentContentInsets()
+    /// 同步当前显示器的 safe area 到搜索框、设置按钮和 GridGeometry。
+    /// `showOnScreen` 换屏后必须调用, 防止 chrome 与网格使用不同屏幕的 safeTop。
+    private func updateChromeLayoutForCurrentScreen() {
+        guard let contentView = window?.contentView else { return }
+        let safeArea = (window?.screen ?? NSScreen.main)?.safeAreaInsets ?? NSEdgeInsetsZero
+        let width = CGFloat(store.searchBarWidth)
+        let searchHeight = LauncherChromeMetrics.searchHeight(for: width)
+
+        searchFieldTopConstraint?.constant = LauncherChromeMetrics.searchTopMargin + max(0, safeArea.top)
+        settingsButtonTopConstraint?.constant = LauncherChromeMetrics.settingsTopMargin + max(0, safeArea.top)
+        searchFieldWidthConstraint?.constant = width
+        searchFieldHeightConstraint?.constant = searchHeight
+
+        let insets = currentContentInsets(for: safeArea, searchHeight: searchHeight)
         gridViewController?.setContentInsets(top: insets.top, bottom: insets.bottom)
+        contentView.layoutSubtreeIfNeeded()
     }
 
     /// 设置即时生效(Stage v0.3.4): 壁纸模糊强度 + 搜索栏大小。
@@ -276,12 +438,8 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         if let window {
             updateBackground(for: window)
         }
-        let size = CGFloat(store.searchBarWidth)
-        let height = max(22, size / 16)
-        searchFieldWidthConstraint?.constant = size
-        searchFieldHeightConstraint?.constant = height
-        // 搜索框尺寸变化 → 顶部保留区变化 → 网格重排, 搜索框与首排保持稳定间距
-        applyContentInsets()
+        // 搜索框尺寸变化 → 同步 chrome constraints 与 GridGeometry 保留区。
+        updateChromeLayoutForCurrentScreen()
     }
 
     private func updateBackground(for window: NSWindow) {

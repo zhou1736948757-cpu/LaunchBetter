@@ -27,8 +27,18 @@ enum SearchProbe {
                 let iconsOK = visibleItems > 0 && realIcons == visibleItems
                 let searchUIOK = windowController.isSearchModeForDiag()
                     && windowController.snapshotItemCountForDiag() == results.count
+                let layoutDiagnostics = windowController.runtimeLayoutDiagnostics()
+                let layoutOK = layoutDiagnostics?.searchMode == true
+                    && layoutDiagnostics?.isValid == true
                 print("SEARCHPROBE realIcons=\(realIcons)/\(visibleItems)")
                 print("SEARCHPROBE uiMode=\(searchUIOK) snapshotItems=\(windowController.snapshotItemCountForDiag())")
+                if let layoutDiagnostics {
+                    print("SEARCHPROBE searchRect=\(layoutDiagnostics.searchRectInContent)")
+                    print("SEARCHPROBE firstRowRect=\(layoutDiagnostics.firstRowRectInContent)")
+                    print("SEARCHPROBE searchGridGap=\(layoutDiagnostics.actualSearchGridGap) overlap=\(layoutDiagnostics.searchGridOverlap)")
+                } else {
+                    print("SEARCHPROBE layout=FAIL missing runtime frames")
+                }
                 if let screenshotPath = CommandLine.arguments.last, !screenshotPath.hasPrefix("--") {
                     windowController.captureContentScreenshot(to: screenshotPath)
                 }
@@ -49,8 +59,9 @@ enum SearchProbe {
                 let restored = store.searchResults() == nil
                 let restoredUI = !windowController.isSearchModeForDiag()
                 print("SEARCHPROBE restored search=\(restored) ui=\(restoredUI)")
-                let ok = overflow && iconsOK && searchUIOK && customNameRebuilt && restored && restoredUI
-                DiagnosticRunner.finishProbe("SEARCHPROBE", ok: ok, detail: "overflow=\(overflow) icons=\(iconsOK) ui=\(searchUIOK) customName=\(customNameRebuilt) restored=\(restored && restoredUI)")
+                let ok = overflow && iconsOK && searchUIOK && layoutOK
+                    && customNameRebuilt && restored && restoredUI
+                DiagnosticRunner.finishProbe("SEARCHPROBE", ok: ok, detail: "overflow=\(overflow) icons=\(iconsOK) ui=\(searchUIOK) layout=\(layoutOK) customName=\(customNameRebuilt) restored=\(restored && restoredUI)")
             }
         }
     }

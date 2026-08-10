@@ -80,7 +80,24 @@ enum DiagnosticRunner {
         } else if CommandLine.arguments.contains("--showstay") {
             // 保持启动器显示(供外部 screencapture 截真实屏幕, 含 NSSearchField)。
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                if CommandLine.arguments.contains("--search-mode") {
+                    container.store.searchQuery = "com"
+                }
                 container.windowController.show()
+                if CommandLine.arguments.contains("--search-mode") {
+                    container.windowController.refreshGrid()
+                }
+                NSApp.activate(ignoringOtherApps: true)
+                container.windowController.window?.orderFrontRegardless()
+                container.windowController.window?.makeKeyAndOrderFront(nil)
+                container.windowController.window?.displayIfNeeded()
+                if CommandLine.arguments.contains("--folder-mode") {
+                    let opened = container.windowController.openFirstFolderForDiagnostic()
+                    print("SHOWSTAY folder=\(opened)")
+                }
+                if CommandLine.arguments.contains("--hover-settings") {
+                    container.windowController.movePointerToSettingsButtonForDiagnostic()
+                }
                 print("SHOWSTAY visible=\(container.windowController.isActuallyVisible)")
                 fflush(stdout)
             }

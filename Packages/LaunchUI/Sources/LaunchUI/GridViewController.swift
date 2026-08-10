@@ -703,10 +703,54 @@ final class GridViewController: NSViewController {
         return paging.handleWheel(event)
     }
 
-    /// 第一排(文档 y 最高行, 屏幕最上)图标顶部文档 y(布局诊断)。
+    /// 第一排实际布局 frame 的视觉顶部文档 y(布局诊断)。
     func firstRowTopDocumentY() -> CGFloat {
-        let g = geometry
-        return g.gridOrigin.y + g.gridHeight
+        firstRowDocumentFrame()?.minY ?? geometry.gridOrigin.y
+    }
+
+    /// 当前页第一排实际 layout attributes 的文档 frame。
+    /// 在 flipped collection view 坐标中, frame.minY 是视觉顶部。
+    func firstRowDocumentFrame() -> CGRect? {
+        guard isViewLoaded, collectionView != nil,
+              let layout = collectionView.collectionViewLayout as? PagingGridLayout else {
+            return nil
+        }
+        view.layoutSubtreeIfNeeded()
+        collectionView.layoutSubtreeIfNeeded()
+
+        let section: Int
+        if searchMode {
+            section = 0
+        } else {
+            guard collectionView.numberOfSections > 0 else { return nil }
+            section = min(currentPage, collectionView.numberOfSections - 1)
+        }
+        guard section < collectionView.numberOfSections else { return nil }
+        let itemCount = collectionView.numberOfItems(inSection: section)
+        guard itemCount > 0 else { return nil }
+        let firstRowCount = min(layout.columns, itemCount)
+
+        var rowFrame: CGRect?
+        for item in 0..<firstRowCount {
+            let path = IndexPath(item: item, section: section)
+            guard let frame = layout.layoutAttributesForItem(at: path)?.frame else { continue }
+            rowFrame = rowFrame?.union(frame) ?? frame
+        }
+        return rowFrame
+    }
+
+    /// 将第一排实际 frame 转换到调用方指定的共同坐标空间。
+    func firstRowFrame(in targetView: NSView) -> CGRect? {
+        guard let documentFrame = firstRowDocumentFrame() else { return nil }
+        return collectionView.convert(documentFrame, to: targetView)
+    }
+
+    /// 将页点容器 frame 转换到调用方指定的共同坐标空间。
+    func pageDotsFrame(in targetView: NSView) -> CGRect? {
+        guard isViewLoaded, let pageDots else { return nil }
+        view.layoutSubtreeIfNeeded()
+        pageDots.layoutSubtreeIfNeeded()
+        return pageDots.convert(pageDots.bounds, to: targetView)
     }
 
     /// 分页交互诊断(v0.1.6 §63)。

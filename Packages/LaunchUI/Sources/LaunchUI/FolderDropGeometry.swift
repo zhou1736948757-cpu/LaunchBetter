@@ -8,7 +8,7 @@ import LaunchCore
 /// between adjacent logical slots instead of a nearest-item heuristic, so a
 /// row transition is a first-class gap.
 struct FolderDropGeometry: Equatable, Sendable {
-    static let searchPadding: CGFloat = 24
+    static let searchPadding: CGFloat = GridGeometry.defaultSearchPadding
 
     let geometry: GridGeometry
     let itemCount: Int

@@ -167,7 +167,7 @@ public final class PagingGridLayout: NSCollectionViewLayout {
 
         switch mode {
         case .paged:
-            preparePaged(geometry: geometry, bounds: bounds, collectionView: collectionView)
+            preparePaged(geometry: geometry, collectionView: collectionView)
         case .search:
             prepareSearch(geometry: geometry, bounds: bounds, collectionView: collectionView)
         }
@@ -175,12 +175,13 @@ public final class PagingGridLayout: NSCollectionViewLayout {
 
     private func preparePaged(
         geometry: GridGeometry,
-        bounds: NSRect,
         collectionView: NSCollectionView
     ) {
         let sectionCount = collectionView.numberOfSections
         contentWidth = CGFloat(sectionCount) * geometry.pageWidth
-        contentHeight = bounds.height
+        // 分页文档高度必须跟随当前 clip viewport, 不能沿用上一次 document bounds
+        // (搜索溢出/换屏或 resize 后可能是旧高度)。
+        contentHeight = geometry.pageHeight
         guard sectionCount > 0 else { return }
 
         lockDocumentWidth(contentWidth, collectionView: collectionView)

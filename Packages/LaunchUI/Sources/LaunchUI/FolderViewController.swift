@@ -160,6 +160,8 @@ final class FolderViewController: NSViewController {
             cellSize: panelMetrics.cellSize, iconSize: CGFloat(folderIconSize),
             horizontalSpacing: panelMetrics.spacing, verticalSpacing: panelMetrics.spacing
         )
+        // 文件夹滚动区已经在卡片标题/操作栏下方, 不共享启动器搜索框的 chrome 保留区。
+        folderLayout.setContentInsets(top: 0, bottom: 0)
         folderLayout.mode = .search
         collectionView.collectionViewLayout = folderLayout
         collectionView.backgroundColors = [.clear]

@@ -31,6 +31,8 @@ final class SettingsButton: NSButton {
     private func setup() {
         isBordered = false
         setButtonType(.momentaryChange)
+        title = ""
+        alternateTitle = ""
         toolTip = L10n.t(.settings)
         setAccessibilityLabel(L10n.t(.settings))
         setAccessibilityRole(.button)

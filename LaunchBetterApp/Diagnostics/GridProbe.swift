@@ -34,8 +34,16 @@ enum GridProbe {
                     && store.config.gridRows == gRows
                     && store.config.iconSize == gIconSize
                     && display.pageCapacity == gColumns * gRows
+                let layoutDiagnostics = windowController.runtimeLayoutDiagnostics()
+                let layoutOK = layoutDiagnostics?.searchMode == false
+                    && layoutDiagnostics?.isValid == true
                 print("GRIDTEST columns=\(gColumns) rows=\(gRows) iconSize=\(gIconSize) pages=\(display.pages.count) capacity=\(display.pageCapacity) iconSize=\(store.iconSize)")
                 print("GRIDTEST \(diag)")
+                if let layoutDiagnostics {
+                    print("GRIDTEST searchGridGap=\(layoutDiagnostics.actualSearchGridGap) overlap=\(layoutDiagnostics.searchGridOverlap) firstRow=\(layoutDiagnostics.firstRowDocumentRect)")
+                } else {
+                    print("GRIDTEST layout=FAIL missing runtime frames")
+                }
                 if let screenshotPath = CommandLine.arguments.last, !screenshotPath.hasPrefix("--") {
                     windowController.captureContentScreenshot(to: screenshotPath)
                 }
@@ -49,8 +57,8 @@ enum GridProbe {
                 print("GRIDTEST searchRebuildDelta=\(searchRebuildDelta) (期望 0: UI-only config 不重建搜索索引, §71)")
                 DiagnosticRunner.finishProbe(
                     "GRIDTEST",
-                    ok: applied && restored && searchRebuildDelta == 0,
-                    detail: "applied=\(applied) restored=\(restored) searchRebuildDelta=\(searchRebuildDelta)"
+                    ok: applied && restored && searchRebuildDelta == 0 && layoutOK,
+                    detail: "applied=\(applied) restored=\(restored) layout=\(layoutOK) searchRebuildDelta=\(searchRebuildDelta)"
                 )
             }
         }
