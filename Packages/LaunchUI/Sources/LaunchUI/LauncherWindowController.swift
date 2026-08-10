@@ -107,9 +107,15 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
     /// 由应用层把 settingsController.launcherWindow 设为本窗口后调用。
     public func presentSettingsWindow(_ settingsWindow: NSWindow) {
         guard let window, let contentView = window.contentView else { return }
-        // 取消进行中的瞬态操作; 关闭 folder overlay(其可能正持有拖拽)。
+        // 幂等: 已激活则只把设置带到前台, 不重复安装 shield/child。
+        if interactionSurface == .settings {
+            settingsWindow.makeKeyAndOrderFront(nil)
+            return
+        }
+        // 取消进行中的瞬态操作; 关闭 folder overlay(其可能正持有拖拽); 暂停分页。
         dragController?.cancelDrag()
         closeFolderView()
+        gridViewController?.suspendPagingForSurface()
         interactionSurface = .settings
         installSettingsShield(in: contentView)
         settingsController?.onClose = { [weak self] in
@@ -133,10 +139,17 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         settingsController?.close()
     }
 
-    /// Settings 已关闭(任意路径)。若仍有点击序列未完成, 等 mouseUp 再恢复所有权。
+    /// Settings 已关闭(任意路径)。若仍有点击序列未完成, 等 mouseUp 再恢复所有权;
+    /// 但为防 mouseUp 永不到达(应用失活/事件取消), 设置有限兜底。
     private func settingsDidClose() {
         guard interactionSurface == .settings else { return }
         if let shield = interactionShield, shield.isConsumingClick {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                MainActor.assumeIsolated {
+                    // 幂等: mouseUp 若已到达会先恢复; 未到达则由本兜底清理。
+                    self?.endSettingsOwnership()
+                }
+            }
             return
         }
         endSettingsOwnership()
@@ -147,12 +160,13 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         endSettingsOwnership()
     }
 
-    /// 恢复 Launcher 交互(幂等): 移除 shield、释放所有权、确保拖拽空闲。
+    /// 恢复 Launcher 交互(幂等): 移除 shield、释放所有权、恢复分页、确保拖拽空闲。
     private func endSettingsOwnership() {
         guard interactionSurface == .settings else { return }
         interactionSurface = .launcher
         interactionShield?.removeFromSuperview()
         interactionShield = nil
+        gridViewController?.resumePagingForSurface()
         dragController?.cancelDrag()
     }
 
@@ -654,6 +668,7 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         }
         folderViewController = folderView
         interactionSurface = .folder
+        gridViewController?.suspendPagingForSurface()
         contentView.addSubview(folderView.view)
         folderView.view.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
@@ -676,9 +691,10 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         folderViewController.onDragExitEnd = nil
         folderViewController.view.removeFromSuperview()
         self.folderViewController = nil
-        // 文件夹关闭后交还 launcher 面(仅当没有更高优先级的 settings 面)。
+        // 文件夹关闭后交还 launcher 面(仅当没有更高优先级的 settings 面), 并恢复分页。
         if interactionSurface == .folder {
             interactionSurface = .launcher
+            gridViewController?.resumePagingForSurface()
         }
     }
 
@@ -734,12 +750,14 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
     }
 
     public func threeFingerDragUpdate() {
-        guard let drag = dragController, let windowPoint = currentPointerInWindow() else { return }
+        guard interactionSurface == .launcher,
+              let drag = dragController, let windowPoint = currentPointerInWindow() else { return }
         drag.updateDrag(at: windowPoint, inputSource: .threeFinger)
     }
 
     public func threeFingerDragEnd() {
-        guard let drag = dragController, let windowPoint = currentPointerInWindow() else { return }
+        guard interactionSurface == .launcher,
+              let drag = dragController, let windowPoint = currentPointerInWindow() else { return }
         let leftMouseButtonPressed = (NSEvent.pressedMouseButtons & 1) != 0
         drag.endDrag(
             at: windowPoint,
@@ -942,12 +960,15 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
             } else {
                 hide()
             }
-        case 123, 33: // Left, PageUp
-            gridViewController.previousPage()
-        case 124, 34: // Right, PageDown
-            gridViewController.nextPage()
-        case 36: // Return
-            launchFirstSearchResult()
+        case 123, 33, 124, 34, 36: // Left/PageUp, Right/PageDown, Return
+            // 只有 launcher 面拥有键盘: Folder/Settings 激活时不得分页/启动底层。
+            guard interactionSurface == .launcher else { return }
+            switch event.keyCode {
+            case 123, 33: gridViewController.previousPage()
+            case 124, 34: gridViewController.nextPage()
+            case 36: launchFirstSearchResult()
+            default: break
+            }
         default:
             break
         }

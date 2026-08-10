@@ -54,8 +54,14 @@ final class ClickableCollectionView: NSCollectionView {
 
     private var mouseDownPoint: NSPoint?
     private var dragging = false
+    /// 本鼠标会话是否收到过 mouseDown。
+    /// 覆盖层(Folder/Settings)可能在同一物理点击中于 mouseDown 后移除祖先,
+    /// 导致后续 mouseUp 落到本视图; 无配对 mouseDown 的 mouseUp 必须忽略,
+    /// 否则会误触发底层 click(启动/隐藏 Launcher)。
+    private var receivedMouseDown = false
 
     override func mouseDown(with event: NSEvent) {
+        receivedMouseDown = true
         mouseDownPoint = event.locationInWindow
         dragging = false
     }
@@ -76,6 +82,11 @@ final class ClickableCollectionView: NSCollectionView {
     }
 
     override func mouseUp(with event: NSEvent) {
+        defer {
+            mouseDownPoint = nil
+            receivedMouseDown = false
+        }
+        guard receivedMouseDown else { return }
         let point = event.locationInWindow
         if dragging {
             dragging = false
@@ -83,7 +94,6 @@ final class ClickableCollectionView: NSCollectionView {
         } else {
             onClick?(point)
         }
-        mouseDownPoint = nil
     }
 
     override func menu(for event: NSEvent) -> NSMenu? {

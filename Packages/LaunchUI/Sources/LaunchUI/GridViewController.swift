@@ -82,6 +82,16 @@ final class GridViewController: NSViewController {
         gridLayout.setContentInsets(top: top, bottom: bottom)
     }
 
+    /// 进入 Folder/Settings 覆盖层: 暂停分页状态机, 停止在途 settle/display link。
+    func suspendPagingForSurface() {
+        paging.isEnabled = false
+    }
+
+    /// 离开覆盖层恢复分页; 搜索模式保持禁用。
+    func resumePagingForSurface() {
+        paging.isEnabled = !searchMode
+    }
+
     /// 当前保留区(布局诊断)。
     func contentInsetsDiagnostics() -> String {
         let g = geometry
