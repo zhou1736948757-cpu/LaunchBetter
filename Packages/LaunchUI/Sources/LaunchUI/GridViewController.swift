@@ -815,6 +815,11 @@ final class GridViewController: NSViewController {
 
     // MARK: - 拖拽辅助
 
+    /// 诊断: 是否仍有拖拽源 cell 保持隐藏(所有权泄漏检测)。
+    var hasHiddenDragSourceForDiag: Bool {
+        activeDragSourceIdentity != nil
+    }
+
     /// 扁平显示索引(所有页面槽位)。
     func flatIndex(of item: Item) -> Int? {
         var flat = 0

@@ -77,6 +77,10 @@ enum DiagnosticRunner {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
                 GridProbe.run(container: container)
             }
+        } else if CommandLine.arguments.contains("--settingsownershipprobe") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                SettingsOwnershipProbe.run(container: container)
+            }
         } else if CommandLine.arguments.contains("--showstay") {
             // 保持启动器显示(供外部 screencapture 截真实屏幕, 含 NSSearchField)。
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
@@ -86,6 +90,10 @@ enum DiagnosticRunner {
                 container.windowController.show()
                 if CommandLine.arguments.contains("--search-mode") {
                     container.windowController.refreshGrid()
+                }
+                if CommandLine.arguments.contains("--settings") {
+                    container.windowController.openSettingsFromMenu()
+                    print("SHOWSTAY settings=open")
                 }
                 NSApp.activate(ignoringOtherApps: true)
                 container.windowController.window?.orderFrontRegardless()

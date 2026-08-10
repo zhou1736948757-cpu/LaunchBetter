@@ -18,6 +18,10 @@ public final class SettingsWindowController: NSWindowController {
     /// 由启动器作为 child window 挂载(浮在启动器上方, 启动器不退出)。
     public weak var launcherWindow: NSWindow?
 
+    /// 关闭回调: 唯一可靠的 Settings 关闭通知点(按钮/失焦/生命周期)。
+    /// 启动器用它恢复交互所有权与移除 shield。不允许用 deinit 承担此职责。
+    public var onClose: (() -> Void)?
+
     public init(handler: any SettingsHandling) {
         self.handler = handler
         let window = NSWindow(
@@ -49,21 +53,14 @@ public final class SettingsWindowController: NSWindowController {
         window.makeKeyAndOrderFront(nil)
     }
 
-    /// 关闭(含窗口关闭按钮)时从启动器父窗口移除 child。
+    /// 关闭(含窗口关闭按钮/失焦)时从启动器父窗口移除 child, 并通知所有权恢复。
     public override func close() {
-        if let launcherWindow {
-            launcherWindow.removeChildWindow(window!)
+        let closeCallback = onClose
+        if let launcherWindow, let window {
+            launcherWindow.removeChildWindow(window)
         }
         super.close()
-    }
-
-    deinit {
-        // 兜底: 若关闭按钮直接销毁, 从父窗口移除
-        if let launcherWindow, let window {
-            MainActor.assumeIsolated {
-                launcherWindow.removeChildWindow(window)
-            }
-        }
+        closeCallback?()
     }
 
     // MARK: - UI

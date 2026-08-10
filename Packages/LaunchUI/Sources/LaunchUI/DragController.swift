@@ -70,6 +70,17 @@ final class DragController {
 
     var isDragging: Bool { state == .dragging }
 
+    /// 诊断: overlay 是否仍挂在网格层上(teardown 后应为 false)。
+    var hasOverlayForDiag: Bool {
+        overlay.layer.superlayer != nil
+    }
+
+    /// 诊断: 是否在等待根 drop 持久化回执。
+    var awaitingDropResultForDiag: Bool { awaitingRootDropResult }
+
+    /// 诊断: 内部状态字符串。
+    var stateForDiag: String { "\(state) awaitingRoot=\(awaitingRootDropResult)" }
+
     var isFolderExitDragging: Bool {
         state == .dragging && folderExitSession != nil && folderExitLifecycle.isActive
     }

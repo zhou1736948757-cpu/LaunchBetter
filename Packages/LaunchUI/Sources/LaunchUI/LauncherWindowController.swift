@@ -85,12 +85,86 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
     /// 打开设置回调(由应用层接线到 SettingsWindowController)。
     public var onOpenSettings: (() -> Void)?
 
+    /// 设置窗口控制器(唯一所有权入口)。由应用层注入。
+    public weak var settingsController: SettingsWindowController?
+
+    /// 当前输入所有者。Settings 激活时底层 Launcher 不得响应任何输入。
+    private var interactionSurface: LauncherInteractionSurface = .launcher
+
+    /// Settings 激活时覆盖在 Launcher 内容上的输入屏蔽层。
+    private var interactionShield: SettingsInteractionShield?
+
+    /// 当前输入面(诊断/探针)。
+    public var currentInteractionSurface: LauncherInteractionSurface { interactionSurface }
+
     /// 把设置窗口作为启动器的 child window 挂载(浮在启动器上方, 启动器不退出)。
     /// 由应用层把 settingsController.launcherWindow 设为本窗口后调用。
     public func presentSettingsWindow(_ settingsWindow: NSWindow) {
-        guard let window else { return }
+        guard let window, let contentView = window.contentView else { return }
+        // 取消进行中的瞬态操作; 关闭 folder overlay(其可能正持有拖拽)。
+        dragController?.cancelDrag()
+        closeFolderView()
+        interactionSurface = .settings
+        installSettingsShield(in: contentView)
+        settingsController?.onClose = { [weak self] in
+            MainActor.assumeIsolated {
+                self?.settingsDidClose()
+            }
+        }
         window.addChildWindow(settingsWindow, ordered: .above)
         settingsWindow.makeKeyAndOrderFront(nil)
+    }
+
+    /// App 菜单入口: 与齿轮按钮走同一所有权路径(不能直接调 settingsController.show())。
+    public func openSettingsFromMenu() {
+        guard let settingsController, let sw = settingsController.window else { return }
+        settingsController.launcherWindow = window
+        presentSettingsWindow(sw)
+    }
+
+    /// 屏蔽层点击(Launcher 空白): 只关闭 Settings, 不结束所有权(等待 mouseUp)。
+    private func requestSettingsClose() {
+        settingsController?.close()
+    }
+
+    /// Settings 已关闭(任意路径)。若仍有点击序列未完成, 等 mouseUp 再恢复所有权。
+    private func settingsDidClose() {
+        guard interactionSurface == .settings else { return }
+        if let shield = interactionShield, shield.isConsumingClick {
+            return
+        }
+        endSettingsOwnership()
+    }
+
+    /// shield mouseUp 已消费完整序列 → 现在安全恢复。
+    private func shieldClickConsumed() {
+        endSettingsOwnership()
+    }
+
+    /// 恢复 Launcher 交互(幂等): 移除 shield、释放所有权、确保拖拽空闲。
+    private func endSettingsOwnership() {
+        guard interactionSurface == .settings else { return }
+        interactionSurface = .launcher
+        interactionShield?.removeFromSuperview()
+        interactionShield = nil
+        dragController?.cancelDrag()
+    }
+
+    private func installSettingsShield(in contentView: NSView) {
+        let shield = SettingsInteractionShield(frame: contentView.bounds)
+        shield.autoresizingMask = [.width, .height]
+        shield.onShieldMouseDown = { [weak self] in
+            MainActor.assumeIsolated {
+                self?.requestSettingsClose()
+            }
+        }
+        shield.onShieldMouseUp = { [weak self] in
+            MainActor.assumeIsolated {
+                self?.shieldClickConsumed()
+            }
+        }
+        contentView.addSubview(shield, positioned: .above, relativeTo: nil)
+        interactionShield = shield
     }
 
     public init(
@@ -146,10 +220,12 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
 
         let grid = GridViewController(store: store, iconProvider: iconProvider)
         grid.onOpenFolder = { [weak self] folderID in
-            self?.openFolder(folderID)
+            guard let self, self.interactionSurface == .launcher else { return }
+            self.openFolder(folderID)
         }
         grid.onClickBlank = { [weak self] in
-            self?.hide()
+            guard let self, self.interactionSurface == .launcher else { return }
+            self.hide()
         }
         gridViewController = grid
 
@@ -161,14 +237,16 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         }
         grid.dragController = dragController
         if let collectionView = grid.collectionViewRef as? ClickableCollectionView {
-            collectionView.onDragBegin = { [weak dragController] point in
-                guard let dragController, let item = grid.itemAt(point: point) else { return }
-                dragController.beginDrag(item: item, at: point)
+            collectionView.onDragBegin = { [weak self] point in
+                guard let self, let item = grid.itemAt(point: point) else { return }
+                self.beginRootDragIfPermitted(item: item, at: point)
             }
-            collectionView.onDragMove = { [weak dragController] point in
+            collectionView.onDragMove = { [weak self, weak dragController] point in
+                guard let self, self.interactionSurface == .launcher else { return }
                 dragController?.updateDrag(at: point)
             }
-            collectionView.onDragEnd = { [weak dragController] point in
+            collectionView.onDragEnd = { [weak self, weak dragController] point in
+                guard let self, self.interactionSurface == .launcher else { return }
                 dragController?.endDrag(at: point)
             }
         }
@@ -557,6 +635,7 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
             dragController.endDrag(at: point, completion: completion)
         }
         folderViewController = folderView
+        interactionSurface = .folder
         contentView.addSubview(folderView.view)
         folderView.view.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
@@ -579,6 +658,10 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         folderViewController.onDragExitEnd = nil
         folderViewController.view.removeFromSuperview()
         self.folderViewController = nil
+        // 文件夹关闭后交还 launcher 面(仅当没有更高优先级的 settings 面)。
+        if interactionSurface == .folder {
+            interactionSurface = .launcher
+        }
     }
 
     /// 确定性诊断(冒烟验证用)。
@@ -623,8 +706,8 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
     /// 三指拖动: 反查指针下图标并开始拖拽(Stage 2)。返回是否成功开始。
     /// 位置语义与旧 LaunchHistory 一致: 用 NSEvent.mouseLocation(指针), 非触点中心。
     public func threeFingerDragBegin() -> Bool {
-        // 文件夹覆盖层存在时不可命中其后的主网格；文件夹子项由文件夹控制器接管。
-        guard folderViewController == nil else { return false }
+        // 只有 launcher 面拥有输入: Settings 激活或文件夹打开时不可命中底层网格。
+        guard interactionSurface == .launcher else { return false }
         guard let grid = gridViewController, let drag = dragController else { return false }
         guard let windowPoint = currentPointerInWindow() else { return false }
         guard let item = grid.itemAt(point: windowPoint) else { return false }
@@ -650,6 +733,60 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
     /// 三指路径统一使用窗口基坐标，避免多处 screen→window 转换产生契约漂移。
     private func currentPointerInWindow() -> NSPoint? {
         window?.mouseLocationOutsideOfEventStream
+    }
+
+    /// 鼠标路径的统一拖拽入口: 只有 launcher 面允许开始根网格拖拽。
+    private func beginRootDragIfPermitted(item: DisplayModel.DisplayItem, at point: NSPoint) {
+        guard interactionSurface == .launcher else {
+            if CommandLine.arguments.contains("--inputtrace") {
+                print("INPUTTRACE grid drag BLOCKED surface=\(interactionSurface)")
+            }
+            return
+        }
+        if CommandLine.arguments.contains("--inputtrace") {
+            print("INPUTTRACE grid drag begin")
+        }
+        dragController?.beginDrag(item: item, at: point)
+    }
+
+    // MARK: - 所有权诊断 seam(probe 使用, 与真实输入路径同一门控)
+
+    /// 诊断: 第一个显示项的窗口坐标锚点(供 probe 发起/尝试拖拽)。
+    public func diagnosticFirstItemAnchor() -> NSPoint? {
+        guard let grid = gridViewController, let item = grid.allItems().first,
+              let index = grid.flatIndex(of: item) else { return nil }
+        let documentFrame = grid.frame(atFlatIndex: index)
+        return grid.collectionViewRef.convert(
+            NSPoint(x: documentFrame.midX, y: documentFrame.midY),
+            to: nil
+        )
+    }
+
+    /// 诊断: 尝试走真实鼠标路径开始根拖拽(受 surface 门控)。返回是否真的开始。
+    public func diagnosticBeginRootDrag(at point: NSPoint) -> Bool {
+        guard let item = gridViewController?.itemAt(point: point) else { return false }
+        beginRootDragIfPermitted(item: item, at: point)
+        return dragController?.isDragging ?? false
+    }
+
+    public func diagnosticRequestSettingsClose() {
+        requestSettingsClose()
+    }
+
+    public func diagnosticShieldMouseUp() {
+        shieldClickConsumed()
+    }
+
+    public func diagnosticHasHiddenDragSource() -> Bool {
+        gridViewController?.hasHiddenDragSourceForDiag ?? false
+    }
+
+    public func diagnosticHasDragOverlay() -> Bool {
+        gridViewController?.dragController?.hasOverlayForDiag ?? false
+    }
+
+    public func dragStateForDiag() -> String {
+        gridViewController?.dragController?.stateForDiag ?? "nil"
     }
 
     public func threeFingerDragCancel() {
@@ -780,7 +917,9 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
     public func handleKeyDown(_ event: NSEvent) {
         switch event.keyCode {
         case 53: // Escape
-            if folderViewController != nil {
+            if interactionSurface == .settings {
+                requestSettingsClose()
+            } else if folderViewController != nil {
                 closeFolderView()
             } else {
                 hide()
