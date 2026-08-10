@@ -117,6 +117,8 @@ private final class ContextMenuTestStore: LauncherStoring {
     let gridColumns = 2
     let gridRows = 1
     let iconSize = 64
+    var wallpaperBlurRadius: Int { 30 }
+    var searchBarWidth: Int { 320 }
     let displayRevision: UInt64 = 1
 
     init(items: [DisplayModel.DisplayItem]) {

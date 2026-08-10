@@ -28,6 +28,12 @@ public struct AppConfiguration: Codable, Sendable {
     /// 是否显示图标标签
     public var showIconLabels: Bool
 
+    /// 壁纸模糊强度(半径 pt, 0 = 关闭, 默认 30)。
+    public var wallpaperBlurRadius: Int
+
+    /// 搜索栏宽度(pt, 默认 320)。
+    public var searchBarWidth: Int
+
     /// 自定义应用源目录
     public var customSourceDirectories: [String]
 
@@ -51,6 +57,8 @@ public struct AppConfiguration: Codable, Sendable {
         gridRows: Int = 6,
         iconSize: Int = 80,
         showIconLabels: Bool = true,
+        wallpaperBlurRadius: Int = 30,
+        searchBarWidth: Int = 320,
         customSourceDirectories: [String] = [],
         hiddenAppIDs: [AppID] = [],
         customDisplayNames: [AppID: String] = [:],
@@ -63,6 +71,8 @@ public struct AppConfiguration: Codable, Sendable {
         self.gridRows = gridRows
         self.iconSize = iconSize
         self.showIconLabels = showIconLabels
+        self.wallpaperBlurRadius = wallpaperBlurRadius
+        self.searchBarWidth = searchBarWidth
         self.customSourceDirectories = customSourceDirectories
         self.hiddenAppIDs = hiddenAppIDs
         self.customDisplayNames = customDisplayNames
@@ -78,6 +88,8 @@ public struct AppConfiguration: Codable, Sendable {
         gridRows = try container.decodeIfPresent(Int.self, forKey: .gridRows) ?? 6
         iconSize = try container.decodeIfPresent(Int.self, forKey: .iconSize) ?? 80
         showIconLabels = try container.decodeIfPresent(Bool.self, forKey: .showIconLabels) ?? true
+        wallpaperBlurRadius = try container.decodeIfPresent(Int.self, forKey: .wallpaperBlurRadius) ?? 30
+        searchBarWidth = try container.decodeIfPresent(Int.self, forKey: .searchBarWidth) ?? 320
         customSourceDirectories = try container.decodeIfPresent(
             [String].self, forKey: .customSourceDirectories
         ) ?? []
@@ -98,6 +110,8 @@ public struct AppConfiguration: Codable, Sendable {
         case gridRows
         case iconSize
         case showIconLabels
+        case wallpaperBlurRadius
+        case searchBarWidth
         case customSourceDirectories
         case hiddenAppIDs
         case customDisplayNames

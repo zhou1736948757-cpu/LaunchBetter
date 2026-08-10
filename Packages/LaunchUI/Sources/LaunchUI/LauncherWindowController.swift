@@ -130,7 +130,7 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         NSLayoutConstraint.activate([
             searchField.topAnchor.constraint(equalTo: root.topAnchor, constant: 24 + topInset),
             searchField.centerXAnchor.constraint(equalTo: root.centerXAnchor),
-            searchField.widthAnchor.constraint(equalToConstant: 320),
+            searchField.widthAnchor.constraint(equalToConstant: CGFloat(store.searchBarWidth)),
         ])
 
         // 设置入口: 右上角齿轮(用户反馈"没有设置页面的进入框, 怎么改语言")。
@@ -149,8 +149,8 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         NSLayoutConstraint.activate([
             settingsButton.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -16),
             settingsButton.topAnchor.constraint(equalTo: root.topAnchor, constant: 20 + topInset),
-            settingsButton.widthAnchor.constraint(equalToConstant: 28),
-            settingsButton.heightAnchor.constraint(equalToConstant: 28),
+            settingsButton.widthAnchor.constraint(equalToConstant: 36),
+            settingsButton.heightAnchor.constraint(equalToConstant: 36),
         ])
 
         window.contentView = root
@@ -217,7 +217,7 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         let request = WallpaperProvider.RenderRequest(
             screenFrame: screen.frame,
             backingScale: window.backingScaleFactor,
-            blurRadius: 30
+            blurRadius: CGFloat(store.wallpaperBlurRadius)
         )
         if CommandLine.arguments.contains("--perf") {
             print("PERF showRequest frame=\(screen.frame) scale=\(window.backingScaleFactor)")

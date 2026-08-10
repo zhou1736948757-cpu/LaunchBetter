@@ -117,6 +117,37 @@ struct LocalizedDisplayNameTests {
         )
     }
 
+    @Test("旧格式 zh_CN 归一到 zh-Hans(系统性: 百度网盘/微信类应用)")
+    func legacyUnderscoreLocale() throws {
+        let r = try record(["en": "BaiduNetdisk", "zh_CN": "百度网盘"])
+        #expect(
+            r.localizedDisplayName(language: .simplifiedChinese, systemPreferredLanguages: [])
+                == "百度网盘"
+        )
+        #expect(
+            r.localizedDisplayName(language: .system, systemPreferredLanguages: ["zh-Hans-CN"])
+                == "百度网盘"
+        )
+    }
+
+    @Test("旧格式 zh_TW 归一到 zh-Hant")
+    func legacyTraditionalLocale() throws {
+        let r = try record(["en": "App", "zh_TW": "應用"])
+        #expect(
+            r.localizedDisplayName(language: .traditionalChinese, systemPreferredLanguages: [])
+                == "應用"
+        )
+    }
+
+    @Test("区域后缀 zh-CN 归一到 zh-Hans")
+    func regionSuffixLocale() throws {
+        let r = try record(["en": "App", "zh-CN": "应用"])
+        #expect(
+            r.localizedDisplayName(language: .simplifiedChinese, systemPreferredLanguages: [])
+                == "应用"
+        )
+    }
+
     @Test("繁体偏好取 zh-Hant")
     func traditionalChinese() throws {
         let r = try record(["en": "Safari", "zh-Hant": "瀏覽器"])

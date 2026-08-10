@@ -61,6 +61,10 @@ enum DiagnosticRunner {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
                 PagingProbe.run(container: container)
             }
+        } else if CommandLine.arguments.contains("--settingsshot") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                SettingsShotProbe.run(container: container)
+            }
         } else if CommandLine.arguments.contains("--gridtest") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
                 GridProbe.run(container: container)

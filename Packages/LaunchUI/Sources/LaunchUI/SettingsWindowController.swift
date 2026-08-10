@@ -27,10 +27,11 @@ public final class SettingsWindowController: NSWindowController {
             defer: false
         )
         window.title = L10n.t(.settingsTitle)
-        // 与启动器一致的深色毛玻璃风格(用户反馈原窗口微蓝/小/看不清)
+        // 与启动器一致的深色毛玻璃风格(用户反馈原窗口微蓝/小/看不清)。
+        // isOpaque = true + 深色背景: 标题栏红绿灯保持在面板内(不透明, 无穿透)。
         window.appearance = NSAppearance(named: .darkAqua)
-        window.backgroundColor = .clear
-        window.isOpaque = false
+        window.backgroundColor = NSColor(calibratedWhite: 0.14, alpha: 1)
+        window.isOpaque = true
         window.titlebarAppearsTransparent = true
         super.init(window: window)
         buildContent()
@@ -76,6 +77,10 @@ public final class SettingsWindowController: NSWindowController {
     private var hotkeyCheck: NSButton!
     private var hotkeyPopup: NSPopUpButton!
     private var wallpaperCheck: NSButton!
+    private var blurSlider: NSSlider!
+    private var blurLabel: NSTextField!
+    private var searchBarSlider: NSSlider!
+    private var searchBarLabel: NSTextField!
     private var hotCornerPopups: [NSPopUpButton] = []
     private var sourcesList: NSTableView!
     private var sourcesData: [String] = []
@@ -84,6 +89,16 @@ public final class SettingsWindowController: NSWindowController {
 
     private func buildContent() {
         guard let window else { return }
+        // 点击面板外(设置失去 key)→ 关闭设置(用户要求)
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.didResignKeyNotification,
+            object: window,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.close()
+            }
+        }
         // 毛玻璃背景(与启动器一致)
         let effect = NSVisualEffectView()
         effect.material = .hudWindow
@@ -185,6 +200,20 @@ public final class SettingsWindowController: NSWindowController {
         left.addArrangedSubview(row("↘", hotCornerPopups[3]))
         left.addArrangedSubview(sectionLabel(L10n.t(.wallpaperLabel)))
         left.addArrangedSubview(wallpaperCheck)
+        let blurSlider = NSSlider(value: Double(config.wallpaperBlurRadius), minValue: 0, maxValue: 60, target: self, action: #selector(valueChanged))
+        blurSlider.isContinuous = true
+        self.blurSlider = blurSlider
+        let blurLabel = NSTextField(labelWithString: "\(config.wallpaperBlurRadius)")
+        self.blurLabel = blurLabel
+        left.addArrangedSubview(row(L10n.t(.blurIntensityLabel), NSStackView(views: [blurLabel, blurSlider])))
+
+        left.addArrangedSubview(sectionLabel(L10n.t(.searchBarSection)))
+        let searchBarSlider = NSSlider(value: Double(config.searchBarWidth), minValue: 200, maxValue: 600, target: self, action: #selector(valueChanged))
+        searchBarSlider.isContinuous = true
+        self.searchBarSlider = searchBarSlider
+        let searchBarLabel = NSTextField(labelWithString: "\(config.searchBarWidth)")
+        self.searchBarLabel = searchBarLabel
+        left.addArrangedSubview(row(L10n.t(.searchBarWidthLabel), NSStackView(views: [searchBarLabel, searchBarSlider])))
 
         // 关于(Stage B5): 版本 + 来源链接
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
@@ -321,6 +350,8 @@ public final class SettingsWindowController: NSWindowController {
     }
 
     @objc private func valueChanged() {
+        blurLabel?.stringValue = "\(Int(blurSlider?.doubleValue ?? 0))"
+        searchBarLabel?.stringValue = "\(Int(searchBarSlider?.doubleValue ?? 320))"
         commit()
     }
 
@@ -379,6 +410,8 @@ public final class SettingsWindowController: NSWindowController {
             : iconSizePopup.indexOfSelectedItem == 1 ? 64
             : iconSizePopup.indexOfSelectedItem == 2 ? 80 : 96
         config.showIconLabels = showLabelsCheck.state == .on
+        config.wallpaperBlurRadius = Int(blurSlider.doubleValue)
+        config.searchBarWidth = Int(searchBarSlider.doubleValue)
         switch languagePopup.indexOfSelectedItem {
         case 1: config.language = .english
         case 2: config.language = .simplifiedChinese

@@ -58,6 +58,9 @@ public enum L10n {
         case cornerToggle
         case pageOf
         case aboutLabel
+        case blurIntensityLabel
+        case searchBarSection
+        case searchBarWidthLabel
     }
 
     nonisolated(unsafe) private static let zhHans: [Key: String] = [
@@ -83,6 +86,9 @@ public enum L10n {
         .cornerShow: "显示启动器", .cornerHide: "隐藏启动器", .cornerToggle: "切换启动器",
         .pageOf: "第 %@ 页，共 %@ 页",
         .aboutLabel: "关于",
+        .blurIntensityLabel: "模糊强度",
+        .searchBarSection: "搜索栏",
+        .searchBarWidthLabel: "搜索栏宽度",
     ]
 
     nonisolated(unsafe) private static let zhHant: [Key: String] = [
@@ -108,6 +114,9 @@ public enum L10n {
         .cornerShow: "顯示啟動器", .cornerHide: "隱藏啟動器", .cornerToggle: "切換啟動器",
         .pageOf: "第 %@ 頁，共 %@ 頁",
         .aboutLabel: "關於",
+        .blurIntensityLabel: "模糊強度",
+        .searchBarSection: "搜尋列",
+        .searchBarWidthLabel: "搜尋列寬度",
     ]
 
     nonisolated(unsafe) private static let english: [Key: String] = [
@@ -133,6 +142,9 @@ public enum L10n {
         .cornerShow: "Show Launcher", .cornerHide: "Hide Launcher", .cornerToggle: "Toggle Launcher",
         .pageOf: "Page %@ of %@",
         .aboutLabel: "About",
+        .blurIntensityLabel: "Blur Intensity",
+        .searchBarSection: "Search Bar",
+        .searchBarWidthLabel: "Search Bar Width",
     ]
 
     nonisolated(unsafe) private static var language: AppLanguage = .system

@@ -289,6 +289,8 @@ private class DragHotPathTestStore: LauncherStoring {
     let gridColumns = 3
     let gridRows = 1
     let iconSize = 64
+    var wallpaperBlurRadius: Int { 30 }
+    var searchBarWidth: Int { 320 }
     var lastAddToFolderApp: AppID?
     var lastAddToFolderFolder: FolderID?
 

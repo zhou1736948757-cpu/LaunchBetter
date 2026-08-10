@@ -43,6 +43,12 @@ public protocol LauncherStoring: AnyObject {
     /// 图标点尺寸(布局几何; IconKey 请求尺寸真值)。
     var iconSize: Int { get }
 
+    /// 壁纸模糊强度(半径 pt, 0 = 关闭)。
+    var wallpaperBlurRadius: Int { get }
+
+    /// 搜索栏宽度(pt)。
+    var searchBarWidth: Int { get }
+
     /// 显示修订号: 目录/布局/配置/搜索任一变化即递增(无变化跳过 full snapshot)。
     var displayRevision: UInt64 { get }
 

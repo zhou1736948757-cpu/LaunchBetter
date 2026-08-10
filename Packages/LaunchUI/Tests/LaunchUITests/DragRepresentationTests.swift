@@ -214,6 +214,8 @@ private final class DragSourceTestStore: LauncherStoring, LayoutMutationCompleti
     let gridColumns = 2
     let gridRows = 1
     let iconSize = 64
+    var wallpaperBlurRadius: Int { 30 }
+    var searchBarWidth: Int { 320 }
     var pendingMutationCompletion: ((Bool) -> Void)?
 
     init(items: [DisplayModel.DisplayItem]) {

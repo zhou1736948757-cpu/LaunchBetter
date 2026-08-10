@@ -66,6 +66,10 @@ public struct AppRecord: Codable, Sendable, Identifiable, Hashable {
     /// 匹配顺序(确定性): 候选 locale 精确匹配 → 前缀匹配(如 "zh-Hans" 命中 "zh-Hans-CN")
     /// → 按 key 排序取首个。无匹配返回 nil,调用方回退 `displayName`。
     /// `language` 为 `.system` 时按系统首选语言推断(与 L10n 一致的 zh-Hans/zh-Hant/en 划分)。
+    ///
+    /// 语言代码规范化(v0.3.3, 系统性): 不同 bundle 的 lproj 目录名可能用旧格式
+    /// `zh_CN` / `zh_TW`(下划线)或区域后缀 `zh-CN` / `zh-Hans-CN`; 统一归一到
+    /// `zh-Hans` / `zh-Hant` 族后匹配 —— 修复"百度网盘/微信等显示英文名"的系统性问题。
     public func localizedDisplayName(
         language: AppLanguage,
         systemPreferredLanguages: [String]
@@ -75,19 +79,46 @@ public struct AppRecord: Codable, Sendable, Identifiable, Hashable {
             language: language,
             systemPreferredLanguages: systemPreferredLanguages
         )
+        // 归一化字典: 旧格式/区域格式键 → 语言族(冲突时保留首个, 确定性)。
+        var normalized: [String: String] = [:]
+        for (key, name) in localizedNames {
+            let nk = Self.normalizeLocale(key)
+            if normalized[nk] == nil {
+                normalized[nk] = name
+            }
+        }
         for candidate in candidates {
-            if let exact = localizedNames[candidate] {
+            let nc = Self.normalizeLocale(candidate)
+            if let exact = normalized[nc] {
                 return exact
             }
-            if let prefixed = localizedNames.keys
-                .filter({ $0.hasPrefix(candidate + "-") || candidate.hasPrefix($0 + "-") })
+            if let prefixed = normalized.keys
+                .filter({ $0.hasPrefix(nc + "-") })
                 .sorted()
                 .first,
-                let name = localizedNames[prefixed] {
+                let name = normalized[prefixed] {
                 return name
             }
         }
         return nil
+    }
+
+    /// 语言代码规范化: 把旧格式/区域格式归一到语言族。
+    /// - `zh` / `zh_CN` / `zh-CN` / `zh-Hans*` → `zh-Hans`
+    /// - `zh_TW` / `zh-TW` / `zh_HK` / `zh-HK` / `zh-Hant*` → `zh-Hant`
+    /// - 其余原样(如 `en`、`ja`、`fr`)。
+    static func normalizeLocale(_ key: String) -> String {
+        let lower = key.lowercased()
+        if lower == "zh" || lower.hasPrefix("zh_cn") || lower.hasPrefix("zh-cn")
+            || lower.hasPrefix("zh-hans") || lower == "zhhans" {
+            return "zh-Hans"
+        }
+        if lower.hasPrefix("zh_tw") || lower.hasPrefix("zh-tw") || lower.hasPrefix("zh_hk")
+            || lower.hasPrefix("zh-hk") || lower.hasPrefix("zh-hant") || lower == "zhtw"
+            || lower == "zhhk" || lower == "zhtw" {
+            return "zh-Hant"
+        }
+        return key
     }
 
     /// 语言偏好的候选 locale 列表(按优先级)。

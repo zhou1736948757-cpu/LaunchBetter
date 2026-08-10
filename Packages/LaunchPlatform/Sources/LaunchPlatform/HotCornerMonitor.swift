@@ -48,7 +48,7 @@ public final class HotCornerMonitor: @unchecked Sendable {
             return
         }
         let frame = screen.frame
-        let tolerance: CGFloat = 10
+        let tolerance: CGFloat = 24
         var detected: HotCornerAction?
         let top = frame.maxY - point.y < tolerance
         let bottom = point.y - frame.minY < tolerance

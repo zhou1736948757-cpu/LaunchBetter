@@ -66,6 +66,8 @@ public final class LauncherStore: LauncherStoring, LayoutMutationCompleting, Set
     public var gridColumns: Int { config.gridColumns }
     public var gridRows: Int { config.gridRows }
     public var iconSize: Int { config.iconSize }
+    public var wallpaperBlurRadius: Int { config.wallpaperBlurRadius }
+    public var searchBarWidth: Int { config.searchBarWidth }
 
     /// 显示修订号: 目录/布局/配置/搜索任一变化即递增(Stage 1 §30)。
     public private(set) var displayRevision: UInt64 = 0

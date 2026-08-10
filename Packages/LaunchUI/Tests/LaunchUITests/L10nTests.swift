@@ -244,6 +244,8 @@ private final class FolderLocalizationTestStore: LauncherStoring {
     let gridColumns = 7
     let gridRows = 6
     let iconSize = 64
+    var wallpaperBlurRadius: Int { 30 }
+    var searchBarWidth: Int { 320 }
     let displayRevision: UInt64 = 1
 
     private var observers: [UUID: () -> Void] = [:]
