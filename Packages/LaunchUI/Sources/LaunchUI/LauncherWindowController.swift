@@ -79,6 +79,12 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
 
     private var visible = false
 
+    /// Launcher 视觉过渡状态机(过期 completion 防护)。
+    private var transition = LauncherTransitionLifecycle()
+
+    /// 诊断: 当前过渡状态。
+    public var transitionStateForDiag: String { "\(transition.state)" }
+
     /// 可见性变化回调(三指拖动等按面板显示启用, Stage 2)。
     public var onVisibilityChange: ((Bool) -> Void)?
 
@@ -335,6 +341,7 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
     public func show() {
         guard !visible else { return }
         visible = true
+        let transitionToken = transition.beginShow()
         let showStart = CFAbsoluteTimeGetCurrent()
         lastShowStart = showStart
         guard let window, let launcherWindow = window as? LauncherWindow else { return }
@@ -347,12 +354,20 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         updateBackground(for: window)
         gridViewController.refresh()
         let contentReady = CFAbsoluteTimeGetCurrent() - showStart
-        window.alphaValue = 0
+        // 首次呈现从 0 淡入; 若正处于 dismiss 中途重开, 从当前呈现反向淡入(不重置到 0)。
+        if !window.isVisible {
+            window.alphaValue = 0
+        }
         window.makeKeyAndOrderFront(nil)
         let orderedFront = CFAbsoluteTimeGetCurrent() - showStart
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.12
+            context.duration = MotionEnvironment.launcherFadeDuration
             window.animator().alphaValue = 1
+        } completionHandler: {
+            MainActor.assumeIsolated {
+                // 若期间又 hide(), 令牌过期 → 不覆盖 dismissing 状态。
+                _ = self.transition.completeShow(transitionToken)
+            }
         }
         // v0.1.4: 默认不聚焦搜索框(避免光标闪烁); 点击搜索框才聚焦。
         // 键盘翻页/Return 经 window.keyDown 响应链仍可用。
@@ -575,6 +590,7 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
             return
         }
         visible = false
+        let transitionToken = transition.beginHide()
         onVisibilityChange?(false)
         // M4: 隐藏时终止拖拽(display link/overlay 清理)
         dragController?.shutdown()
@@ -588,10 +604,12 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         // v0.1.4: 重新打开面板回到第一页
         gridViewController.goToPage(0, animated: false)
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.12
+            context.duration = MotionEnvironment.launcherFadeDuration
             window.animator().alphaValue = 0
         } completionHandler: {
             MainActor.assumeIsolated {
+                // 若期间又 show(), 令牌过期 → 禁止过期 orderOut 关掉已重开的窗口。
+                guard self.transition.completeHide(transitionToken), window.isVisible else { return }
                 window.orderOut(nil)
             }
         }
