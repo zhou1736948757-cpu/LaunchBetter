@@ -23,6 +23,12 @@ public final class PagingGridLayout: NSCollectionViewLayout {
     public private(set) var horizontalSpacing: CGFloat
     public private(set) var verticalSpacing: CGFloat
 
+    /// 顶部保留区(pt): 搜索框占用(由窗口层计算, 网格不得顶出)。
+    public private(set) var topInset: CGFloat = 160
+
+    /// 底部保留区(pt): 页点占用(由窗口层计算, 网格不得压住)。
+    public private(set) var bottomInset: CGFloat = 40
+
     /// 布局模式(搜索模式切换分页为垂直滚动)。
     public var mode: Mode = .paged
 
@@ -117,6 +123,17 @@ public final class PagingGridLayout: NSCollectionViewLayout {
             ?? collectionView.bounds.height
     }
 
+    /// 更新顶部/底部保留区(搜索框尺寸/页点变化时由窗口层调用)。
+    /// 只改变可用内容区, 水平分页/列行布局不变。
+    func setContentInsets(top: CGFloat, bottom: CGFloat) {
+        let t = max(0, top)
+        let b = max(0, bottom)
+        guard t != topInset || b != bottomInset else { return }
+        topInset = t
+        bottomInset = b
+        invalidateLayout()
+    }
+
     private func buildGeometry(usingClipWidth clipWidth: CGFloat) -> GridGeometry {
         let height = visibleClipHeight > 0
             ? visibleClipHeight
@@ -129,7 +146,9 @@ public final class PagingGridLayout: NSCollectionViewLayout {
             horizontalSpacing: horizontalSpacing,
             verticalSpacing: verticalSpacing,
             pageWidth: clipWidth > 0 ? clipWidth : (collectionView?.bounds.width ?? 0),
-            pageHeight: height
+            pageHeight: height,
+            topInset: topInset,
+            bottomInset: bottomInset
         )
     }
 

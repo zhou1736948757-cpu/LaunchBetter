@@ -27,6 +27,7 @@
 		C7367F5C43E434A600DE07D2 /* LauncherStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3667895D56B49968ADB46248 /* LauncherStore.swift */; };
 		D787CB7DB7A8142C2793057B /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F48F69D4EFE02FA4BFC2085 /* main.swift */; };
 		DA5D6E4F4DB95EE94074FB1C /* SettingsShotProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81C0075A1B63A8F22F018945 /* SettingsShotProbe.swift */; };
+		EB542672D892D265B3724B18 /* LayoutProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE7E4CA496431AA25E487527 /* LayoutProbe.swift */; };
 		F0D06B4E758A2F503166B24E /* LauncherWindowCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5363485EFF16DF98D8CCB975 /* LauncherWindowCoordinator.swift */; };
 		F4C47C4D35D85CD8B30FE3FB /* DependencyContainer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 780898346943FE4934897076 /* DependencyContainer.swift */; };
 		F6C191167A2E4213B4251D81 /* LaunchPlatform in Frameworks */ = {isa = PBXBuildFile; productRef = 42E253C8CB0BA5EF8315FC9C /* LaunchPlatform */; };
@@ -58,6 +59,7 @@
 		DD3B97AB82BA34BFBECBC19A /* FolderProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FolderProbe.swift; sourceTree = "<group>"; };
 		E330AC7D7E44DC67CC602785 /* PageTestProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PageTestProbe.swift; sourceTree = "<group>"; };
 		F2B7C15B26E035D2F86D16C6 /* DiagnosticRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticRunner.swift; sourceTree = "<group>"; };
+		FE7E4CA496431AA25E487527 /* LayoutProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayoutProbe.swift; sourceTree = "<group>"; };
 		FE80D899386FA134055791B3 /* SmokeProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmokeProbe.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -118,6 +120,7 @@
 				A8DB7EDB939C825095D4B69F /* GridProbe.swift */,
 				82E562164F9BB08DB2E906F3 /* HotCornerProbe.swift */,
 				A0FFF73145C9A2D72A52E604 /* IconProbe.swift */,
+				FE7E4CA496431AA25E487527 /* LayoutProbe.swift */,
 				E330AC7D7E44DC67CC602785 /* PageTestProbe.swift */,
 				1B4157109522440A6D3DE67B /* PagingProbe.swift */,
 				41D011887390646903EE3FD2 /* SearchProbe.swift */,
@@ -217,6 +220,7 @@
 				675955509B1028D0217C78C8 /* IconProbe.swift in Sources */,
 				C7367F5C43E434A600DE07D2 /* LauncherStore.swift in Sources */,
 				F0D06B4E758A2F503166B24E /* LauncherWindowCoordinator.swift in Sources */,
+				EB542672D892D265B3724B18 /* LayoutProbe.swift in Sources */,
 				0B378C547F12199B13A4441B /* PageTestProbe.swift in Sources */,
 				A6AA30F397E682609E5C3255 /* PagingProbe.swift in Sources */,
 				79B6670C538DFA802D10D915 /* SearchProbe.swift in Sources */,

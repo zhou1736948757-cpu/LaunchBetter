@@ -19,6 +19,7 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
     private let searchField = NSSearchField()
     private var searchFieldWidthConstraint: NSLayoutConstraint?
     private var searchFieldHeightConstraint: NSLayoutConstraint?
+    private var settingsButtonView: SettingsButton?
     private var dragController: DragController?
     private var backgroundLayer = CALayer()
     private var dimLayer = CALayer()
@@ -119,6 +120,9 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
             grid.view.topAnchor.constraint(equalTo: root.topAnchor),
             grid.view.bottomAnchor.constraint(equalTo: root.bottomAnchor),
         ])
+        // 网格可用内容区: 顶部 = 安全区 + 搜索框偏移 + 搜索框实际高 + 安全间距;
+        // 底部 = 页点(24+12) + 底部安全间距。网格基于此垂直布局(不顶出搜索框/不压页点)。
+        applyContentInsets()
 
         searchField.delegate = self
         searchField.placeholderString = L10n.t(.searchPlaceholder)
@@ -145,6 +149,7 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         let settingsButton = SettingsButton()
         settingsButton.target = self
         settingsButton.action = #selector(settingsButtonTapped)
+        settingsButtonView = settingsButton
         root.addSubview(settingsButton)
         settingsButton.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
@@ -192,6 +197,8 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         guard let window, let launcherWindow = window as? LauncherWindow else { return }
         launcherWindow.showOnScreen(containing: NSEvent.mouseLocation)
         onVisibilityChange?(true)
+        // 换屏后安全区可能变化 → 重新应用可用内容区(搜索框/页点保留量)
+        applyContentInsets()
         // 语言可能已变更: 刷新本地化文案
         searchField.placeholderString = L10n.t(.searchPlaceholder)
         updateBackground(for: window)
@@ -213,6 +220,56 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
     }
 
     /// 壁纸背景: 内存命中同步应用(热显示零延迟), 否则后台渲染(§62 模式)。
+    /// 布局诊断(Stage v0.3.6): 设置按钮/搜索栏/网格首排坐标, 验证不重叠。
+    public func settingsButtonFrameDiagnostics() -> String {
+        guard let b = settingsButtonView else { return "nil" }
+        let bounds = b.bounds
+        let inWindow = b.convert(b.bounds, to: window?.contentView)
+        let constraints = b.constraints
+            .map { String(Int($0.constant)) }
+            .joined(separator: ",")
+        return "bounds=\(Int(bounds.width))x\(Int(bounds.height)) inContent=\(Int(inWindow.minX)),\(Int(inWindow.minY)) \(Int(inWindow.width))x\(Int(inWindow.height)) constraints=\(constraints)"
+    }
+
+    public func searchFieldFrameDiagnostics() -> String {
+        guard let contentView = window?.contentView else { return "nil" }
+        let f = searchField.convert(searchField.bounds, to: contentView)
+        return "top=\(Int(f.minY)) bottom=\(Int(f.maxY)) h=\(Int(f.height))"
+    }
+
+    public func gridFirstRowTopDiagnostics() -> String {
+        guard let grid = gridViewController else { return "nil" }
+        // 第一排(屏幕顶部)图标顶部屏幕 y = 窗口高 - (网格顶文档 y)
+        let docTop = grid.firstRowTopDocumentY()
+        let winH = window?.contentView?.bounds.height ?? 0
+        return "firstRowTopScreen=\(Int(winH - docTop)) doc=\(Int(docTop))"
+    }
+
+    public func contentInsetsDiagnostics() -> String {
+        gridViewController?.contentInsetsDiagnostics() ?? "nil"
+    }
+
+    /// 网格可用内容区保留量(唯一入口, v0.3.6)。
+    ///
+    /// 顶部保留 = 刘海安全区 + 搜索框顶部偏移(24) + 搜索框实际高度 + 搜索框与首排的安全间距(24);
+    /// 底部保留 = 页点交互区(24 高 + 12 底部偏移) + 底部安全间距(8) + 底部安全区。
+    /// 这些值喂给 GridGeometry(唯一几何真值), 网格在可用区内垂直居中。
+    private func currentContentInsets() -> (top: CGFloat, bottom: CGFloat) {
+        let screen = window?.screen ?? NSScreen.main
+        let safeTop = max(0, screen?.safeAreaInsets.top ?? 0)
+        let safeBottom = max(0, screen?.safeAreaInsets.bottom ?? 0)
+        let searchHeight = max(22, CGFloat(store.searchBarWidth) / 16)
+        let top = safeTop + 24 + searchHeight + 24
+        let bottom = safeBottom + (24 + 12) + 8
+        return (top, bottom)
+    }
+
+    /// 把当前保留量应用到网格(搜索框尺寸变化/窗口尺寸变化时重新应用)。
+    private func applyContentInsets() {
+        let insets = currentContentInsets()
+        gridViewController?.setContentInsets(top: insets.top, bottom: insets.bottom)
+    }
+
     /// 设置即时生效(Stage v0.3.4): 壁纸模糊强度 + 搜索栏大小。
     /// 由应用层在 onConfigChange 时调用(设置里改滑条立即反映)。
     public func reapplyVisualConfig() {
@@ -223,12 +280,17 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         let height = max(22, size / 16)
         searchFieldWidthConstraint?.constant = size
         searchFieldHeightConstraint?.constant = height
+        // 搜索框尺寸变化 → 顶部保留区变化 → 网格重排, 搜索框与首排保持稳定间距
+        applyContentInsets()
     }
 
     private func updateBackground(for window: NSWindow) {
         guard let provider = wallpaperProvider, let screen = window.screen else { return }
+        // 用窗口内容尺寸而非屏幕 frame: 壁纸精确覆盖整个窗口(避免上下边缘
+        // 尺寸不匹配露出未模糊区域, 用户实测反馈)
+        let coverFrame = window.contentView?.bounds ?? screen.frame
         let request = WallpaperProvider.RenderRequest(
-            screenFrame: screen.frame,
+            screenFrame: coverFrame,
             backingScale: window.backingScaleFactor,
             blurRadius: CGFloat(store.wallpaperBlurRadius)
         )

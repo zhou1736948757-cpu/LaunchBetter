@@ -61,6 +61,10 @@ enum DiagnosticRunner {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
                 PagingProbe.run(container: container)
             }
+        } else if CommandLine.arguments.contains("--layoutdiag") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                LayoutProbe.run(container: container)
+            }
         } else if CommandLine.arguments.contains("--hotcornerdiag") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
                 HotCornerProbe.run(container: container)
@@ -72,6 +76,13 @@ enum DiagnosticRunner {
         } else if CommandLine.arguments.contains("--gridtest") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
                 GridProbe.run(container: container)
+            }
+        } else if CommandLine.arguments.contains("--showstay") {
+            // 保持启动器显示(供外部 screencapture 截真实屏幕, 含 NSSearchField)。
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                container.windowController.show()
+                print("SHOWSTAY visible=\(container.windowController.isActuallyVisible)")
+                fflush(stdout)
             }
         } else if CommandLine.arguments.contains("--sourcesprobe") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {

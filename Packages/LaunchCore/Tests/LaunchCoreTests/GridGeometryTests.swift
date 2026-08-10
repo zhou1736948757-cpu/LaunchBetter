@@ -12,12 +12,15 @@ final class GridGeometryTests: XCTestCase {
         iconSize: CGFloat = 80,
         spacing: CGFloat = 28,
         pageWidth: CGFloat = 1200,
-        pageHeight: CGFloat = 800
+        pageHeight: CGFloat = 800,
+        topInset: CGFloat = 160,
+        bottomInset: CGFloat = 40
     ) -> GridGeometry {
         GridGeometry(
             columns: columns, rows: rows, cellSize: cellSize, iconSize: iconSize,
             horizontalSpacing: spacing, verticalSpacing: spacing,
-            pageWidth: pageWidth, pageHeight: pageHeight
+            pageWidth: pageWidth, pageHeight: pageHeight,
+            topInset: topInset, bottomInset: bottomInset
         )
     }
 
@@ -30,13 +33,13 @@ final class GridGeometryTests: XCTestCase {
     }
 
     func testGridExtentCentered() {
-        // 网格能放下时垂直居中(可用区 = 页高 - 顶部留白100 - 底部留白40)
-        let g = makeGeometry(columns: 7, rows: 6, pageWidth: 1200, pageHeight: 1000)
+        // 网格能放下时垂直居中(可用区 = 页高 - 顶部留白160 - 底部留白40)
+        let g = makeGeometry(columns: 7, rows: 6, pageWidth: 1200, pageHeight: 1200)
         // 网格宽 = 7*96 + 6*28 = 840; 网格高 = 6*96 + 5*28 = 716
         XCTAssertEqual(g.gridWidth, 840)
         XCTAssertEqual(g.gridHeight, 716)
         XCTAssertEqual(g.gridOrigin.x, (1200 - 840) / 2)
-        XCTAssertEqual(g.gridOrigin.y, (1000 - 716) / 2)
+        XCTAssertEqual(g.gridOrigin.y, (1200 - 716) / 2)
     }
 
     func testGridOverflowClampsTopInset() {
@@ -44,7 +47,34 @@ final class GridGeometryTests: XCTestCase {
         let g = makeGeometry(columns: 7, rows: 8, pageWidth: 1200, pageHeight: 800)
         // 8 行网格高 = 8*96 + 7*28 = 964 > 800-100-40=660 → 放不下
         let top = g.gridOrigin.y + g.gridHeight
-        XCTAssertEqual(top, 800 - 100) // 网格顶恰在搜索栏区域下缘, 不顶出搜索栏
+        XCTAssertEqual(top, 800 - 160) // 网格顶恰在搜索栏区域下缘(topInset 160), 不顶出搜索栏
+    }
+
+    // MARK: - 可用内容区(v0.3.6: 保留区参数化)
+
+    func testCustomTopInsetShiftsGridTop() {
+        // 自定义 topInset 生效: 网格放不下时顶 = pageHeight - topInset
+        let g = makeGeometry(columns: 7, rows: 8, pageWidth: 1200, pageHeight: 900, topInset: 200)
+        // 网格高 = 964 > 900 - 200 - 40 = 660 → 放不下 → 顶固定于保留区下缘
+        XCTAssertEqual(g.gridOrigin.y + g.gridHeight, 900 - 200)
+    }
+
+    func testContentInsetsCenterInAvailableArea() {
+        // 网格放得下时, 在 [bottomInset, pageHeight - topInset] 可用区内垂直居中
+        let g = makeGeometry(pageWidth: 1200, pageHeight: 1000, topInset: 120, bottomInset: 44)
+        // 网格高 = 716; centered = (1000-716)/2 = 142; 允许范围 [44, 1000-120-716=164]
+        XCTAssertEqual(g.gridOrigin.y, 142)
+        XCTAssertGreaterThanOrEqual(g.gridOrigin.y, 44)
+        XCTAssertLessThanOrEqual(g.gridOrigin.y + g.gridHeight, 1000 - 120)
+        // 网格顶位于保留区下缘之下(不与搜索框/页点冲突)
+        XCTAssertGreaterThan(g.gridOrigin.y, 120)
+    }
+
+    func testSearchModeIgnoresContentInsets() {
+        // 搜索模式顶部锚定(padding 24), 不受保留区影响 → 搜索结果不被搜索框遮挡
+        let g = makeGeometry(pageWidth: 1200, pageHeight: 800, topInset: 200, bottomInset: 60)
+        let frame = g.searchFrame(forIndex: 0, itemCount: 50)
+        XCTAssertEqual(frame.minY, 24)
     }
 
     // MARK: - frame(forSlot:in:)

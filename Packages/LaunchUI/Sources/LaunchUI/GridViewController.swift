@@ -65,13 +65,27 @@ final class GridViewController: NSViewController {
 
     /// 当前几何(拖拽/槽位计算用; 未 prepare 时用实时参数推算)。
     var geometry: GridGeometry {
-        (collectionView.collectionViewLayout as? PagingGridLayout)?.liveGeometry
+        let layout = collectionView.collectionViewLayout as? PagingGridLayout
+        return layout?.liveGeometry
             ?? GridGeometry(
                 columns: store.gridColumns, rows: store.gridRows,
                 cellSize: cellSize, iconSize: iconSize,
                 horizontalSpacing: horizontalSpacing, verticalSpacing: verticalSpacing,
-                pageWidth: collectionView?.bounds.width ?? 0, pageHeight: collectionView?.bounds.height ?? 0
+                pageWidth: collectionView?.bounds.width ?? 0, pageHeight: collectionView?.bounds.height ?? 0,
+                topInset: layout?.topInset ?? 160, bottomInset: layout?.bottomInset ?? 40
             )
+    }
+
+    /// 顶部/底部保留区(由窗口层计算: 顶部搜索框 + 底部页点)。
+    /// 保持 GridGeometry 唯一真值: 只更新布局的可用内容区, 重新 prepare。
+    func setContentInsets(top: CGFloat, bottom: CGFloat) {
+        gridLayout.setContentInsets(top: top, bottom: bottom)
+    }
+
+    /// 当前保留区(布局诊断)。
+    func contentInsetsDiagnostics() -> String {
+        let g = geometry
+        return "topInset=\(Int(g.topInset)) bottomInset=\(Int(g.bottomInset)) available=\(Int(max(0, g.pageHeight - g.topInset - g.bottomInset)))"
     }
 
     /// 滚动诊断(翻页调试)。
@@ -687,6 +701,12 @@ final class GridViewController: NSViewController {
         guard !searchMode else { return false }
         paging.isEnabled = true
         return paging.handleWheel(event)
+    }
+
+    /// 第一排(文档 y 最高行, 屏幕最上)图标顶部文档 y(布局诊断)。
+    func firstRowTopDocumentY() -> CGFloat {
+        let g = geometry
+        return g.gridOrigin.y + g.gridHeight
     }
 
     /// 分页交互诊断(v0.1.6 §63)。

@@ -51,15 +51,17 @@ public struct GridGeometry: Sendable, Equatable {
         CGFloat(rows) * cellSize + CGFloat(rows - 1) * verticalSpacing
     }
 
-    /// 顶部留白(pt): 搜索栏区域(网格不得顶出搜索栏, v0.3.4)。
+    /// 顶部保留区(pt): 搜索框占用(安全区 + 搜索框实际高度 + 间距), 网格不得顶出。
+    /// 由调用方(窗口层)基于真实布局计算传入, 非魔法数。
     public let topInset: CGFloat
 
-    /// 底部留白(pt): 页点区域。
+    /// 底部保留区(pt): 页点 + 底部安全间距, 网格不得压住页点。
     public let bottomInset: CGFloat
 
     /// 网格原点: 页内网格起点(页 0 文档坐标)。
-    /// 网格高度正常时垂直居中(限制在 [bottomInset, 顶部留白] 内);
-    /// 网格超高时顶部固定于 topInset 之下(不顶出搜索栏), 底部允许溢出。
+    /// 网格在 [bottomInset, pageHeight - topInset] 的**可用内容区**内垂直居中
+    /// (顶部已保留给搜索框, 底部已保留给页点);
+    /// 网格超高时顶部固定于 topInset 之下(不顶出搜索框), 底部允许溢出。
     public var gridOrigin: CGPoint {
         let centered = (pageHeight - gridHeight) / 2
         let minY = bottomInset
@@ -85,7 +87,9 @@ public struct GridGeometry: Sendable, Equatable {
         horizontalSpacing: CGFloat,
         verticalSpacing: CGFloat,
         pageWidth: CGFloat,
-        pageHeight: CGFloat
+        pageHeight: CGFloat,
+        topInset: CGFloat = 160,
+        bottomInset: CGFloat = 40
     ) {
         self.columns = max(1, columns)
         self.rows = max(1, rows)
@@ -95,8 +99,8 @@ public struct GridGeometry: Sendable, Equatable {
         self.verticalSpacing = verticalSpacing
         self.pageWidth = pageWidth
         self.pageHeight = pageHeight
-        self.topInset = 100
-        self.bottomInset = 40
+        self.topInset = max(0, topInset)
+        self.bottomInset = max(0, bottomInset)
     }
 
     /// 页 p 的文档坐标原点 x。

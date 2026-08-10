@@ -21,7 +21,14 @@
 
 ## Current Phase
 
-**v0.3.5 — 设置齿轮优化(玻璃/systemBlue/hover/pressed)。已安装 /Applications。**
+**v0.3.6 — 网格可用内容区 + 自定义 Settings 圆角正方形按钮。已完成构建与三包测试。**
+
+## v0.3.6 Changes
+
+- `GridGeometry` 接收运行时顶部/底部保留区; `PagingGridLayout` 基于搜索框与页点占用的可用内容区垂直布局。
+- 顶部保留区由 safe area、搜索框实际高度和安全间距计算; 底部保留区由页点区域、底部安全区和安全间距计算。
+- Settings 入口改为无 image 的自定义 CALayer 按钮: 40×40、cornerRadius 11、22pt systemBlue 齿轮、玻璃背景、hover/pressed。
+- 验证: LaunchCore 143、LaunchUI 56、LaunchPlatform 127 测试通过; Debug build 成功; 运行时 layoutdiag 显示搜索框底部到首排网格顶部约 23pt。
 
 ## v0.3.4 修复(用户实测)
 
