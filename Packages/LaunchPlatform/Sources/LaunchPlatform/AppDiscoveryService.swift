@@ -81,7 +81,42 @@ public enum AppDiscoveryService {
             bundleIdentifier: bundleIdentifier,
             displayName: displayName,
             infoPlistModificationDate: plistDate,
-            iconContentVersion: iconVersion
+            iconContentVersion: iconVersion,
+            localizedNames: localizedDisplayNames(from: url)
         )
+    }
+
+    /// 从 bundle 的 `Contents/Resources/*.lproj/InfoPlist.strings` 提取各本地化显示名。
+    ///
+    /// 键为 .lproj 目录名(如 "en" / "zh-Hans");每个本地化内按 macOS 语义
+    /// CFBundleDisplayName → CFBundleName 回退。无 / 畸形 strings 的本地化跳过。
+    /// 纯 catalog 元数据工作,非 per-launcher-show 路径。
+    static func localizedDisplayNames(from url: URL) -> [String: String] {
+        let resourcesDir = url
+            .appendingPathComponent("Contents", isDirectory: true)
+            .appendingPathComponent("Resources", isDirectory: true)
+        guard let lprojDirs = try? FileManager.default.contentsOfDirectory(
+            at: resourcesDir,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) else {
+            return [:]
+        }
+        var result: [String: String] = [:]
+        for dir in lprojDirs where dir.pathExtension == "lproj" {
+            let localization = dir.deletingPathExtension().lastPathComponent
+            guard let data = try? Data(contentsOf: dir.appendingPathComponent("InfoPlist.strings")),
+                  let strings = try? PropertyListSerialization.propertyList(
+                      from: data, options: [], format: nil
+                  ) as? [String: Any] else {
+                continue
+            }
+            let name = (strings["CFBundleDisplayName"] as? String)
+                ?? (strings["CFBundleName"] as? String)
+            if let name, !name.isEmpty {
+                result[localization] = name
+            }
+        }
+        return result
     }
 }

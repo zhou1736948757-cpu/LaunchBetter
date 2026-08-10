@@ -37,7 +37,7 @@ struct CatalogTests {
         #expect(decoded.apps.map(\.id.rawValue) == ["/A.app", "/Z.app"])
     }
 
-    @Test("schemaVersion = 1 且查询方法正确")
+    @Test("schemaVersion 与查询方法正确")
     func lookups() throws {
         let a = try record("/Applications/A.app")
         let snapshot = CatalogSnapshot(apps: [a])
@@ -45,6 +45,30 @@ struct CatalogTests {
         #expect(snapshot.contains(a.id))
         #expect(snapshot.app(with: a.id) == a)
         #expect(!snapshot.contains(try #require(AppID("/Applications/Nope.app"))))
+    }
+
+    @Test("旧版 v1 快照解码迁移(无 localizedNames 字段)")
+    func decodesLegacyV1Snapshot() throws {
+        let json = """
+        {
+          "schemaVersion": 1,
+          "apps": [
+            {
+              "id": "/Applications/A.app",
+              "url": "file:///Applications/A.app",
+              "bundleIdentifier": null,
+              "displayName": "A",
+              "infoPlistModificationDate": null,
+              "iconContentVersion": {}
+            }
+          ]
+        }
+        """
+        let decoded = try JSONDecoder().decode(CatalogSnapshot.self, from: Data(json.utf8))
+        #expect(decoded.schemaVersion == 1)
+        #expect(decoded.apps.count == 1)
+        #expect(decoded.apps[0].localizedNames.isEmpty)
+        #expect(decoded.apps[0].displayName == "A")
     }
 
     @Test("空 CatalogDelta 判定与字段")

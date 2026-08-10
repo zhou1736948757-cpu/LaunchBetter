@@ -192,7 +192,7 @@ public final class LauncherStore: LauncherStoring, LayoutMutationCompleting, Set
         for record in catalogSnapshot.apps {
             searchIndex.index(
                 record.id,
-                displayName: record.displayName,
+                displayName: resolvedDisplayName(for: record),
                 bundleIdentifier: record.bundleIdentifier,
                 customName: config.customDisplayNames[record.id]
             )
@@ -230,8 +230,18 @@ public final class LauncherStore: LauncherStoring, LayoutMutationCompleting, Set
         if let custom = config.customDisplayNames[appID] {
             return custom
         }
-        return catalogSnapshot.app(with: appID)?.displayName
-            ?? appID.rawValue.lastPathComponent
+        guard let record = catalogSnapshot.app(with: appID) else {
+            return appID.rawValue.lastPathComponent
+        }
+        return resolvedDisplayName(for: record)
+    }
+
+    /// 解析顺序: 本地化名(按当前语言) > 基础名。自定义名在 `displayName(for:)` 中先行。
+    private func resolvedDisplayName(for record: AppRecord) -> String {
+        record.localizedDisplayName(
+            language: config.language,
+            systemPreferredLanguages: Locale.preferredLanguages
+        ) ?? record.displayName
     }
 
     public func folderName(for folderID: FolderID) -> String {
@@ -447,9 +457,11 @@ public final class LauncherStore: LauncherStoring, LayoutMutationCompleting, Set
     // MARK: - SettingsHandling
 
     public func save(_ config: AppConfiguration) {
-        // 仅自定义显示名变化时重建搜索索引(§47-48);
+        // 仅自定义显示名或语言变化时重建搜索索引(§47-48, B1 语言切换即时更新);
         // gridRows/columns/iconSize/wallpaper/hotkey/hotcorner/hidden 等不重建。
-        let searchMetadataChanged = config.customDisplayNames != self.config.customDisplayNames
+        let searchMetadataChanged =
+            config.customDisplayNames != self.config.customDisplayNames
+            || config.language != self.config.language
         do {
             try settingsStore.save(config)
         } catch {
