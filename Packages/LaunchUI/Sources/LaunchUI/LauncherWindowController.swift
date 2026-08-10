@@ -141,24 +141,17 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
             searchFieldHeightConstraint!,
         ])
 
-        // 设置入口: 右上角齿轮(用户反馈"没有设置页面的进入框, 怎么改语言")。
-        let settingsButton = NSButton()
-        settingsButton.image = NSImage(
-            systemSymbolName: "gearshape",
-            accessibilityDescription: L10n.t(.settings)
-        )
-        settingsButton.bezelStyle = .texturedRounded
+        // 设置入口: 右上角玻璃齿轮(唯一设置入口, 简洁 macOS 风格)。
+        let settingsButton = SettingsButton()
         settingsButton.target = self
         settingsButton.action = #selector(settingsButtonTapped)
-        settingsButton.toolTip = L10n.t(.settings)
-        settingsButton.setAccessibilityLabel(L10n.t(.settings))
         root.addSubview(settingsButton)
         settingsButton.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
             settingsButton.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -16),
             settingsButton.topAnchor.constraint(equalTo: root.topAnchor, constant: 20 + topInset),
-            settingsButton.widthAnchor.constraint(equalToConstant: 36),
-            settingsButton.heightAnchor.constraint(equalToConstant: 36),
+            settingsButton.widthAnchor.constraint(equalToConstant: 40),
+            settingsButton.heightAnchor.constraint(equalToConstant: 40),
         ])
 
         window.contentView = root
