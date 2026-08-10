@@ -21,7 +21,17 @@
 
 ## Current Phase
 
-**Post-v0.2.3 整合(Stage A 架构+性能 / B 功能补齐 / C RC 硬化)完成 — 发布 v0.3.0。**
+**v0.3.1 — 设置入口 + 文件夹圆角正方形 + 吸附阈值 10%(用户反馈)。已安装 /Applications。**
+
+## v0.3.1 修复(用户实测)
+
+- 设置入口: 启动器右上角齿轮 → SettingsWindowController(之前无入口改语言;
+  根因 config.language 残留 english → 菜单英文 + 微信显示 WeChat)
+- 文件夹容器圆角正方形(原 96×80 矩形; iconFrame 改为 iconSize×iconSize 居中)
+- 文件夹按钮 .texturedRounded(去掉毛玻璃上的小框)
+- PagingTuning: displacementThreshold 0.15→0.10; flingMinimumDisplacementPages 0.12→0.05
+  (修复 fling 阈值>位移阈值致 fling 永不触发)
+- 测试: Core 140 / Platform 127 / UI 56; 探针 OK
 
 ## Stage A/B/C 成果(已验证)
 
