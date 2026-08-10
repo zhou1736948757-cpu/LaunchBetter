@@ -21,7 +21,23 @@
 
 ## Current Phase
 
-**v0.2.3 hardening — 已完成并发布。**
+**Stage A(Post-v0.2.3 架构+隐形性能整合)完成 — Luna 0B/0M PASS。进入 Stage B(功能补齐)。**
+
+## Stage A 成果(已验证)
+
+- A1 RetryBackoff: FSEvents/持久化重试 capped backoff[250ms..30s], 成功/新事件 reset
+- A2/A3/A4: drag 热路径去每帧 setDragSourceHidden + 每帧单次 hit-test(DragHitTarget);
+  snapshot index cache 测量后 defer(13.66us/call, 稳态 0 次)
+- A5/A6: DiskCacheWriter(actor, keyed dedup, 有界)磁盘写离首屏; live 不再双光栅化
+- A7: CellRootView 用 viewDidChangeBackingProperties(标准 API, 替代 per-cell 通知)
+- A8: 可点击页点 PageDotView(复用 startSettle, button 语义, 本地化 Page X of Y)
+- A9/A12: FolderViewController 去 reloadData(结构/元数据分离); LayoutStore rename 无假 DisplayModel
+- A10/A11: 诊断提取 Diagnostics/; DragController 拆 6 聚焦文件(单写者引擎保持)
+- A13: LauncherStoring 分解 DEFER(设计注记 Docs/DesignNotes/)
+- A14: DisplayItem 稳定身份(folder=FolderID, children=payload, 无假 delete/insert)
+- 测试: Core 77+119 / Platform 102 / UI 50; build OK; smoke/pagetest/folders OK
+- 报告/任务包: Docs/Tasks/* + Docs/DesignNotes/a13
+
 
 - 基线: `v0.2.2` / `9ee1264`
 - 发布分支: `main`
@@ -77,9 +93,8 @@
 
 ## Current Task
 
-- v0.2.3 已安装并完成 P0 人工验收；后续进入 parity gap 规划
-- 本阶段不扩展的 parity gap: 本地化应用名元数据、自定义来源完整流程、自定义热键录制器、
-  设置扩展、垂直布局
+- **Stage B(功能补齐)**: B1 本地化应用名 / B2 自定义来源 / B3 右键菜单 / B4 热键 / B5 设置 / B6 垂直布局(Luna 门)
+- 完成 Stage C(RC 硬化)后收尾
 
 ## Current Branch
 
