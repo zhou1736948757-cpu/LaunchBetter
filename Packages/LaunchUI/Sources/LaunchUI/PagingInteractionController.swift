@@ -44,8 +44,19 @@ final class PagingInteractionController {
     private var displayLink: CADisplayLink?
     private let animator = PageSnapAnimator()
 
-    // 搜索模式: 禁用分页交互。
-    var isEnabled = true
+    // 搜索模式: 禁用分页交互。禁用时中断在途手势/动画并停止 display link(§C4 停止路径),
+    // 防止 display link 在搜索模式下持续驱动, 无残留状态。
+    var isEnabled = true {
+        didSet {
+            guard !isEnabled else { return }
+            animator.cancel()
+            phase = .idle
+            stopDisplayLinkIfIdle()
+        }
+    }
+
+    /// 诊断/测试: display link 当前是否活动(§C4 生命周期验证)。
+    var isDisplayLinkActive: Bool { displayLink != nil }
 
     /// 创建 DisplayLink 所绑定的视图(macOS 14+ NSView.displayLink)。
     weak var linkView: NSView?

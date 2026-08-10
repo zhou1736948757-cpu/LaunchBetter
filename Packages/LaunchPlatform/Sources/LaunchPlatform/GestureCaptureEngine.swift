@@ -96,6 +96,10 @@ public final class GestureCaptureEngine: @unchecked Sendable {
         multitouch = nil
         lock.unlock()
         wrapper?.stopDevices()
+        // §C4 停止路径: 已停止引擎不得再向订阅者派发事件(含最终状态变化)。
+        onGesture = nil
+        onThreeFingerGesture = nil
+        onStatusChange = nil
         setStatus(.unavailable)
     }
 
