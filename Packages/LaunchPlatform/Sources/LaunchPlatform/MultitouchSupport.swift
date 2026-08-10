@@ -163,13 +163,14 @@ final class MultitouchSupport: @unchecked Sendable {
     ) -> StartResult {
         guard let listRef = deviceCreateList() else { return .noDevices }
         let list = listRef.takeUnretainedValue()
-        deviceList = list  // 持有 CFArray 生命周期
+        let count = CFArrayGetCount(list)
 
+        // 设备订阅生命周期与回调盒同一把锁串行(Luna M1): stop 的 deviceStop/unregister
+        // 完成前, 新 start 不得 register/deviceStart → 旧 teardown 不能停新 wrapper 的设备。
         contactCallbackLock.lock()
+        deviceList = list  // 持有 CFArray 生命周期
         contactCallbackBox = ContactCallbackBox(callback)
         contactCallbackOwner = owner
-        contactCallbackLock.unlock()
-        let count = CFArrayGetCount(list)
         var registered = 0
         for index in 0..<count {
             let value = CFArrayGetValueAtIndex(list, index)
@@ -178,11 +179,14 @@ final class MultitouchSupport: @unchecked Sendable {
             deviceStart(device, 0)
             registered += 1
         }
+        contactCallbackLock.unlock()
         return .ok(devices: registered)
     }
 
-    /// 停止并注销全部设备回调。仅当 owner 匹配时清空全局 box(防旧 wrapper 清新 owner 的 box)。
+    /// 停止并注销全部设备回调。与 register/start 同锁串行(防旧 teardown 停新订阅);
+    /// 仅 owner 匹配时清空全局 box(防旧 wrapper 清新 owner 的 box)。
     func stopDevices(owner: UInt64) {
+        contactCallbackLock.lock()
         if let list = deviceList {
             let count = CFArrayGetCount(list)
             for index in 0..<count {
@@ -193,7 +197,6 @@ final class MultitouchSupport: @unchecked Sendable {
             }
             deviceList = nil
         }
-        contactCallbackLock.lock()
         if contactCallbackOwner == owner {
             contactCallbackBox = nil
         }
