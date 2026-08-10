@@ -24,6 +24,8 @@ public final class GestureCaptureEngine: @unchecked Sendable {
     private var multitouch: MultitouchSupport?
     /// 设备生命周期 owner token: 每次 start 递增; stop 只清自己的回调 box(Luna M1-1)。
     private var deviceOwner: UInt64 = 0
+    /// 生命周期代数: stop 递增; restart 捕获后校验, 防 stop 后重启(意图竞态, Luna C5)。
+    private var lifecycleGeneration = 0
     private var analyzer = PinchAnalyzer()
     private var threeFinger = ThreeFingerDragRecognizer()
     private var pendingSamples: [ContactSample]?
@@ -144,6 +146,7 @@ public final class GestureCaptureEngine: @unchecked Sendable {
         onGestureStorage = nil
         onThreeFingerGestureStorage = nil
         onStatusChangeStorage = nil
+        lifecycleGeneration += 1
         setStatusLocked(.unavailable)
         let owner = deviceOwner
         lock.unlock()
@@ -259,10 +262,16 @@ public final class GestureCaptureEngine: @unchecked Sendable {
         let wrapper = multitouch
         multitouch = nil
         let owner = deviceOwner
+        let gen = lifecycleGeneration
         receivedAnyCallback = false
         hadDevices = false
         lock.unlock()
         wrapper?.stopDevices(owner: owner)
+        // 串行意图: 若 teardown 期间被 stop(gen 变化), 不重新启动。
+        lock.lock()
+        let stillCurrent = lifecycleGeneration == gen
+        lock.unlock()
+        guard stillCurrent else { return }
         start()
     }
 

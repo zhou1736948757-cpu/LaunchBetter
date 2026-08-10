@@ -51,7 +51,8 @@ struct GestureEngineLifecycleTests {
                 engine.stop()
             }
         }
-        _ = group.wait(timeout: .now() + 30)
+        let result = group.wait(timeout: .now() + 30)
+        #expect(result == .success, "并发生命周期压力未在时限内完成(可能死锁)")
         engine.stop()
         #expect(engine.currentStatus() == .unavailable)
         #expect(engine.onGesture == nil)
@@ -82,7 +83,8 @@ struct GestureEngineLifecycleTests {
                 engine.stop()
             }
         }
-        _ = group.wait(timeout: .now() + 30)
+        let result = group.wait(timeout: .now() + 30)
+        #expect(result == .success, "并发回调竞争未在时限内完成(可能死锁)")
         engine.stop()
         #expect(engine.onGesture == nil)
         #expect(engine.onThreeFingerGesture == nil)
