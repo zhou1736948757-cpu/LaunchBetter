@@ -8,6 +8,11 @@ import LaunchCore
 /// - 优雅不可用: 框架缺失/无设备 → isAvailable == false, 不崩溃
 /// - 输入监控权限缺失: 回调不到达 → 启动后无回调超时检测
 /// - 单一 MTDevice subscription, 按 finger count 路由: 3 指 → 三指拖动, 4+ 指 → pinch(Stage 2 §19)
+///
+/// 并发模型(C5 M1): 全部可变状态(回调属性 / wrapper / 状态 / 生命周期标志)由单一 NSLock 保护;
+/// 生命周期 start/stop/restart 在同一把锁内串行化(注册/注销设备亦在锁内, 消除交错窗口);
+/// 回调线程在锁内读取回调快照、锁外派发(避免持锁进入用户代码); running 标志使 stop 后的迟到
+/// 回调直接丢弃(不处理/不派发)。
 public final class GestureCaptureEngine: @unchecked Sendable {
     public enum Status: Sendable, Equatable {
         case unavailable          // 框架缺失或无设备
@@ -23,56 +28,86 @@ public final class GestureCaptureEngine: @unchecked Sendable {
     private var receivedAnyCallback = false
     /// 设备是否成功枚举(>0 = 授权已生效, 回调只在触摸时到达, 不能据此判断权限)
     private var hadDevices = false
+    /// 引擎是否在运行(stop/restart 先置 false; 迟到回调据此闸断不处理)。
+    private var running = false
     private var status: Status = .unavailable
     private var permissionWatchTimer: DispatchSourceTimer?
+    private var lastStartDetailStorage = "notStarted"
+
     /// 最近一次启动细节诊断。
-    public private(set) var lastStartDetail = "notStarted"
+    public var lastStartDetail: String {
+        lock.lock()
+        defer { lock.unlock() }
+        return lastStartDetailStorage
+    }
 
-    /// 手势事件回调(后台队列; 高频路径仅最新帧)。
-    public var onGesture: (@Sendable (GestureEvent) -> Void)?
+    private var onGestureStorage: (@Sendable (GestureEvent) -> Void)?
+    private var onThreeFingerGestureStorage: (@Sendable (ThreeFingerGestureEvent) -> Void)?
+    private var onStatusChangeStorage: (@Sendable (Status) -> Void)?
 
-    /// 三指拖动手势事件回调(后台线程; 与 pinch 同源、按 finger count 路由)。
-    public var onThreeFingerGesture: (@Sendable (ThreeFingerGestureEvent) -> Void)?
+    /// 手势事件回调(后台队列; 高频路径仅最新帧)。读写加锁(外部安装/卸载与回调线程读并发安全)。
+    public var onGesture: (@Sendable (GestureEvent) -> Void)? {
+        get { lock.lock(); defer { lock.unlock() }; return onGestureStorage }
+        set { lock.lock(); onGestureStorage = newValue; lock.unlock() }
+    }
 
-    /// 状态变化回调。
-    public var onStatusChange: (@Sendable (Status) -> Void)?
+    /// 三指拖动手势事件回调(后台线程; 与 pinch 同源、按 finger count 路由)。读写加锁。
+    public var onThreeFingerGesture: (@Sendable (ThreeFingerGestureEvent) -> Void)? {
+        get { lock.lock(); defer { lock.unlock() }; return onThreeFingerGestureStorage }
+        set { lock.lock(); onThreeFingerGestureStorage = newValue; lock.unlock() }
+    }
+
+    /// 状态变化回调。读写加锁。
+    public var onStatusChange: (@Sendable (Status) -> Void)? {
+        get { lock.lock(); defer { lock.unlock() }; return onStatusChangeStorage }
+        set { lock.lock(); onStatusChangeStorage = newValue; lock.unlock() }
+    }
 
     public init() {}
 
-    /// 启动(设备注册失败 → unavailable)。
+    /// 启动(设备注册失败 → unavailable)。整段临界区持锁: start/stop/restart 互斥,
+    /// 注册期间 stop 无法交错(消除 M1 交错窗口); 状态回调锁外派发。
     public func start() {
         lock.lock()
         guard multitouch == nil else {
             lock.unlock()
             return
         }
-        let wrapper = MultitouchSupport()
-        lock.unlock()
-        guard let wrapper else {
-            lastStartDetail = "dlopenFailed"
-            setStatus(.unavailable)
+        guard let wrapper = MultitouchSupport() else {
+            lastStartDetailStorage = "dlopenFailed"
+            hadDevices = false
+            running = false
+            let changed = setStatusLocked(.unavailable)
+            let callback = changed ? onStatusChangeStorage : nil
+            lock.unlock()
+            callback?(.unavailable)
             return
         }
-        lock.lock()
         multitouch = wrapper
-        lock.unlock()
-
         let result = wrapper.startDevices { [weak self] samples, timestamp in
             self?.receive(samples, timestamp: timestamp)
         }
+        let newStatus: Status
         switch result {
         case .ok(let devices):
-            lastStartDetail = "ok(devices=\(devices))"
+            lastStartDetailStorage = "ok(devices=\(devices))"
             hadDevices = true
-            setStatus(.running)
+            running = true
+            newStatus = .running
         case .noDevices:
-            lastStartDetail = "noDevices"
+            lastStartDetailStorage = "noDevices"
             hadDevices = false
-            setStatus(.unavailable)
+            running = false
+            multitouch = nil
+            wrapper.stopDevices()
+            newStatus = .unavailable
         case .dlopenFailed:
-            lastStartDetail = "dlopenFailed"
+            lastStartDetailStorage = "dlopenFailed"
             hadDevices = false
-            setStatus(.unavailable)
+            running = false
+            multitouch = nil
+            wrapper.stopDevices()
+            newStatus = .unavailable
         }
 
         // 输入监控权限检测: 启动后单次检查(3s 无回调 → waitingForPermission)。
@@ -83,24 +118,28 @@ public final class GestureCaptureEngine: @unchecked Sendable {
             self?.checkPermissionTimeout()
         }
         timer.resume()
-        lock.lock()
         permissionWatchTimer = timer
+
+        let changed = setStatusLocked(newStatus)
+        let callback = changed ? onStatusChangeStorage : nil
         lock.unlock()
+        callback?(newStatus)
     }
 
     public func stop() {
         lock.lock()
+        running = false
         permissionWatchTimer?.cancel()
         permissionWatchTimer = nil
         let wrapper = multitouch
         multitouch = nil
+        // C4: 停止路径清回调; 且 running=false 双保险, 迟到回调不派发。
+        onGestureStorage = nil
+        onThreeFingerGestureStorage = nil
+        onStatusChangeStorage = nil
+        setStatusLocked(.unavailable)
         lock.unlock()
         wrapper?.stopDevices()
-        // §C4 停止路径: 已停止引擎不得再向订阅者派发事件(含最终状态变化)。
-        onGesture = nil
-        onThreeFingerGesture = nil
-        onStatusChange = nil
-        setStatus(.unavailable)
     }
 
     // MARK: - 回调路径(系统线程, 125-250Hz)
@@ -110,20 +149,24 @@ public final class GestureCaptureEngine: @unchecked Sendable {
     private var debugAccumulatedNanoseconds: UInt64 = 0
     private var debugWindowStart = Date()
 
-    private func receive(_ samples: [ContactSample], timestamp: Double) {
+    func receive(_ samples: [ContactSample], timestamp: Double) {
         // 单次加锁: 更新最新帧 + 记录收到回调
         lock.lock()
+        // C5 M1: stop 后迟到回调直接丢弃(不处理/不派发)。
+        guard running else {
+            lock.unlock()
+            return
+        }
         receivedAnyCallback = true
         pendingSamples = samples
-
-        // 分析(纯计算, ~微秒级): 在回调线程就地执行, 不跳线程(§88/§90:
-        // 离散事件零额外线程开销; 无触点时无回调 → 空闲 CPU ≈ 0, §6)
         guard let frame = pendingSamples else {
             lock.unlock()
             return
         }
         pendingSamples = nil
 
+        // 分析(纯计算, ~微秒级): 在回调线程就地执行, 不跳线程(§88/§90:
+        // 离散事件零额外线程开销; 无触点时无回调 → 空闲 CPU ≈ 0, §6)
         let start = DispatchTime.now().uptimeNanoseconds
         var analyzer = self.analyzer
         let event = analyzer.process(contacts: frame, now: Date(timeIntervalSince1970: timestamp))
@@ -144,16 +187,12 @@ public final class GestureCaptureEngine: @unchecked Sendable {
             }
         }
         let elapsed = DispatchTime.now().uptimeNanoseconds - start
-        lock.unlock()
 
         if ProcessInfo.processInfo.environment["GESTURE_DEBUG"] != nil {
             debugFrameCount += 1
             debugAccumulatedNanoseconds += elapsed
-            let window = debugWindowStart
-            if Date().timeIntervalSince(window) >= 1.0 {
-                let perFrame = debugFrameCount > 0
-                    ? Double(debugAccumulatedNanoseconds) / Double(debugFrameCount) / 1_000
-                    : 0
+            if debugFrameCount > 0, Date().timeIntervalSince(debugWindowStart) >= 1.0 {
+                let perFrame = Double(debugAccumulatedNanoseconds) / Double(debugFrameCount) / 1_000
                 fputs("GESTURE_DEBUG frames/sec=\(debugFrameCount) analysis=\(String(format: "%.1f", perFrame))us/frame touches=\(samples.count)\n", stderr)
                 debugFrameCount = 0
                 debugAccumulatedNanoseconds = 0
@@ -161,11 +200,16 @@ public final class GestureCaptureEngine: @unchecked Sendable {
             }
         }
 
-        if let event {
-            onGesture?(event)
+        // C5 M1: 回调在锁内读取快照, 锁外派发(避免回调重入引擎锁)。
+        let gestureHandler = onGestureStorage
+        let threeFingerHandler = onThreeFingerGestureStorage
+        lock.unlock()
+
+        if let event, let gestureHandler {
+            gestureHandler(event)
         }
-        if let threeEvent, let onThreeFingerGesture {
-            onThreeFingerGesture(threeEvent)
+        if let threeEvent, let threeFingerHandler {
+            threeFingerHandler(threeEvent)
         }
     }
 
@@ -188,7 +232,9 @@ public final class GestureCaptureEngine: @unchecked Sendable {
         lock.lock()
         let received = receivedAnyCallback
         let devices = hadDevices
+        let isRunning = running
         lock.unlock()
+        guard isRunning else { return }
         // 仅当设备枚举为 0(权限缺失的典型表现)且无回调时提示;
         // 设备已枚举 → 授权已生效, 无回调只是用户尚未触摸(§90 回调驱动, 空闲零开销)
         if !received && !devices {
@@ -199,6 +245,7 @@ public final class GestureCaptureEngine: @unchecked Sendable {
     /// 重新注册设备(用户授权后调用)。
     public func restart() {
         lock.lock()
+        running = false
         permissionWatchTimer?.cancel()
         permissionWatchTimer = nil
         let wrapper = multitouch
@@ -210,14 +257,20 @@ public final class GestureCaptureEngine: @unchecked Sendable {
         start()
     }
 
-    private func setStatus(_ newStatus: Status) {
-        lock.lock()
+    /// 在锁已持有的前提下更新状态; 返回是否变化(调用方应于解锁后据此派发状态回调)。
+    @discardableResult
+    private func setStatusLocked(_ newStatus: Status) -> Bool {
         let changed = status != newStatus
         status = newStatus
+        return changed
+    }
+
+    private func setStatus(_ newStatus: Status) {
+        lock.lock()
+        let changed = setStatusLocked(newStatus)
+        let callback = changed ? onStatusChangeStorage : nil
         lock.unlock()
-        if changed {
-            onStatusChange?(newStatus)
-        }
+        callback?(newStatus)
     }
 
     /// 当前状态。

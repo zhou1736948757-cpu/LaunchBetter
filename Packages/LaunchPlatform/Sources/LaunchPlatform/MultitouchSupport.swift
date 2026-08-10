@@ -51,6 +51,9 @@ private typealias MTContactCallbackFn =
 
 // MARK: - 全局回调盒 + 非捕获 C 回调
 
+/// 全局盒锁(C5 M1): 同步 C 回调线程(读)与 start/stop(写)对 contactCallbackBox 的访问。
+private let contactCallbackLock = NSLock()
+
 /// 全局单盒承载用户闭包(回调签名无 context 参数, 应用内单一引擎实例)。
 private final class ContactCallbackBox {
     let closure: @Sendable ([ContactSample], Double) -> Void
@@ -63,7 +66,12 @@ private nonisolated(unsafe) var contactCallbackBox: ContactCallbackBox?
 
 /// 非捕获 C 回调(文件级: Swift 6 在类方法内定义带指针绑定的 @convention(c) 闭包会崩溃)
 private let contactCallback: MTContactCallbackFn = { _, touches, count, timestamp, _ in
-    guard let box = contactCallbackBox, count > 0 else { return 0 }
+    guard count > 0 else { return 0 }
+    // 锁内取盒快照, 锁外调用闭包(不持锁进入用户代码, 避免锁序死锁)。
+    contactCallbackLock.lock()
+    let box = contactCallbackBox
+    contactCallbackLock.unlock()
+    guard let box else { return 0 }
     let typed = touches.assumingMemoryBound(to: MTTouch.self)
     let buffer = UnsafeBufferPointer(start: typed, count: Int(count))
     var samples: [ContactSample] = []
@@ -152,7 +160,9 @@ final class MultitouchSupport: @unchecked Sendable {
         let list = listRef.takeUnretainedValue()
         deviceList = list  // 持有 CFArray 生命周期
 
+        contactCallbackLock.lock()
         contactCallbackBox = ContactCallbackBox(callback)
+        contactCallbackLock.unlock()
         let count = CFArrayGetCount(list)
         var registered = 0
         for index in 0..<count {
@@ -176,6 +186,8 @@ final class MultitouchSupport: @unchecked Sendable {
             unregisterCallback(device, contactCallback)
         }
         deviceList = nil
+        contactCallbackLock.lock()
         contactCallbackBox = nil
+        contactCallbackLock.unlock()
     }
 }
