@@ -10,20 +10,28 @@ public protocol SettingsHandling: AnyObject {
     var allApps: [(id: AppID, name: String)] { get }
 }
 
-/// 设置窗口(AppKit; SwiftUI 许可但保持本层一致性)。
+/// 设置窗口(AppKit; 与启动器一致深色毛玻璃风格)。
 @MainActor
 public final class SettingsWindowController: NSWindowController {
     private let handler: any SettingsHandling
 
+    /// 由启动器作为 child window 挂载(浮在启动器上方, 启动器不退出)。
+    public weak var launcherWindow: NSWindow?
+
     public init(handler: any SettingsHandling) {
         self.handler = handler
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 560, height: 520),
-            styleMask: [.titled, .closable],
+            contentRect: NSRect(x: 0, y: 0, width: 760, height: 680),
+            styleMask: [.titled, .closable, .resizable],
             backing: .buffered,
             defer: false
         )
         window.title = L10n.t(.settingsTitle)
+        // 与启动器一致的深色毛玻璃风格(用户反馈原窗口微蓝/小/看不清)
+        window.appearance = NSAppearance(named: .darkAqua)
+        window.backgroundColor = .clear
+        window.isOpaque = false
+        window.titlebarAppearsTransparent = true
         super.init(window: window)
         buildContent()
     }
@@ -32,9 +40,27 @@ public final class SettingsWindowController: NSWindowController {
         fatalError("init(coder:) has not been implemented")
     }
 
+    /// 显示(由启动器先 addChildWindow 再调用; 关闭时自动从父窗口移除)。
     public func show() {
-        window?.center()
-        window?.makeKeyAndOrderFront(nil)
+        guard let window else { return }
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    /// 关闭(含窗口关闭按钮)时从启动器父窗口移除 child。
+    public override func close() {
+        if let launcherWindow {
+            launcherWindow.removeChildWindow(window!)
+        }
+        super.close()
+    }
+
+    deinit {
+        // 兜底: 若关闭按钮直接销毁, 从父窗口移除
+        if let launcherWindow, let window {
+            MainActor.assumeIsolated {
+                launcherWindow.removeChildWindow(window)
+            }
+        }
     }
 
     // MARK: - UI
@@ -58,9 +84,14 @@ public final class SettingsWindowController: NSWindowController {
 
     private func buildContent() {
         guard let window else { return }
-        let root = NSView()
-        window.contentView = root
+        // 毛玻璃背景(与启动器一致)
+        let effect = NSVisualEffectView()
+        effect.material = .hudWindow
+        effect.blendingMode = .behindWindow
+        effect.state = .active
+        window.contentView = effect
 
+        let root = effect
         let grid = NSGridView(views: [])
         grid.rowSpacing = 8
         grid.columnSpacing = 12
@@ -130,7 +161,7 @@ public final class SettingsWindowController: NSWindowController {
         // 布局: 分两列 section
         let sectionLabel = { (text: String) -> NSTextField in
             let label = NSTextField(labelWithString: text)
-            label.font = .boldSystemFont(ofSize: 13)
+            label.font = .boldSystemFont(ofSize: 15)
             return label
         }
 
@@ -184,7 +215,9 @@ public final class SettingsWindowController: NSWindowController {
     }
 
     private func row(_ title: String, _ view: NSView) -> NSStackView {
-        let stack = NSStackView(views: [NSTextField(labelWithString: title), view])
+        let label = NSTextField(labelWithString: title)
+        label.font = .systemFont(ofSize: 13)
+        let stack = NSStackView(views: [label, view])
         stack.spacing = 8
         return stack
     }

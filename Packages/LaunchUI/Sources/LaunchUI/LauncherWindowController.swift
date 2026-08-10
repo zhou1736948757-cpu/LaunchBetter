@@ -30,6 +30,14 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
     /// 打开设置回调(由应用层接线到 SettingsWindowController)。
     public var onOpenSettings: (() -> Void)?
 
+    /// 把设置窗口作为启动器的 child window 挂载(浮在启动器上方, 启动器不退出)。
+    /// 由应用层把 settingsController.launcherWindow 设为本窗口后调用。
+    public func presentSettingsWindow(_ settingsWindow: NSWindow) {
+        guard let window else { return }
+        window.addChildWindow(settingsWindow, ordered: .above)
+        settingsWindow.makeKeyAndOrderFront(nil)
+    }
+
     public init(
         store: any LauncherStoring,
         iconProvider: (any IconImageProviding)?,
@@ -57,7 +65,9 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
             queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated {
-                guard NSApp.modalWindow == nil, window.attachedSheet == nil else { return }
+                // 设置窗口作为 child 挂载时其成为 key → 父 resign key, 不得隐藏启动器。
+                guard NSApp.modalWindow == nil, window.attachedSheet == nil,
+                      window.childWindows == nil || window.childWindows!.isEmpty else { return }
                 self?.hide()
             }
         }
