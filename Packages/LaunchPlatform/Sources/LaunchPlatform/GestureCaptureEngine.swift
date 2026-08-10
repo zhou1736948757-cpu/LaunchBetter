@@ -22,6 +22,8 @@ public final class GestureCaptureEngine: @unchecked Sendable {
 
     private let lock = NSLock()
     private var multitouch: MultitouchSupport?
+    /// 设备生命周期 owner token: 每次 start 递增; stop 只清自己的回调 box(Luna M1-1)。
+    private var deviceOwner: UInt64 = 0
     private var analyzer = PinchAnalyzer()
     private var threeFinger = ThreeFingerDragRecognizer()
     private var pendingSamples: [ContactSample]?
@@ -84,9 +86,14 @@ public final class GestureCaptureEngine: @unchecked Sendable {
             return
         }
         multitouch = wrapper
-        let result = wrapper.startDevices { [weak self] samples, timestamp in
-            self?.receive(samples, timestamp: timestamp)
-        }
+        deviceOwner &+= 1
+        let owner = deviceOwner
+        let result = wrapper.startDevices(
+            callback: { [weak self] samples, timestamp in
+                self?.receive(samples, timestamp: timestamp)
+            },
+            owner: owner
+        )
         let newStatus: Status
         switch result {
         case .ok(let devices):
@@ -99,14 +106,14 @@ public final class GestureCaptureEngine: @unchecked Sendable {
             hadDevices = false
             running = false
             multitouch = nil
-            wrapper.stopDevices()
+            wrapper.stopDevices(owner: deviceOwner)
             newStatus = .unavailable
         case .dlopenFailed:
             lastStartDetailStorage = "dlopenFailed"
             hadDevices = false
             running = false
             multitouch = nil
-            wrapper.stopDevices()
+            wrapper.stopDevices(owner: deviceOwner)
             newStatus = .unavailable
         }
 
@@ -138,8 +145,9 @@ public final class GestureCaptureEngine: @unchecked Sendable {
         onThreeFingerGestureStorage = nil
         onStatusChangeStorage = nil
         setStatusLocked(.unavailable)
+        let owner = deviceOwner
         lock.unlock()
-        wrapper?.stopDevices()
+        wrapper?.stopDevices(owner: owner)
     }
 
     // MARK: - 回调路径(系统线程, 125-250Hz)
@@ -250,10 +258,11 @@ public final class GestureCaptureEngine: @unchecked Sendable {
         permissionWatchTimer = nil
         let wrapper = multitouch
         multitouch = nil
+        let owner = deviceOwner
         receivedAnyCallback = false
         hadDevices = false
         lock.unlock()
-        wrapper?.stopDevices()
+        wrapper?.stopDevices(owner: owner)
         start()
     }
 

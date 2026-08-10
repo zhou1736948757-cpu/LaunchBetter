@@ -63,6 +63,8 @@ private final class ContactCallbackBox {
 }
 
 private nonisolated(unsafe) var contactCallbackBox: ContactCallbackBox?
+/// box 的 owner token: 只有 owner 匹配的 stopDevices 才清空(防旧 wrapper 清新 box, Luna M1-1)。
+private nonisolated(unsafe) var contactCallbackOwner: UInt64 = 0
 
 /// 非捕获 C 回调(文件级: Swift 6 在类方法内定义带指针绑定的 @convention(c) 闭包会崩溃)
 private let contactCallback: MTContactCallbackFn = { _, touches, count, timestamp, _ in
@@ -155,13 +157,17 @@ final class MultitouchSupport: @unchecked Sendable {
 
     /// 枚举设备并注册回调(回调在系统线程到达, 非主线程)。
     @discardableResult
-    func startDevices(callback: @escaping @Sendable ([ContactSample], Double) -> Void) -> StartResult {
+    func startDevices(
+        callback: @escaping @Sendable ([ContactSample], Double) -> Void,
+        owner: UInt64
+    ) -> StartResult {
         guard let listRef = deviceCreateList() else { return .noDevices }
         let list = listRef.takeUnretainedValue()
         deviceList = list  // 持有 CFArray 生命周期
 
         contactCallbackLock.lock()
         contactCallbackBox = ContactCallbackBox(callback)
+        contactCallbackOwner = owner
         contactCallbackLock.unlock()
         let count = CFArrayGetCount(list)
         var registered = 0
@@ -175,19 +181,22 @@ final class MultitouchSupport: @unchecked Sendable {
         return .ok(devices: registered)
     }
 
-    /// 停止并注销全部设备回调。
-    func stopDevices() {
-        guard let list = deviceList else { return }
-        let count = CFArrayGetCount(list)
-        for index in 0..<count {
-            let value = CFArrayGetValueAtIndex(list, index)
-            let device = unsafeBitCast(value, to: MTDeviceRef.self)
-            deviceStop(device, 0)
-            unregisterCallback(device, contactCallback)
+    /// 停止并注销全部设备回调。仅当 owner 匹配时清空全局 box(防旧 wrapper 清新 owner 的 box)。
+    func stopDevices(owner: UInt64) {
+        if let list = deviceList {
+            let count = CFArrayGetCount(list)
+            for index in 0..<count {
+                let value = CFArrayGetValueAtIndex(list, index)
+                let device = unsafeBitCast(value, to: MTDeviceRef.self)
+                deviceStop(device, 0)
+                unregisterCallback(device, contactCallback)
+            }
+            deviceList = nil
         }
-        deviceList = nil
         contactCallbackLock.lock()
-        contactCallbackBox = nil
+        if contactCallbackOwner == owner {
+            contactCallbackBox = nil
+        }
         contactCallbackLock.unlock()
     }
 }
