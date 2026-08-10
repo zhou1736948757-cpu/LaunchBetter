@@ -21,7 +21,19 @@
 
 ## Current Phase
 
-**v0.3.1 — 设置入口 + 文件夹圆角正方形 + 吸附阈值 10%(用户反馈)。已安装 /Applications。**
+**v0.3.3 — 系统性中文名修复(语言代码规范化) + 设置 sliders + 热角放大。已安装 /Applications。**
+
+## v0.3.3 修复(用户实测)
+
+- AppRecord 语言代码规范化(zh_CN/zh_TW/zh-CN → zh-Hans/zh-Hant 族):
+  系统性修复所有同类应用中文名(百度网盘/微信等, 非单点)
+- 设置窗口 isOpaque 深色背景(红绿灯在面板内)
+- 壁纸模糊强度 slider(0-60, 接入 WallpaperProvider.blurRadius)
+- 搜索栏宽度 slider(200-600)
+- 热角容差 10→24pt(之前太小难触发)
+- 设置齿轮 28→36
+- 点击设置面板外关闭设置
+- 测试: Core 143 / Platform 127 / UI 56
 
 ## v0.3.1 修复(用户实测)
 
