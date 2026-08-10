@@ -27,6 +27,9 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
     /// 可见性变化回调(三指拖动等按面板显示启用, Stage 2)。
     public var onVisibilityChange: ((Bool) -> Void)?
 
+    /// 打开设置回调(由应用层接线到 SettingsWindowController)。
+    public var onOpenSettings: (() -> Void)?
+
     public init(
         store: any LauncherStoring,
         iconProvider: (any IconImageProviding)?,
@@ -120,6 +123,26 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
             searchField.widthAnchor.constraint(equalToConstant: 320),
         ])
 
+        // 设置入口: 右上角齿轮(用户反馈"没有设置页面的进入框, 怎么改语言")。
+        let settingsButton = NSButton()
+        settingsButton.image = NSImage(
+            systemSymbolName: "gearshape",
+            accessibilityDescription: L10n.t(.settings)
+        )
+        settingsButton.bezelStyle = .texturedRounded
+        settingsButton.target = self
+        settingsButton.action = #selector(settingsButtonTapped)
+        settingsButton.toolTip = L10n.t(.settings)
+        settingsButton.setAccessibilityLabel(L10n.t(.settings))
+        root.addSubview(settingsButton)
+        settingsButton.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            settingsButton.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -16),
+            settingsButton.topAnchor.constraint(equalTo: root.topAnchor, constant: 20 + topInset),
+            settingsButton.widthAnchor.constraint(equalToConstant: 28),
+            settingsButton.heightAnchor.constraint(equalToConstant: 28),
+        ])
+
         window.contentView = root
         (window as? LauncherWindow)?.onKeyDown = { [weak self] event in
             self?.handleKeyDown(event)
@@ -142,6 +165,10 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
             return true
         }
         return false
+    }
+
+    @objc private func settingsButtonTapped() {
+        onOpenSettings?()
     }
 
     // MARK: - 显示 / 隐藏

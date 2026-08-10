@@ -211,8 +211,13 @@ final class AppCellView: NSCollectionViewItem {
     private func layoutIconAndLabel() {
         let bounds = view.bounds
         let size = CGFloat(iconPointSize)
+        // 图标/文件夹容器统一为正方形(边长 = iconSize), 水平居中。
+        // 原实现宽 = 单元格宽 → 文件夹容器呈矩形(用户反馈); App 图标因 resizeAspect
+        // 不显形, 文件夹背景则暴露为矩形。
         var iconFrame = bounds
         iconFrame.size.height = size
+        iconFrame.size.width = size
+        iconFrame.origin.x = (bounds.width - size) / 2
         iconFrame.origin.y = bounds.height - size
         // frame 在非 identity transform 下是派生值；改写 bounds/position 可保证
         // App B 高亮缩放期间重新布局仍稳定。

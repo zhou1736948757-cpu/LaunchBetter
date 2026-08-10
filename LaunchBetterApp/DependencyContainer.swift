@@ -156,6 +156,11 @@ public final class DependencyContainer {
         self.threeFingerCoordinator = threeFinger
 
         // 设置窗口
-        self.settingsController = SettingsWindowController(handler: store)
+        let settingsController = SettingsWindowController(handler: store)
+        self.settingsController = settingsController
+        // 启动器右上角齿轮 → 打开设置(用户反馈缺设置入口, 无法改语言)
+        windowController.onOpenSettings = { [weak settingsController] in
+            settingsController?.show()
+        }
     }
 }

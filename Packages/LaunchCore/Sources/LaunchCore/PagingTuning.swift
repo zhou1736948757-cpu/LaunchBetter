@@ -19,11 +19,12 @@ public enum PagingTuning {
     public static let followSensitivity: CGFloat = 1.3
 
     /// 松手吸附: 位移达到页宽的该比例即翻页。
-    /// v0.1.11: 用户实机调参, 0.18 → 0.15。
-    public static let displacementThreshold: CGFloat = 0.15
+    /// v0.3.1: 用户反馈, 0.15 → 0.10(滑 10% 页宽即翻页)。
+    public static let displacementThreshold: CGFloat = 0.10
 
     /// 松手吸附: fling 最小方向性位移(页宽比例), 防止零位移误翻。
-    public static let flingMinimumDisplacementPages: CGFloat = 0.12
+    /// v0.3.1: 0.12 → 0.05(必须 < displacementThreshold 0.10, 否则 fling 永不触发)。
+    public static let flingMinimumDisplacementPages: CGFloat = 0.05
 
     /// 松手吸附: fling 速度阈值(pt/s)。
     /// v0.1.12: 900 → 650(中等速度一甩即翻, 缓解"划不动")。

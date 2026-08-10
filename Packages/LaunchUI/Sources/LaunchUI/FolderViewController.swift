@@ -117,7 +117,7 @@ final class FolderViewController: NSViewController {
             title: L10n.t(.dissolveFolder), target: self, action: #selector(dissolveTapped)
         )
         self.dissolveButton = dissolveButton
-        dissolveButton.bezelStyle = .rounded
+        dissolveButton.bezelStyle = .texturedRounded
         dissolveButton.setAccessibilityHelp(L10n.t(.dissolveFolder))
         card.addSubview(dissolveButton)
         dissolveButton.translatesAutoresizingMaskIntoConstraints = false
@@ -130,7 +130,7 @@ final class FolderViewController: NSViewController {
             title: L10n.t(.rename), target: self, action: #selector(renameTapped)
         )
         self.renameButton = renameButton
-        renameButton.bezelStyle = .rounded
+        renameButton.bezelStyle = .texturedRounded
         renameButton.setAccessibilityHelp(L10n.t(.renameFolderHelp))
         card.addSubview(renameButton)
         renameButton.translatesAutoresizingMaskIntoConstraints = false
