@@ -102,6 +102,14 @@ enum DiagnosticRunner {
                 if CommandLine.arguments.contains("--folder-mode") {
                     let opened = container.windowController.openFirstFolderForDiagnostic()
                     print("SHOWSTAY folder=\(opened)")
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                        container.windowController.diagnosticFolderStartTitleEdit()
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                            let state = container.windowController.diagnosticFolderTitleEditState()
+                            print("SHOWSTAY titleEdit=\(state)")
+                            fflush(stdout)
+                        }
+                    }
                 }
                 if CommandLine.arguments.contains("--hover-settings") {
                     container.windowController.movePointerToSettingsButtonForDiagnostic()

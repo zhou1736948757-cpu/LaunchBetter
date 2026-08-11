@@ -591,12 +591,47 @@ final class FolderViewController: NSViewController, NSTextFieldDelegate {
         editor.focusRingType = .none
         editor.delegate = self
         editor.autoresizingMask = []
+        // 编辑态视觉提示: 浅色圆角底, 明确"已进入可编辑状态"; 聚焦后 field editor
+        // 提供光标闪烁。
+        editor.wantsLayer = true
+        editor.layer?.cornerRadius = 6
+        editor.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.14).cgColor
         card.addSubview(editor, positioned: .above, relativeTo: titleLabel)
         titleLabel.isHidden = true
         applyTitlePressFeedback(false)
         editField = editor
-        view.window?.makeFirstResponder(editor)
-        editor.currentEditor()?.selectAll(nil)
+        // 长按仍在鼠标事件序列中(mouseUp 未到)。延迟到事件序列结束后再聚焦,
+        // 避免在途 mouseUp 打断 first responder / field editor。
+        DispatchQueue.main.async { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, let editor = self.editField,
+                      editor.superview != nil else { return }
+                self.madeTitleEditorFirstResponder =
+                    self.view.window?.makeFirstResponder(editor) ?? false
+                editor.currentEditor()?.selectAll(nil)
+            }
+        }
+    }
+
+    /// 诊断: 最近一次 makeFirstResponder 是否成功。
+    private var madeTitleEditorFirstResponder = false
+
+    /// 诊断: 手动进入标题编辑(供 probe 验证聚焦/光标)。
+    func startTitleEditingForDiagnostic() {
+        beginTitleEditing()
+    }
+
+    /// 诊断: 编辑状态(firstResponder / field editor / frame / editable)。
+    func diagnosticTitleEditState() -> String {
+        guard let editor = editField else {
+            return "no-editing title=\(titleLabel.text) titleFrame=\(titleLabel.frame) intrinsic=\(titleLabel.intrinsicContentSize)"
+        }
+        let fr = view.window?.firstResponder
+        let isEditor = fr === editor
+        let isFieldEditor = (fr as? NSTextView) != nil
+        let ce = editor.currentEditor() != nil
+        let frDesc = fr.map { String(describing: type(of: $0)) } ?? "nil"
+        return "editing=true madeFR=\(madeTitleEditorFirstResponder) isEditor=\(isEditor) isFieldEditor=\(isFieldEditor) fr=\(frDesc) currentEditor=\(ce) frame=\(editor.frame) editable=\(editor.isEditable) title=\(titleLabel.text) intrinsic=\(titleLabel.intrinsicContentSize)"
     }
 
     /// 结束内联编辑。commit=false 取消并恢复原标题。
@@ -745,6 +780,12 @@ final class FolderTitleView: NSView {
         ])
     }
 
+    // NSView 默认无内在尺寸: 若缺失, Auto Layout 会把本容器塌缩成很窄,
+    // 标题/编辑器文字被截断(最后一个字消失)。按内部 label 撑开。
+    override var intrinsicContentSize: NSSize {
+        label.intrinsicContentSize
+    }
+
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }
@@ -754,6 +795,7 @@ final class FolderTitleView: NSView {
         set {
             label.stringValue = newValue
             label.setAccessibilityLabel(L10n.format(.folderLabel, newValue))
+            invalidateIntrinsicContentSize()
         }
     }
 
