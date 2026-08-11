@@ -161,10 +161,12 @@ public final class DependencyContainer {
         self.settingsController = settingsController
         // 启动器右上角齿轮 → 打开设置: 作为启动器 child window(浮在上方, 启动器不退出)
         windowController.settingsController = settingsController
-        windowController.onOpenSettings = { [weak windowController, weak settingsController] in
-            guard let windowController, let settingsController, let sw = settingsController.window else { return }
+        windowController.onOpenSettings = { [weak windowController, weak settingsController] sourcePoint in
+            guard let windowController,
+                  let settingsController,
+                  let sw = settingsController.window else { return }
             settingsController.launcherWindow = windowController.window
-            windowController.presentSettingsWindow(sw)
+            windowController.presentSettingsWindow(sw, from: sourcePoint)
         }
     }
 }

@@ -28,6 +28,32 @@ enum DragHitTarget: Equatable {
     }
 }
 
+/// Folder source 的纯 revision seam。捕获 token 前先同步 GridGeometry；后续动画帧
+/// 只比较 UInt64，不重新查询 NSView、Store 或 diffable data source。
+struct FolderTransitionSourceRevision {
+    private(set) var value: UInt64 = 0
+    private(set) var geometry: GridGeometry?
+
+    mutating func invalidate() {
+        value &+= 1
+    }
+
+    mutating func synchronizeGeometry(_ current: GridGeometry) {
+        guard geometry != current else { return }
+        geometry = current
+        invalidate()
+    }
+
+    mutating func capture(synchronizing current: GridGeometry) -> UInt64 {
+        synchronizeGeometry(current)
+        return value
+    }
+
+    func isCurrent(_ token: UInt64) -> Bool {
+        value == token
+    }
+}
+
 /// 网格视图控制器: NSCollectionView + DiffableDataSource + 分页导航。
 ///
 /// 两种模式:
@@ -52,6 +78,8 @@ final class GridViewController: NSViewController {
     private var collectionView: NSCollectionView!
     private var scrollView: NSScrollView!
     private var dataSource: NSCollectionViewDiffableDataSource<Int, Item>!
+    private var cachedDisplayItems: [Item] = []
+    private var cachedSectionCounts: [Int] = []
     private var currentPage = 0
     private var pageCount = 1
     /// 当前页(诊断)。
@@ -79,7 +107,12 @@ final class GridViewController: NSViewController {
     /// 顶部/底部保留区(由窗口层计算: 顶部搜索框 + 底部页点)。
     /// 保持 GridGeometry 唯一真值: 只更新布局的可用内容区, 重新 prepare。
     func setContentInsets(top: CGFloat, bottom: CGFloat) {
+        if gridLayout.topInset != max(0, top) || gridLayout.bottomInset != max(0, bottom) {
+            dragController?.invalidateActiveSessionForDisplayChange()
+        }
         gridLayout.setContentInsets(top: top, bottom: bottom)
+        updateFolderTransitionGeometryRevision()
+        refreshCellsIfEffectivePointSizeChanged()
     }
 
     /// 进入 Folder/Settings 覆盖层: 暂停分页状态机, 停止在途 settle/display link。
@@ -111,6 +144,8 @@ final class GridViewController: NSViewController {
     }
     private var searchMode = false
     private var lastAppliedLanguage = L10n.currentLanguage
+    /// 最近一次用来配置 AppCell/预热图标的有效 pointSize, 防止布局回调循环 reload。
+    private var lastConfiguredEffectivePointSize: Int?
     /// 退出搜索后恢复的页码。
     private var pagedPageBeforeSearch = 0
 
@@ -154,6 +189,9 @@ final class GridViewController: NSViewController {
 
     /// 上次应用的显示修订(无变化跳过 full snapshot, Stage 1 §30)。
     private var lastAppliedRevision: UInt64 = .max
+
+    /// Folder source 的离散布局/显示修订；过渡帧只读取这个缓存值，不访问 Store。
+    private var folderTransitionRevision = FolderTransitionSourceRevision()
 
     /// 上次应用的文件夹 payload(可见子项, §A14)。子项变化只 reload 对应 folder
     /// item(identity 不变 → 无 delete/insert、无 flicker), 不整表重建。
@@ -204,7 +242,7 @@ final class GridViewController: NSViewController {
         ])
         pageDots = dots
 
-        // 分页滚动: 集合视图必须包在 NSScrollView 中(否则 scrollToPage 是空操作,
+        // 分页滚动: 集合视图必须包在 NSScrollView 中(否则分页滚动是空操作,
         // 用户只能看到第一页 — 这是"看不到后两页"的根因)
         let scrollView = NSScrollView()
         scrollView.drawsBackground = false
@@ -239,6 +277,8 @@ final class GridViewController: NSViewController {
         super.viewDidLayout()
         // 文档视图 frame 必须等于布局 contentSize(否则滚动范围只有一页宽)
         updateDocumentFrame()
+        refreshCellsIfEffectivePointSizeChanged()
+        updateFolderTransitionGeometryRevision()
     }
 
     /// 同步集合视图 frame 到布局 contentSize(分页滚动的前提; 搜索模式高度也跟随)。
@@ -268,7 +308,7 @@ final class GridViewController: NSViewController {
 
     private func configure(_ cell: AppCellView?, with item: Item) {
         guard let cell else { return }
-        let pointSize = Int(iconSize)
+        let pointSize = liveEffectivePointSize()
         switch item {
         case .app(let id):
             cell.configure(
@@ -301,6 +341,28 @@ final class GridViewController: NSViewController {
         abs(key.unicodeScalars.reduce(0) { $0 &+ Int($1.value) }) % 12
     }
 
+    /// 配置和预热必须使用同一请求值；有效值始终来自布局实时 geometry，
+    /// 而不是 store 的 raw iconSize。向下取整避免图标反向撑破已适配的 cell。
+    private func liveEffectivePointSize() -> Int {
+        let iconSize = gridLayout.liveGeometry.iconSize
+        guard iconSize.isFinite else { return 1 }
+        return max(1, Int(iconSize.rounded(.down)))
+    }
+
+    private func refreshCellsIfEffectivePointSizeChanged() {
+        guard collectionView != nil else { return }
+        let pointSize = liveEffectivePointSize()
+        guard lastConfiguredEffectivePointSize != pointSize else { return }
+        lastConfiguredEffectivePointSize = pointSize
+        collectionView.reloadData()
+    }
+
+    /// 只在有效几何真的变化时失效已捕获的 Folder source。
+    /// viewDidLayout 可能在同一几何下重复调用，不能把每次布局都当作失效。
+    private func updateFolderTransitionGeometryRevision() {
+        folderTransitionRevision.synchronizeGeometry(gridLayout.liveGeometry)
+    }
+
     // MARK: - 刷新(修订跳过)
 
     /// 应用最新显示模型(或搜索结果)。
@@ -317,6 +379,8 @@ final class GridViewController: NSViewController {
             return
         }
         if store.displayRevision != lastAppliedRevision {
+            dragController?.invalidateActiveSessionForDisplayChange()
+            folderTransitionRevision.invalidate()
             lastAppliedRevision = store.displayRevision
             applyLatestData()
             if L10n.currentLanguage != lastAppliedLanguage {
@@ -360,6 +424,8 @@ final class GridViewController: NSViewController {
         gridLayout.invalidateLayout()
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = false
+        cachedDisplayItems = results
+        cachedSectionCounts = [results.count]
         var snapshot = NSDiffableDataSourceSnapshot<Int, Item>()
         snapshot.appendSections([0])
         snapshot.appendItems(results, toSection: 0)
@@ -389,11 +455,14 @@ final class GridViewController: NSViewController {
     }
 
     private func scrollToTop() {
-        guard let scroll = collectionView.enclosingScrollView else { return }
-        scroll.contentView.scroll(to: NSPoint(x: 0, y: 0))
+        // 搜索结果只有一个横向页面: x=0 仍由 paging 的唯一 writer 写入;
+        // onScroll 同时将 y 复位到 0, 这里不再直接写 clip 的 horizontal offset。
+        paging.jumpTo(page: 0)
     }
 
     private func applyDisplayModel(_ display: DisplayModel) {
+        cachedDisplayItems = display.pages.flatMap { $0 }
+        cachedSectionCounts = display.pages.map(\.count)
         var snapshot = NSDiffableDataSourceSnapshot<Int, Item>()
         for (pageIndex, page) in display.pages.enumerated() {
             snapshot.appendSections([pageIndex])
@@ -414,25 +483,28 @@ final class GridViewController: NSViewController {
         pageCount = max(1, display.pages.count)
         currentPage = min(currentPage, pageCount - 1)
         dataSource.apply(snapshot, animatingDifferences: false)
-        collectionView.scrollToPage(currentPage, animated: false)
+        paging.jumpTo(page: currentPage)
         updatePageDots()
     }
 
     /// Settings 结构参数变更: 重建布局几何并重新分页(Stage 1 §14/§15)。
     func applyGeometryConfig(columns: Int, rows: Int, iconSize: Int) {
+        dragController?.invalidateActiveSessionForDisplayChange()
         let gridLayout = gridLayout
         gridLayout.update(
             columns: columns, rows: rows, iconSize: CGFloat(iconSize),
             cellSize: cellSize, horizontalSpacing: horizontalSpacing,
             verticalSpacing: verticalSpacing
         )
+        folderTransitionRevision.invalidate()
+        lastConfiguredEffectivePointSize = liveEffectivePointSize()
         // 参数变化 → 页容量变化 → 重新分页并回第一页
         currentPage = 0
         forceRefresh()
         // Diffable 对相同 item 复用 cell(不重新调用数据源闭包) →
         // 必须 reloadData 强制重配置, 否则 iconPointSize 停留在旧值(评审 M2)
         collectionView.reloadData()
-        collectionView.scrollToPage(currentPage, animated: false)
+        paging.jumpTo(page: currentPage)
     }
 
     // MARK: - 页面导航
@@ -459,7 +531,7 @@ final class GridViewController: NSViewController {
         guard let iconProvider else { return }
         let display = store.displayModel()
         let scale = Int(view.window?.backingScaleFactor ?? 2)
-        let pointSize = Int(iconSize)
+        let pointSize = liveEffectivePointSize()
         for p in [page - 1, page + 1] where p >= 0 && p < display.pages.count {
             let apps = display.pages[p].compactMap { item -> AppID? in
                 if case .app(let id) = item { return id }
@@ -832,31 +904,38 @@ final class GridViewController: NSViewController {
 
     /// 扁平显示索引(所有页面槽位)。
     func flatIndex(of item: Item) -> Int? {
-        var flat = 0
-        let snapshot = dataSource.snapshot()
-        for section in 0..<snapshot.numberOfSections {
-            for element in snapshot.itemIdentifiers(inSection: section) {
-                if element == item {
-                    return flat
-                }
-                flat += 1
-            }
-        }
-        return nil
+        cachedDisplayItems.firstIndex(of: item)
     }
 
     /// 扁平索引 → IndexPath。
     func indexPath(atFlatIndex index: Int) -> IndexPath? {
-        var flat = 0
-        let snapshot = dataSource.snapshot()
-        for section in 0..<snapshot.numberOfSections {
-            let items = snapshot.itemIdentifiers(inSection: section)
-            if index < flat + items.count {
-                return IndexPath(item: index - flat, section: section)
+        guard index >= 0, cachedDisplayItems.indices.contains(index) else { return nil }
+        var sectionStart = 0
+        for (section, count) in cachedSectionCounts.enumerated() {
+            if index < sectionStart + count {
+                return IndexPath(item: index - sectionStart, section: section)
             }
-            flat += items.count
+            sectionStart += count
         }
         return nil
+    }
+
+    private func flatIndex(for indexPath: IndexPath) -> Int? {
+        guard indexPath.section >= 0,
+              indexPath.section < cachedSectionCounts.count,
+              indexPath.item >= 0,
+              indexPath.item < cachedSectionCounts[indexPath.section] else {
+            return nil
+        }
+        return cachedSectionCounts.prefix(indexPath.section).reduce(0, +) + indexPath.item
+    }
+
+    private func cachedItem(at indexPath: IndexPath) -> Item? {
+        guard let flatIndex = flatIndex(for: indexPath),
+              cachedDisplayItems.indices.contains(flatIndex) else {
+            return nil
+        }
+        return cachedDisplayItems[flatIndex]
     }
 
     /// 扁平索引 → 文档坐标 frame(二维拖拽预览用, Stage 1 §20-21)。
@@ -890,6 +969,41 @@ final class GridViewController: NSViewController {
         }
         guard let cell = cellView(at: path) as? AppCellView else { return nil }
         return cell.dragRepresentation()
+    }
+
+    /// 查询真实可见 Folder cell 的 icon/thumbnail frame，并转换到窗口 contentView。
+    /// 该查询只在 Folder transition 开始前调用；动画帧不重新查询 collection view。
+    func folderTransitionSource(
+        for folderID: FolderID,
+        in targetView: NSView
+    ) -> FolderTransitionSource? {
+        guard isViewLoaded, collectionView != nil, dataSource != nil,
+              let index = flatIndex(of: .folder(folderID)),
+              let path = indexPath(atFlatIndex: index),
+              let cell = collectionView.item(at: path) as? AppCellView,
+              let frame = cell.transitionSourceFrame(in: targetView) else {
+            return nil
+        }
+
+        let revision = folderTransitionRevision.capture(
+            synchronizing: gridLayout.liveGeometry
+        )
+        let representation = cell.dragRepresentation()
+        let cornerRadius = cell.transitionSourceCornerRadius
+        return FolderTransitionSource(
+            folderID: folderID,
+            frameInContentView: frame,
+            cornerRadius: cornerRadius,
+            representation: representation,
+            cell: cell,
+            isCurrent: { [weak self, weak cell, weak targetView] in
+                guard let self, let cell, let targetView else { return false }
+                guard self.folderTransitionRevision.isCurrent(revision),
+                      cell.transitionSourceIdentity == folderID,
+                      cell.view.window === targetView.window else { return false }
+                return true
+            }
+        )
     }
 
     /// 登记并隐藏主网格拖拽源。先捕获表示，再登记 identity/隐藏 cell。
@@ -997,7 +1111,7 @@ final class GridViewController: NSViewController {
     func itemAt(point: NSPoint) -> Item? {
         let local = collectionView.convert(point, from: nil)
         guard let indexPath = collectionView.indexPathForItem(at: local) else { return nil }
-        return dataSource.itemIdentifier(for: indexPath)
+        return cachedItem(at: indexPath)
     }
 
     /// 全部显示项(冒烟诊断)。
@@ -1010,7 +1124,7 @@ final class GridViewController: NSViewController {
     func hoveredFolder(at point: NSPoint) -> FolderID? {
         let local = collectionView.convert(point, from: nil)
         guard let indexPath = collectionView.indexPathForItem(at: local),
-              let item = dataSource.itemIdentifier(for: indexPath),
+              let item = cachedItem(at: indexPath),
               case .folder(let id) = item else {
             return nil
         }
@@ -1025,7 +1139,7 @@ final class GridViewController: NSViewController {
         dragHitTargetQueryCount += 1
         let local = collectionView.convert(point, from: nil)
         guard let indexPath = collectionView.indexPathForItem(at: local),
-              let item = dataSource.itemIdentifier(for: indexPath) else {
+              let item = cachedItem(at: indexPath) else {
             return .none
         }
         switch item {
@@ -1050,23 +1164,5 @@ final class GridViewController: NSViewController {
 
     func removeOverlayLayer(_ layer: CALayer) {
         layer.removeFromSuperlayer()
-    }
-}
-
-private extension NSCollectionView {
-    /// 翻页(非动画, 初始化/结构刷新/测试用): 页步长 = clip 可见宽度(非文档宽度)。
-    /// 动画翻页统一走 PagingInteractionController → PageSnapAnimator(v0.1.6 §23),
-    /// 不再使用 clip.animator / NSAnimationContext。
-    func scrollToPage(_ page: Int, animated: Bool) {
-        guard !animated else { return }
-        guard let scroll = enclosingScrollView else { return }
-        let clip = scroll.contentView
-        let clipWidth = clip.bounds.width > 0 ? clip.bounds.width : bounds.width
-        let x = CGFloat(page) * clipWidth
-        // NSClipView.scroll(to:) 是文档化的编程滚动 API
-        clip.scroll(to: NSPoint(x: x, y: 0))
-        if CommandLine.arguments.contains("--pagetest") {
-            print("PAGETEST scrollToPage x=\(Int(x)) now=\(Int(clip.bounds.origin.x))")
-        }
     }
 }

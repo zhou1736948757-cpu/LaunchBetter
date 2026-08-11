@@ -1,6 +1,151 @@
 import AppKit
 import LaunchCore
 
+/// 分页网格的纯高度适配计算。
+///
+/// `enabled == false` 时保留传入的原始 metrics，供搜索模式使用；分页模式
+/// 才会把可伸缩的图标/间距压进可用高度。极端高度下允许图标低于 AppCellView
+/// 的 16pt 请求下限，以保证几何本身不会越过可用区域。
+internal struct PagedGridFitMetrics: Equatable {
+    let rows: Int
+    let cellSize: CGFloat
+    let iconSize: CGFloat
+    let horizontalSpacing: CGFloat
+    let verticalSpacing: CGFloat
+    let scale: CGFloat
+    let fixedChrome: CGFloat
+
+    var gridHeight: CGFloat {
+        CGFloat(rows) * cellSize
+            + CGFloat(max(0, rows - 1)) * verticalSpacing
+    }
+
+    init(
+        rows: Int,
+        cellSize: CGFloat,
+        iconSize: CGFloat,
+        horizontalSpacing: CGFloat,
+        verticalSpacing: CGFloat,
+        availableHeight: CGFloat,
+        enabled: Bool = true
+    ) {
+        let safeRows = max(1, rows)
+        self.rows = safeRows
+
+        guard enabled else {
+            self.cellSize = cellSize
+            self.iconSize = iconSize
+            self.horizontalSpacing = horizontalSpacing
+            self.verticalSpacing = verticalSpacing
+            self.scale = 1
+            self.fixedChrome = max(0, cellSize - iconSize)
+            return
+        }
+
+        let safeHeight = Self.finiteNonNegative(availableHeight)
+        let safeCellSize = Self.finiteNonNegative(cellSize)
+        let safeIconSize = Self.finiteNonNegative(iconSize)
+        let safeHorizontalSpacing = Self.finiteNonNegative(horizontalSpacing)
+        let safeVerticalSpacing = Self.finiteNonNegative(verticalSpacing)
+        let rowCount = CGFloat(safeRows)
+        let gapCount = CGFloat(max(0, safeRows - 1))
+
+        let requestedFixedChrome = Self.finiteNonNegative(safeCellSize - safeIconSize)
+        let requestedScalable = Self.safeAdd(
+            Self.safeMultiply(rowCount, safeIconSize),
+            Self.safeMultiply(gapCount, safeVerticalSpacing)
+        )
+        let fixedChromeHeight = Self.safeMultiply(rowCount, requestedFixedChrome)
+        let scaleNumerator = max(0, safeHeight - fixedChromeHeight)
+        let requestedScale = requestedScalable > 0
+            ? scaleNumerator / requestedScalable
+            : 1
+        let scale = Self.finiteNonNegative(min(1, max(0, requestedScale)))
+
+        var effectiveFixedChrome = requestedFixedChrome
+        var effectiveIconSize = max(16, Self.safeMultiply(safeIconSize, scale))
+
+        // 首先按 requested scale 压缩 chrome；在仍有至少 16pt/行时，优先
+        // 保留图标下限，并把剩余预算给 chrome。
+        let minimumIconHeight = Self.safeMultiply(rowCount, 16)
+        let minimumRequestedHeight = Self.safeAdd(fixedChromeHeight, minimumIconHeight)
+        if safeHeight < minimumRequestedHeight {
+            if safeHeight >= minimumIconHeight {
+                let chromeBudget = max(0, (safeHeight - minimumIconHeight) / rowCount)
+                effectiveFixedChrome = min(
+                    Self.safeMultiply(requestedFixedChrome, scale),
+                    chromeBudget
+                )
+                effectiveIconSize = 16
+            } else {
+                // 连每行 16pt 都放不下时，几何优先于 pointSize 下限，
+                // 让图标也按每行可用空间收缩，避免最终 gridHeight 溢出。
+                effectiveFixedChrome = 0
+                effectiveIconSize = safeHeight / rowCount
+            }
+        }
+
+        let maxCellSize = safeHeight / rowCount
+        var effectiveCellSize = Self.safeAdd(effectiveFixedChrome, effectiveIconSize)
+        if effectiveCellSize > maxCellSize {
+            effectiveFixedChrome = min(effectiveFixedChrome, maxCellSize)
+            effectiveIconSize = max(0, maxCellSize - effectiveFixedChrome)
+            effectiveCellSize = Self.safeAdd(effectiveFixedChrome, effectiveIconSize)
+        }
+
+        var effectiveVerticalSpacing: CGFloat = 0
+        if safeRows > 1 {
+            let remainingHeight = max(0, safeHeight - Self.safeMultiply(rowCount, effectiveCellSize))
+            effectiveVerticalSpacing = max(
+                0,
+                min(safeVerticalSpacing, remainingHeight / gapCount)
+            )
+        }
+
+        // 防止浮点舍入或极端输入把最后一行推过可用区域。
+        var finalGridHeight = Self.safeAdd(
+            Self.safeMultiply(rowCount, effectiveCellSize),
+            Self.safeMultiply(gapCount, effectiveVerticalSpacing)
+        )
+        if finalGridHeight > safeHeight {
+            effectiveVerticalSpacing = 0
+            finalGridHeight = Self.safeMultiply(rowCount, effectiveCellSize)
+            if finalGridHeight > safeHeight {
+                effectiveCellSize = maxCellSize
+                effectiveFixedChrome = min(effectiveFixedChrome, effectiveCellSize)
+                effectiveIconSize = max(0, effectiveCellSize - effectiveFixedChrome)
+            }
+        }
+
+        self.cellSize = Self.finiteNonNegative(effectiveCellSize)
+        self.iconSize = Self.finiteNonNegative(effectiveIconSize)
+        self.horizontalSpacing = Self.finiteNonNegative(
+            Self.safeMultiply(safeHorizontalSpacing, scale)
+        )
+        self.verticalSpacing = Self.finiteNonNegative(effectiveVerticalSpacing)
+        self.scale = scale
+        self.fixedChrome = Self.finiteNonNegative(effectiveFixedChrome)
+    }
+
+    private static func finiteNonNegative(_ value: CGFloat) -> CGFloat {
+        guard value.isFinite else { return 0 }
+        return max(0, value)
+    }
+
+    private static func safeMultiply(_ lhs: CGFloat, _ rhs: CGFloat) -> CGFloat {
+        guard lhs > 0, rhs > 0 else { return 0 }
+        let maxValue = CGFloat.greatestFiniteMagnitude
+        guard lhs <= maxValue / rhs else { return maxValue }
+        return lhs * rhs
+    }
+
+    private static func safeAdd(_ lhs: CGFloat, _ rhs: CGFloat) -> CGFloat {
+        let maxValue = CGFloat.greatestFiniteMagnitude
+        guard lhs <= maxValue - rhs else { return maxValue }
+        return lhs + rhs
+    }
+}
+
 /// 分页网格布局: 每页 = 可视页宽, 页内按列×行排布。
 ///
 /// 几何唯一真值 = GridGeometry(Stage 1, P0): 本布局只把
@@ -138,13 +283,23 @@ public final class PagingGridLayout: NSCollectionViewLayout {
         let height = visibleClipHeight > 0
             ? visibleClipHeight
             : (collectionView?.bounds.height ?? 0)
-        return GridGeometry(
-            columns: columns,
+        let availableHeight = max(0, height - topInset - bottomInset)
+        let metrics = PagedGridFitMetrics(
             rows: rows,
             cellSize: cellSize,
             iconSize: iconSize,
             horizontalSpacing: horizontalSpacing,
             verticalSpacing: verticalSpacing,
+            availableHeight: availableHeight,
+            enabled: mode == .paged
+        )
+        return GridGeometry(
+            columns: columns,
+            rows: rows,
+            cellSize: metrics.cellSize,
+            iconSize: metrics.iconSize,
+            horizontalSpacing: metrics.horizontalSpacing,
+            verticalSpacing: metrics.verticalSpacing,
             pageWidth: clipWidth > 0 ? clipWidth : (collectionView?.bounds.width ?? 0),
             pageHeight: height,
             topInset: topInset,

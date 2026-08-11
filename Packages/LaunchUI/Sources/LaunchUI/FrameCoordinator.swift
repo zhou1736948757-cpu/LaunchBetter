@@ -9,6 +9,7 @@ import QuartzCore
 final class FrameCoordinator {
     private weak var view: NSView?
     private var displayLink: CADisplayLink?
+    private var displayLinkTarget: DisplayLinkTarget?
     private let buffer: GestureSampleBuffer
     private let session: UUID
     /// 每帧回调(拖拽中每帧触发, 内部按需消费样本)。
@@ -27,21 +28,61 @@ final class FrameCoordinator {
 
     func start() {
         guard displayLink == nil, let view else { return }
-        let link = view.displayLink(target: self, selector: #selector(tick(_:)))
+        let target = DisplayLinkTarget(owner: self)
+        let link = view.displayLink(
+            target: target,
+            selector: #selector(DisplayLinkTarget.tick(_:))
+        )
         // macOS 14+ NSView.displayLink 返回可能为 paused; 显式启动
         link.isPaused = false
         link.add(to: .main, forMode: .common)
+        displayLinkTarget = target
         displayLink = link
     }
 
     func stop() {
+        stopDisplayLink()
+    }
+
+    /// 显式生命周期收尾；可安全重复调用。
+    func shutdown() {
+        stopDisplayLink()
+    }
+
+    private func stopDisplayLink() {
         displayLink?.invalidate()
         displayLink = nil
+        displayLinkTarget = nil
     }
 
     var isRunning: Bool { displayLink != nil }
 
-    @objc private func tick(_ link: CADisplayLink) {
+    private func displayTick() {
         onFrame?()
+    }
+
+    @MainActor
+    final class DisplayLinkTarget: NSObject {
+        weak var owner: FrameCoordinator?
+
+        init(owner: FrameCoordinator?) {
+            self.owner = owner
+        }
+
+        @objc func tick(_ link: CADisplayLink) {
+            guard let owner else {
+                link.invalidate()
+                return
+            }
+            owner.displayTick()
+        }
+
+        /// 确定性测试 seam：owner 已释放时，下一帧必须 invalidate。
+        @discardableResult
+        func tickForTesting(invalidate: () -> Void) -> Bool {
+            guard owner == nil else { return false }
+            invalidate()
+            return true
+        }
     }
 }

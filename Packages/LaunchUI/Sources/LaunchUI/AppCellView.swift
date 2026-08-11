@@ -57,10 +57,14 @@ final class AppCellView: NSCollectionViewItem {
     private static let maxFolderIconCount = 9
 
     private let iconLayer = CALayer()
+    /// Press feedback 的独立 visual owner。root.layer.transform 仍由拖拽排序拥有，
+    /// iconLayer.transform 仍由 App→App 建夹高亮拥有，二者不与此层抢写。
+    private let pressContainerView = NSView()
     private let folderThumbnailView = FolderThumbnailView()
     private let label = NSTextField(labelWithString: "")
     private let letterLayer = CATextLayer()
     private var labelBottomConstraint: NSLayoutConstraint?
+    private var pressPresentation: PressDragPresentation?
 
     private var representedAppID: AppID?
     private var representedFolderID: FolderID?
@@ -74,7 +78,11 @@ final class AppCellView: NSCollectionViewItem {
     private var iconPointSize: Int = 80
     private var lastRequestedScale = 0
     private var isDragSourceHidden = false
+    private var isTransitionSourceSuppressed = false
     private var createFolderTargetHighlight: CreateFolderTargetHighlight = .none
+
+    /// 当前 cell 的 Folder source identity；只供真实可见 source 查询使用。
+    var transitionSourceIdentity: FolderID? { representedFolderID }
 
     /// 源单元格当前显示的图标(拖拽 overlay 复用, 零磁盘 IO)。
     var visibleIconImage: CGImage? {
@@ -84,6 +92,9 @@ final class AppCellView: NSCollectionViewItem {
         guard CFGetTypeID(ref) == CGImage.typeID else { return nil }
         return (ref as! CGImage)
     }
+
+    /// 仅供 LaunchUI 的确定性 press/drag 测试读取；生产路径不依赖此属性。
+    var pressPresentationForDiagnostics: PressDragPresentation? { pressPresentation }
 
     /// 返回当前单元格的语义化拖拽视觉表示。
     /// 普通 App 直接复用已显示的图标; 文件夹由缩略图 view 在内存中栅格化。
@@ -107,6 +118,50 @@ final class AppCellView: NSCollectionViewItem {
         )
     }
 
+    /// 当前真正被拖拽视觉表示占据的 frame。该 frame 只用于视觉 grab offset，
+    /// 不参与 hit-test 或 drop 目的地计算。
+    func dragVisualFrame(in targetView: NSView) -> CGRect? {
+        guard view.window != nil, view.window === targetView.window,
+              !view.isHidden, view.bounds.width > 0, view.bounds.height > 0 else {
+            return nil
+        }
+
+        let frame: CGRect
+        if representedFolderID != nil {
+            guard !folderThumbnailView.isHidden else { return nil }
+            frame = folderThumbnailView.convert(folderThumbnailView.bounds, to: targetView)
+        } else {
+            guard representedAppID != nil, !iconLayer.isHidden else { return nil }
+            // iconLayer 在 pressContainerView 的 bounds 坐标中；只取图标，
+            // 不把 label 的位置误算进抓取中心。
+            frame = pressContainerView.convert(iconLayer.frame, to: targetView)
+        }
+        guard frame.width > 0, frame.height > 0,
+              frame.minX.isFinite, frame.minY.isFinite,
+              frame.width.isFinite, frame.height.isFinite else {
+            return nil
+        }
+        return frame
+    }
+
+    /// ClickableCollectionView 是 mouse session/threshold owner；以下方法只转发
+    /// 到独立 presentation owner，不启动 App，也不改变 drag callback 语义。
+    func beginPressFeedback(at point: NSPoint) {
+        pressPresentation?.begin(at: point)
+    }
+
+    func updatePressFeedback(at point: NSPoint) {
+        pressPresentation?.move(to: point)
+    }
+
+    func endPressFeedback(afterDragging: Bool) {
+        pressPresentation?.end(afterDragging: afterDragging)
+    }
+
+    func cancelPressFeedback() {
+        pressPresentation?.cancel()
+    }
+
     /// 诊断: 是否已显示真实图标(contents 非空)。
     var hasRealIcon: Bool { iconLayer.contents != nil }
 
@@ -115,9 +170,64 @@ final class AppCellView: NSCollectionViewItem {
     func setDragSourceHidden(_ hidden: Bool) {
         guard hidden != isDragSourceHidden else { return }
         isDragSourceHidden = hidden
+        // DragController 的 source opacity owner 与 press layer 分离。进入/离开
+        // hidden 状态时只直接复位 press，避免 source 在后台保留压缩状态。
+        pressPresentation?.finishForDragLifecycle()
+        applySourceVisibility()
+    }
+
+    /// Folder spatial transition 期间隐藏真实 source，避免 proxy 与 cell 重影。
+    /// 只改变 cell layer opacity，不移动/reparent collection cell。
+    func setTransitionSourceSuppressed(_ suppressed: Bool) {
+        guard suppressed != isTransitionSourceSuppressed else { return }
+        isTransitionSourceSuppressed = suppressed
+        if suppressed {
+            pressPresentation?.cancel()
+        }
+        applySourceVisibility()
+    }
+
+    /// source 的实际 icon/thumbnail frame，转换到调用方提供的窗口 contentView。
+    func transitionSourceFrame(in targetView: NSView) -> CGRect? {
+        guard view.window != nil, view.window === targetView.window,
+              !view.isHidden, view.bounds.width > 0, view.bounds.height > 0 else {
+            return nil
+        }
+        let sourceView: NSView
+        if representedFolderID != nil {
+            guard !folderThumbnailView.isHidden else { return nil }
+            sourceView = folderThumbnailView
+        } else {
+            guard representedAppID != nil, !iconLayer.isHidden else { return nil }
+            sourceView = view
+        }
+        let frame = sourceView.convert(sourceView.bounds, to: targetView)
+        guard frame.width > 0, frame.height > 0,
+              frame.minX.isFinite, frame.minY.isFinite,
+              frame.width.isFinite, frame.height.isFinite else {
+            return nil
+        }
+        return frame
+    }
+
+    /// 真实 source 的圆角语义，供 proxy 几何起点使用。
+    var transitionSourceCornerRadius: CGFloat {
+        if representedFolderID != nil {
+            return folderThumbnailView.layer?.cornerRadius ?? 16
+        }
+        return iconLayer.cornerRadius
+    }
+
+    /// source 被 suppression 后仍可检查 cell 是否仍属于同一可见窗口；不读取
+    /// Store，也不触发布局。
+    func isTransitionSourceVisible(in targetView: NSView) -> Bool {
+        transitionSourceFrame(in: targetView) != nil
+    }
+
+    private func applySourceVisibility() {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        view.layer?.opacity = hidden ? 0 : 1
+        view.layer?.opacity = (isDragSourceHidden || isTransitionSourceSuppressed) ? 0 : 1
         CATransaction.commit()
     }
 
@@ -164,12 +274,17 @@ final class AppCellView: NSCollectionViewItem {
             self?.reRequestIconIfScaleChanged()
         }
         root.wantsLayer = true
+        pressContainerView.wantsLayer = true
+        pressContainerView.frame = root.bounds
+        pressContainerView.autoresizingMask = [.width, .height]
+        root.addSubview(pressContainerView)
+
         iconLayer.cornerRadius = 16
         iconLayer.masksToBounds = true
-        root.layer?.addSublayer(iconLayer)
+        pressContainerView.layer?.addSublayer(iconLayer)
 
         folderThumbnailView.isHidden = true
-        root.addSubview(folderThumbnailView)
+        pressContainerView.addSubview(folderThumbnailView)
 
         letterLayer.fontSize = 36
         letterLayer.alignmentMode = .center
@@ -186,16 +301,28 @@ final class AppCellView: NSCollectionViewItem {
         label.shadow?.shadowColor = NSColor.black.withAlphaComponent(0.85)
         label.shadow?.shadowBlurRadius = 4
         label.shadow?.shadowOffset = NSSize(width: 0, height: -1)
-        root.addSubview(label)
+        pressContainerView.addSubview(label)
         label.translatesAutoresizingMaskIntoConstraints = false
-        labelBottomConstraint = label.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -9)
+        labelBottomConstraint = label.bottomAnchor.constraint(
+            equalTo: pressContainerView.bottomAnchor, constant: -9
+        )
         NSLayoutConstraint.activate([
-            label.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 2),
-            label.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -2),
+            label.leadingAnchor.constraint(equalTo: pressContainerView.leadingAnchor, constant: 2),
+            label.trailingAnchor.constraint(equalTo: pressContainerView.trailingAnchor, constant: -2),
             label.heightAnchor.constraint(equalToConstant: Self.labelHeight),
             labelBottomConstraint!,
         ])
         view = root
+
+        guard let layer = pressContainerView.layer else { return }
+        let presentation = PressDragPresentation(layer: layer)
+        presentation.onDragThresholdCrossed = { [weak self] pointer in
+            self?.registerPendingDragGrabOffset(pointerInWindow: pointer)
+        }
+        presentation.onSessionEnded = {
+            DragOverlayLayer.clearPendingSourceVisualCenter()
+        }
+        pressPresentation = presentation
     }
 
     override func viewDidLayout() {
@@ -209,7 +336,7 @@ final class AppCellView: NSCollectionViewItem {
     /// 图标/标签统一布局: 图标尺寸 = iconPointSize(与 IconKey 请求一致, 顶部锚定),
     /// 标签与图标间距 = max(6, (单元格高 - 图标高) / 4)(用户反馈"再拉开一些" 的方向)。
     private func layoutIconAndLabel() {
-        let bounds = view.bounds
+        let bounds = pressContainerView.bounds
         let size = CGFloat(iconPointSize)
         // 图标/文件夹容器统一为正方形(边长 = iconSize), 水平居中。
         // 原实现宽 = 单元格宽 → 文件夹容器呈矩形(用户反馈); App 图标因 resizeAspect
@@ -237,6 +364,7 @@ final class AppCellView: NSCollectionViewItem {
 
     override func prepareForReuse() {
         super.prepareForReuse()
+        pressPresentation?.cancel()
         invalidateIconRequests()
         representedAppID = nil
         representedFolderID = nil
@@ -252,8 +380,10 @@ final class AppCellView: NSCollectionViewItem {
         letterLayer.isHidden = false
         // M3: 复用强制恢复 identity(防止拖拽预览变换污染)
         view.layer?.transform = CATransform3DIdentity
+        pressContainerView.layer?.transform = CATransform3DIdentity
         view.layer?.opacity = 1
         isDragSourceHidden = false
+        isTransitionSourceSuppressed = false
         CATransaction.commit()
     }
 
@@ -267,7 +397,8 @@ final class AppCellView: NSCollectionViewItem {
         iconProvider: (any IconImageProviding)?
     ) {
         beginConfiguration()
-        iconPointSize = max(16, pointSize)
+        // 极小可用高度下，分页网格会继续缩小图标以保证最后一行不越界。
+        iconPointSize = max(1, pointSize)
         letterLayer.string = String(displayName.prefix(1)).uppercased()
         letterLayer.isHidden = false
         iconLayer.isHidden = false
@@ -319,7 +450,7 @@ final class AppCellView: NSCollectionViewItem {
         iconProvider: (any IconImageProviding)?
     ) {
         beginConfiguration()
-        iconPointSize = max(16, pointSize)
+        iconPointSize = max(1, pointSize)
         label.stringValue = displayName
         view.setAccessibilityElement(true)
         view.setAccessibilityRole(.button)
@@ -386,6 +517,7 @@ final class AppCellView: NSCollectionViewItem {
         // GridViewController reapplies the active source identity immediately after
         // this configuration returns.
         setDragSourceHidden(false)
+        pressPresentation?.cancel()
         invalidateIconRequests()
         resetCreateFolderTargetHighlight()
         representedAppID = nil
@@ -394,6 +526,20 @@ final class AppCellView: NSCollectionViewItem {
         iconProvider = nil
         folderThumbnailView.reset()
         iconLayer.isHidden = false
+    }
+
+    private func registerPendingDragGrabOffset(pointerInWindow: NSPoint) {
+        guard let window = view.window,
+              let contentView = window.contentView,
+              let frame = dragVisualFrame(in: contentView) else {
+            return
+        }
+        let centerInContent = NSPoint(x: frame.midX, y: frame.midY)
+        let centerInWindow = contentView.convert(centerInContent, to: nil)
+        DragOverlayLayer.registerPendingSourceVisualCenter(
+            centerInWindow: centerInWindow,
+            pointerInWindow: pointerInWindow
+        )
     }
 
     private func resetCreateFolderTargetHighlight() {

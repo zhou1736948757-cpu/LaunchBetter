@@ -52,6 +52,203 @@ private enum LauncherChromeMetrics {
     }
 }
 
+/// Owns block-based NotificationCenter tokens for one controller lifecycle.
+/// Callers explicitly tear it down when the window closes; hiding/orderOut does
+/// not touch the registry so the same window can be shown again.
+@MainActor
+final class NotificationTokenRegistry {
+    private let notificationCenter: NotificationCenter
+    private var tokens: [NSObjectProtocol] = []
+
+    init(notificationCenter: NotificationCenter = .default) {
+        self.notificationCenter = notificationCenter
+    }
+
+    var count: Int { tokens.count }
+    var isEmpty: Bool { tokens.isEmpty }
+
+    func append(_ token: NSObjectProtocol) {
+        tokens.append(token)
+    }
+
+    func teardown() {
+        for token in tokens {
+            notificationCenter.removeObserver(token)
+        }
+        tokens.removeAll(keepingCapacity: false)
+    }
+}
+
+/// Pure mapping for the launcher's existing foreground surface.
+///
+/// The apply seam intentionally only changes settled material properties. The
+/// transition coordinator remains the sole owner of opacity and transform.
+struct LauncherSurfaceAppearance: Equatable, Sendable {
+    let surfaceTreatment: AccessibilitySurfaceTreatment
+    let surfaceOpacity: Float
+
+    static func make(for policy: AccessibilityMaterialPolicy) -> Self {
+        Self(
+            surfaceTreatment: policy.surfaceTreatment,
+            surfaceOpacity: policy.surfaceOpacity
+        )
+    }
+
+    @MainActor
+    static func apply(_ appearance: Self, to surface: NSView) {
+        surface.wantsLayer = true
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        switch appearance.surfaceTreatment {
+        case .translucent:
+            // Keep the current wallpaper-first launcher hierarchy. Search is
+            // not given another effect view or glass backing layer.
+            surface.layer?.backgroundColor = nil
+        case .opaque:
+            // Public AppKit color; no blur is needed for this fallback.
+            surface.layer?.backgroundColor = NSColor.windowBackgroundColor
+                .withAlphaComponent(CGFloat(appearance.surfaceOpacity))
+                .cgColor
+        }
+        CATransaction.commit()
+    }
+}
+
+/// Pure mapping/apply seam for the small light-glass Settings button.
+struct SettingsButtonAppearance: Equatable, Sendable {
+    let surfaceTreatment: AccessibilitySurfaceTreatment
+    let surfaceOpacity: Float
+    let boundaryTreatment: AccessibilityBoundaryTreatment
+    let foregroundSeparation: AccessibilityForegroundSeparation
+
+    static func make(for policy: AccessibilityMaterialPolicy) -> Self {
+        Self(
+            surfaceTreatment: policy.surfaceTreatment,
+            surfaceOpacity: policy.surfaceOpacity,
+            boundaryTreatment: policy.boundaryTreatment,
+            foregroundSeparation: policy.foregroundSeparation
+        )
+    }
+
+    @MainActor
+    static func apply(_ appearance: Self, to button: SettingsButton) {
+        button.wantsLayer = true
+        guard let layer = button.layer else { return }
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        switch appearance.surfaceTreatment {
+        case .translucent:
+            // Preserve the existing light-glass treatment.
+            layer.backgroundColor = NSColor.white.withAlphaComponent(0.10).cgColor
+        case .opaque:
+            // Reduce Transparency uses a public, non-blurred AppKit control
+            // surface instead of relying on translucency.
+            layer.backgroundColor = NSColor.controlBackgroundColor
+                .withAlphaComponent(CGFloat(appearance.surfaceOpacity))
+                .cgColor
+        }
+
+        switch appearance.boundaryTreatment {
+        case .standard:
+            layer.borderWidth = 1
+            layer.borderColor = NSColor.white.withAlphaComponent(0.28).cgColor
+        case .emphasized:
+            layer.borderWidth = 1.5
+            layer.borderColor = NSColor.labelColor.withAlphaComponent(0.72).cgColor
+        }
+        // Do not change layer.shadowOpacity: contrast is expressed by the
+        // control boundary/foreground, not by a global shadow boost.
+        CATransaction.commit()
+    }
+}
+
+/// Settings ownership 的纯时序门控。
+///
+/// 关闭回调和当前 mouse sequence 必须同时完成；fallback token 绑定当前
+/// Settings session，避免旧的超时任务释放新一轮 Settings ownership。
+struct SettingsOwnershipGate: Equatable {
+    struct FallbackToken: Equatable, Sendable {
+        let generation: UInt64
+    }
+
+    private(set) var generation: UInt64 = 0
+    private(set) var closeCallbackReceived = false
+    private(set) var consumingSequence = false
+
+    mutating func beginSession() {
+        generation &+= 1
+        closeCallbackReceived = false
+        consumingSequence = false
+    }
+
+    mutating func beginConsumingSequence() {
+        consumingSequence = true
+    }
+
+    mutating func receiveCloseCallback() -> FallbackToken? {
+        closeCallbackReceived = true
+        guard consumingSequence else { return nil }
+        return FallbackToken(generation: generation)
+    }
+
+    mutating func consumeSequence() {
+        consumingSequence = false
+    }
+
+    func acceptsFallback(_ token: FallbackToken) -> Bool {
+        token.generation == generation
+            && closeCallbackReceived
+            && consumingSequence
+    }
+
+    func canRelease(force: Bool = false) -> Bool {
+        closeCallbackReceived && (force || !consumingSequence)
+    }
+
+    @discardableResult
+    mutating func finishSession(force: Bool = false) -> Bool {
+        guard canRelease(force: force) else { return false }
+        generation &+= 1
+        closeCallbackReceived = false
+        consumingSequence = false
+        return true
+    }
+}
+
+/// Pure routing seam for repeated Settings presentation. Existing ownership
+/// must remain installed while Settings reverses its own current presentation.
+enum SettingsPresentationRoute: Equatable, Sendable {
+    case installOwnership
+    case rePresentCurrent
+
+    static func make(for surface: LauncherInteractionSurface) -> Self {
+        surface == .settings ? .rePresentCurrent : .installOwnership
+    }
+}
+
+/// Idempotent child-window attachment used by both initial and repeated
+/// Settings presentation. A stale parent must release the Settings window
+/// before the launcher adopts it.
+enum SettingsChildWindowAttachment: Equatable, Sendable {
+    case alreadyAttached
+    case attached
+    case reattached
+
+    @discardableResult
+    @MainActor
+    static func attach(_ settingsWindow: NSWindow, to launcherWindow: NSWindow) -> Self {
+        guard settingsWindow.parent !== launcherWindow else {
+            return .alreadyAttached
+        }
+
+        let previousParent = settingsWindow.parent
+        previousParent?.removeChildWindow(settingsWindow)
+        launcherWindow.addChildWindow(settingsWindow, ordered: .above)
+        return previousParent == nil ? .attached : .reattached
+    }
+}
+
 /// 启动器窗口控制器: 组装搜索栏 + 网格 + 窗口生命周期。
 ///
 /// 职责:
@@ -64,8 +261,10 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
     private let store: any LauncherStoring
     private let iconProvider: (any IconImageProviding)?
     private let wallpaperProvider: WallpaperProvider?
+    private let notificationTokens = NotificationTokenRegistry()
     private var gridViewController: GridViewController!
     private var folderViewController: FolderViewController?
+    private var folderTransitionCoordinator: FolderTransitionCoordinator?
     private let searchField = NSSearchField()
     private var searchFieldWidthConstraint: NSLayoutConstraint?
     private var searchFieldHeightConstraint: NSLayoutConstraint?
@@ -75,7 +274,10 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
     private var dragController: DragController?
     private var backgroundLayer = CALayer()
     private var dimLayer = CALayer()
+    private var foregroundView: NSView!
+    private var transitionCoordinator: LauncherTransitionCoordinator!
     private var backgroundRequest: WallpaperProvider.RenderRequest?
+    private var accessibilityDisplayObserver: AccessibilityDisplayObserver?
 
     private var visible = false
 
@@ -89,7 +291,7 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
     public var onVisibilityChange: ((Bool) -> Void)?
 
     /// 打开设置回调(由应用层接线到 SettingsWindowController)。
-    public var onOpenSettings: (() -> Void)?
+    public var onOpenSettings: ((NSPoint?) -> Void)?
 
     /// 设置窗口控制器(唯一所有权入口)。由应用层注入。
     public weak var settingsController: SettingsWindowController?
@@ -100,38 +302,70 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
     /// Settings 激活时覆盖在 Launcher 内容上的输入屏蔽层。
     private var interactionShield: SettingsInteractionShield?
 
+    /// Settings 的关闭回调与 Launcher shield 的当前鼠标序列都完成后，
+    /// 才能释放 Launcher ownership。
+    private var settingsOwnership = SettingsOwnershipGate()
+
+    private static let settingsCloseFallbackDelay: TimeInterval = 0.5
+
     /// 当前输入面(诊断/探针)。
     public var currentInteractionSurface: LauncherInteractionSurface { interactionSurface }
 
     /// 把设置窗口作为启动器的 child window 挂载(浮在启动器上方, 启动器不退出)。
     /// 由应用层把 settingsController.launcherWindow 设为本窗口后调用。
-    public func presentSettingsWindow(_ settingsWindow: NSWindow) {
+    public func presentSettingsWindow(
+        _ settingsWindow: NSWindow,
+        from sourcePoint: NSPoint? = nil
+    ) {
         guard let window, let contentView = window.contentView else { return }
-        // 幂等: 已激活则只把设置带到前台, 不重复安装 shield/child。
-        if interactionSurface == .settings {
-            settingsWindow.makeKeyAndOrderFront(nil)
+        // 幂等: 已激活则不重复安装 shield。Settings 自己的 transition
+        // lifecycle 负责从当前 presentation 反向，并使旧 completion stale。
+        // finalizeClose 可能已经移除了 child，但 ownership 仍在等 mouseUp；
+        // 因此 re-present 必须重新挂载 child 并开启新 generation，使旧
+        // fallback token 无法释放这次 ownership。
+        if SettingsPresentationRoute.make(for: interactionSurface) == .rePresentCurrent {
+            settingsOwnership.beginSession()
+            bindSettingsController(to: window)
+            SettingsChildWindowAttachment.attach(settingsWindow, to: window)
+            if let settingsController {
+                settingsController.present(from: sourcePoint)
+            } else {
+                settingsWindow.makeKeyAndOrderFront(nil)
+            }
             return
         }
         // 取消进行中的瞬态操作; 关闭 folder overlay(其可能正持有拖拽); 暂停分页。
         dragController?.cancelDrag()
-        closeFolderView()
+        closeFolderView(immediately: true)
         gridViewController?.suspendPagingForSurface()
         interactionSurface = .settings
+        settingsOwnership.beginSession()
+        bindSettingsController(to: window)
         installSettingsShield(in: contentView)
+        SettingsChildWindowAttachment.attach(settingsWindow, to: window)
+        // Ownership surfaces are established before Settings starts its visual
+        // presentation. The controller owns the transition itself.
+        if let settingsController {
+            settingsController.present(from: sourcePoint)
+        } else {
+            settingsWindow.makeKeyAndOrderFront(nil)
+        }
+    }
+
+    private func bindSettingsController(to launcherWindow: NSWindow) {
+        settingsController?.launcherWindow = launcherWindow
         settingsController?.onClose = { [weak self] in
             MainActor.assumeIsolated {
                 self?.settingsDidClose()
             }
         }
-        window.addChildWindow(settingsWindow, ordered: .above)
-        settingsWindow.makeKeyAndOrderFront(nil)
     }
 
     /// App 菜单入口: 与齿轮按钮走同一所有权路径(不能直接调 settingsController.show())。
     public func openSettingsFromMenu() {
         guard let settingsController, let sw = settingsController.window else { return }
         settingsController.launcherWindow = window
-        presentSettingsWindow(sw)
+        presentSettingsWindow(sw, from: nil)
     }
 
     /// 屏蔽层点击(Launcher 空白): 只关闭 Settings, 不结束所有权(等待 mouseUp)。
@@ -139,17 +373,17 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         settingsController?.close()
     }
 
-    /// Settings 已关闭(任意路径)。若仍有点击序列未完成, 等 mouseUp 再恢复所有权;
-    /// 但为防 mouseUp 永不到达(应用失活/事件取消), 设置有限兜底。
+    /// Settings 已关闭(任意路径)。若仍有点击序列未完成, 等 mouseUp 再恢复所有权。
     private func settingsDidClose() {
         guard interactionSurface == .settings else { return }
-        if let shield = interactionShield, shield.isConsumingClick {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-                MainActor.assumeIsolated {
-                    // 幂等: mouseUp 若已到达会先恢复; 未到达则由本兜底清理。
-                    self?.endSettingsOwnership()
-                }
-            }
+        // The shield sets its own flag before invoking this callback. Mirror it
+        // here as well so the gate remains correct even if AppKit delivers the
+        // close notification before the shield callback in the same event turn.
+        if interactionShield?.isConsumingClick == true {
+            settingsOwnership.beginConsumingSequence()
+        }
+        if let fallbackToken = settingsOwnership.receiveCloseCallback() {
+            scheduleSettingsCloseFallback(for: fallbackToken)
             return
         }
         endSettingsOwnership()
@@ -157,12 +391,16 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
 
     /// shield mouseUp 已消费完整序列 → 现在安全恢复。
     private func shieldClickConsumed() {
+        settingsOwnership.consumeSequence()
         endSettingsOwnership()
     }
 
     /// 恢复 Launcher 交互(幂等): 移除 shield、释放所有权、恢复分页、确保拖拽空闲。
-    private func endSettingsOwnership() {
-        guard interactionSurface == .settings else { return }
+    private func endSettingsOwnership(force: Bool = false) {
+        guard interactionSurface == .settings,
+              settingsOwnership.canRelease(force: force),
+              force || interactionShield?.isConsumingClick != true,
+              settingsOwnership.finishSession(force: force) else { return }
         interactionSurface = .launcher
         interactionShield?.removeFromSuperview()
         interactionShield = nil
@@ -170,11 +408,31 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         dragController?.cancelDrag()
     }
 
+    /// 有界恢复: 只接受当前 Settings session 的 close callback + consuming
+    /// sequence。正常 mouseUp 会先让 token 失效，绝不会走到这里。
+    private func scheduleSettingsCloseFallback(
+        for token: SettingsOwnershipGate.FallbackToken
+    ) {
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + Self.settingsCloseFallbackDelay
+        ) { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self,
+                      self.interactionSurface == .settings,
+                      self.settingsOwnership.acceptsFallback(token) else {
+                    return
+                }
+                self.endSettingsOwnership(force: true)
+            }
+        }
+    }
+
     private func installSettingsShield(in contentView: NSView) {
         let shield = SettingsInteractionShield(frame: contentView.bounds)
         shield.autoresizingMask = [.width, .height]
         shield.onShieldMouseDown = { [weak self] in
             MainActor.assumeIsolated {
+                self?.settingsOwnership.beginConsumingSequence()
                 self?.requestSettingsClose()
             }
         }
@@ -198,7 +456,21 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         let screen = NSScreen.main ?? NSScreen.screens[0]
         let window = LauncherWindow(screen: screen)
         super.init(window: window)
+
+        let initialAccessibilitySnapshot = MotionEnvironment.liveSnapshot()
+        accessibilityDisplayObserver = AccessibilityDisplayObserver(
+            initialSnapshot: initialAccessibilitySnapshot,
+            snapshotProvider: { [weak self] in
+                let snapshot = MotionEnvironment.liveSnapshot()
+                // This callback only updates material properties. It never
+                // retargets or restarts an active transition.
+                self?.applyAccessibilitySnapshot(snapshot)
+                return snapshot
+            }
+        )
         configureWindow()
+        applyAccessibilitySnapshot(initialAccessibilitySnapshot)
+        accessibilityDisplayObserver?.start()
     }
 
     required init?(coder: NSCoder) {
@@ -208,7 +480,7 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
     private func configureWindow() {
         guard let window else { return }
         // 失焦自动退出(点击其他应用); 模态对话框(重命名等)期间不退出
-        NotificationCenter.default.addObserver(
+        notificationTokens.append(NotificationCenter.default.addObserver(
             forName: NSWindow.didResignKeyNotification,
             object: window,
             queue: .main
@@ -219,8 +491,8 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
                       window.childWindows == nil || window.childWindows!.isEmpty else { return }
                 self?.hide()
             }
-        }
-        NotificationCenter.default.addObserver(
+        })
+        notificationTokens.append(NotificationCenter.default.addObserver(
             forName: NSWindow.didChangeScreenNotification,
             object: window,
             queue: .main
@@ -228,15 +500,49 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
             MainActor.assumeIsolated {
                 self?.updateChromeLayoutForCurrentScreen()
             }
-        }
+        })
+        notificationTokens.append(NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification,
+            object: window,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.notificationTokens.teardown()
+                self?.teardownAccessibilityDisplayObservation()
+            }
+        })
         let root = NSView()
         root.wantsLayer = true
 
         // 背景: 壁纸层 + 深色叠加层(§93; 无壁纸时保持深色)
         backgroundLayer.contentsGravity = .resizeAspectFill
+        backgroundLayer.opacity = 0
         dimLayer.backgroundColor = NSColor.black.withAlphaComponent(0.35).cgColor
+        dimLayer.opacity = 0
         root.layer?.addSublayer(backgroundLayer)
         root.layer?.addSublayer(dimLayer)
+
+        // Grid/Search/Settings/Page dots 是一个前景 surface；背景层留在 root
+        // 上，不参与 scale，只和 surface 同步改变 opacity。
+        let foregroundView = NSView()
+        foregroundView.wantsLayer = true
+        let initialMotionPolicy = MotionEnvironment.policy(for: MotionEnvironment.liveSnapshot())
+        foregroundView.layer?.opacity = initialMotionPolicy.hiddenSurfaceOpacity
+        foregroundView.layer?.setAffineTransform(
+            CGAffineTransform(
+                scaleX: initialMotionPolicy.hiddenSurfaceScale,
+                y: initialMotionPolicy.hiddenSurfaceScale
+            )
+        )
+        foregroundView.translatesAutoresizingMaskIntoConstraints = false
+        root.addSubview(foregroundView)
+        NSLayoutConstraint.activate([
+            foregroundView.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            foregroundView.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            foregroundView.topAnchor.constraint(equalTo: root.topAnchor),
+            foregroundView.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+        ])
+        self.foregroundView = foregroundView
 
         let grid = GridViewController(store: store, iconProvider: iconProvider)
         grid.onOpenFolder = { [weak self] folderID in
@@ -257,9 +563,17 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         }
         grid.dragController = dragController
         if let collectionView = grid.collectionViewRef as? ClickableCollectionView {
-            collectionView.onDragBegin = { [weak self] point in
-                guard let self, let item = grid.itemAt(point: point) else { return }
-                self.beginRootDragIfPermitted(item: item, at: point)
+            collectionView.onDragBeginWithSource = { [weak self] sourcePoint, currentPoint in
+                guard let self,
+                      let selection = DragSourceAnchorResolver.resolve(
+                          sourcePoint: sourcePoint,
+                          currentPoint: currentPoint,
+                          valueAt: { grid.itemAt(point: $0) }
+                      ) else { return }
+                self.beginRootDragIfPermitted(
+                    item: selection.source,
+                    at: selection.currentPoint
+                )
             }
             collectionView.onDragMove = { [weak self, weak dragController] point in
                 guard let self, self.interactionSurface == .launcher else { return }
@@ -271,20 +585,20 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
             }
         }
 
-        root.addSubview(grid.view)
+        foregroundView.addSubview(grid.view)
         grid.view.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
-            grid.view.leadingAnchor.constraint(equalTo: root.leadingAnchor),
-            grid.view.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-            grid.view.topAnchor.constraint(equalTo: root.topAnchor),
-            grid.view.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+            grid.view.leadingAnchor.constraint(equalTo: foregroundView.leadingAnchor),
+            grid.view.trailingAnchor.constraint(equalTo: foregroundView.trailingAnchor),
+            grid.view.topAnchor.constraint(equalTo: foregroundView.topAnchor),
+            grid.view.bottomAnchor.constraint(equalTo: foregroundView.bottomAnchor),
         ])
 
         searchField.delegate = self
         searchField.placeholderString = L10n.t(.searchPlaceholder)
         searchField.alignment = .center
         searchField.sendsSearchStringImmediately = true
-        root.addSubview(searchField)
+        foregroundView.addSubview(searchField)
         searchField.translatesAutoresizingMaskIntoConstraints = false
         // 搜索栏等比大小(宽 = 标尺, 高 = 宽/16; 居中)。顶部 safe area
         // 由 updateChromeLayoutForCurrentScreen() 与网格保留区统一更新。
@@ -293,12 +607,12 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         searchFieldWidthConstraint = searchField.widthAnchor.constraint(equalToConstant: size)
         searchFieldHeightConstraint = searchField.heightAnchor.constraint(equalToConstant: height)
         searchFieldTopConstraint = searchField.topAnchor.constraint(
-            equalTo: root.topAnchor,
+            equalTo: foregroundView.topAnchor,
             constant: 0
         )
         NSLayoutConstraint.activate([
             searchFieldTopConstraint!,
-            searchField.centerXAnchor.constraint(equalTo: root.centerXAnchor),
+            searchField.centerXAnchor.constraint(equalTo: foregroundView.centerXAnchor),
             searchFieldWidthConstraint!,
             searchFieldHeightConstraint!,
         ])
@@ -308,20 +622,26 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         settingsButton.target = self
         settingsButton.action = #selector(settingsButtonTapped)
         settingsButtonView = settingsButton
-        root.addSubview(settingsButton)
+        foregroundView.addSubview(settingsButton)
         settingsButton.translatesAutoresizingMaskIntoConstraints = false
         settingsButtonTopConstraint = settingsButton.topAnchor.constraint(
-            equalTo: root.topAnchor,
+            equalTo: foregroundView.topAnchor,
             constant: 0
         )
         NSLayoutConstraint.activate([
-            settingsButton.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -16),
+            settingsButton.trailingAnchor.constraint(equalTo: foregroundView.trailingAnchor, constant: -16),
             settingsButtonTopConstraint!,
             settingsButton.widthAnchor.constraint(equalToConstant: 40),
             settingsButton.heightAnchor.constraint(equalToConstant: 40),
         ])
 
         window.contentView = root
+        transitionCoordinator = LauncherTransitionCoordinator(
+            window: window,
+            surfaceLayer: foregroundView.layer!,
+            backgroundLayer: backgroundLayer,
+            dimLayer: dimLayer
+        )
         updateChromeLayoutForCurrentScreen()
         (window as? LauncherWindow)?.onKeyDown = { [weak self] event in
             self?.handleKeyDown(event)
@@ -347,18 +667,39 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
     }
 
     @objc private func settingsButtonTapped() {
-        onOpenSettings?()
+        onOpenSettings?(settingsButtonCenterOnScreen())
+    }
+
+    /// 齿轮中心转换为 screen coordinates，供 Settings transition 使用。
+    private func settingsButtonCenterOnScreen() -> NSPoint? {
+        guard let window,
+              let contentView = window.contentView,
+              let settingsButton = settingsButtonView else {
+            return nil
+        }
+        contentView.layoutSubtreeIfNeeded()
+        let pointInWindow = settingsButton.convert(
+            NSPoint(
+                x: settingsButton.bounds.midX,
+                y: settingsButton.bounds.midY
+            ),
+            to: nil
+        )
+        return window.convertPoint(toScreen: pointInWindow)
     }
 
     // MARK: - 显示 / 隐藏
 
     public func show() {
-        guard !visible else { return }
+        guard !visible,
+              let window,
+              let launcherWindow = window as? LauncherWindow else { return }
         visible = true
         let transitionToken = transition.beginShow()
         let showStart = CFAbsoluteTimeGetCurrent()
         lastShowStart = showStart
-        guard let window, let launcherWindow = window as? LauncherWindow else { return }
+        let motionPolicy = MotionEnvironment.launcherPolicy
+        transitionCoordinator.prepareForShow()
         launcherWindow.showOnScreen(containing: NSEvent.mouseLocation)
         onVisibilityChange?(true)
         // 换屏后安全区可能变化: 同时更新搜索框、设置按钮与网格保留区。
@@ -368,19 +709,15 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         updateBackground(for: window)
         gridViewController.refresh()
         let contentReady = CFAbsoluteTimeGetCurrent() - showStart
-        // 首次呈现从 0 淡入; 若正处于 dismiss 中途重开, 从当前呈现反向淡入(不重置到 0)。
-        if !window.isVisible {
-            window.alphaValue = 0
-        }
-        window.makeKeyAndOrderFront(nil)
         let orderedFront = CFAbsoluteTimeGetCurrent() - showStart
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = MotionEnvironment.launcherFadeDuration
-            window.animator().alphaValue = 1
-        } completionHandler: {
+        transitionCoordinator.transition(to: .show, policy: motionPolicy) { [weak self] in
             MainActor.assumeIsolated {
-                // 若期间又 hide(), 令牌过期 → 不覆盖 dismissing 状态。
-                _ = self.transition.completeShow(transitionToken)
+                guard let self else { return }
+                // 若期间又 hide(), token/state 过期 → 不覆盖 dismissing 状态。
+                _ = self.transition.completeShow(
+                    transitionToken,
+                    expectedState: .presenting
+                )
             }
         }
         // v0.1.4: 默认不聚焦搜索框(避免光标闪烁); 点击搜索框才聚焦。
@@ -549,6 +886,31 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         updateChromeLayoutForCurrentScreen()
     }
 
+    /// Applies only settled view material. Opacity/transform remain owned by
+    /// LauncherTransitionCoordinator, so a live accessibility notification
+    /// cannot restart or disturb an in-flight presentation.
+    private func applyAccessibilitySnapshot(_ snapshot: MotionEnvironmentSnapshot) {
+        let policy = AccessibilityMaterialPolicy(snapshot: snapshot)
+        if let foregroundView {
+            LauncherSurfaceAppearance.apply(
+                LauncherSurfaceAppearance.make(for: policy),
+                to: foregroundView
+            )
+        }
+        if let settingsButtonView {
+            SettingsButtonAppearance.apply(
+                SettingsButtonAppearance.make(for: policy),
+                to: settingsButtonView
+            )
+        }
+        folderViewController?.applyAccessibilityMaterialPolicy(policy)
+    }
+
+    private func teardownAccessibilityDisplayObservation() {
+        accessibilityDisplayObserver?.teardown()
+        accessibilityDisplayObserver = nil
+    }
+
     private func updateBackground(for window: NSWindow) {
         guard let provider = wallpaperProvider, let screen = window.screen else { return }
         // 用窗口内容尺寸而非屏幕 frame: 壁纸精确覆盖整个窗口(避免上下边缘
@@ -605,11 +967,12 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         }
         visible = false
         let transitionToken = transition.beginHide()
+        let motionPolicy = MotionEnvironment.launcherPolicy
         onVisibilityChange?(false)
         // M4: 隐藏时终止拖拽(display link/overlay 清理)
         dragController?.shutdown()
         // 文件夹是临时覆盖层；隐藏/Escape 后重开必须回到主网格。
-        closeFolderView()
+        closeFolderView(immediately: true)
         iconProvider?.trimMemoryForHidden()
         guard let window else { return }
         store.searchQuery = ""
@@ -617,13 +980,18 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         gridViewController.refresh()
         // v0.1.4: 重新打开面板回到第一页
         gridViewController.goToPage(0, animated: false)
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = MotionEnvironment.launcherFadeDuration
-            window.animator().alphaValue = 0
-        } completionHandler: {
+        transitionCoordinator.prepareForHide()
+        transitionCoordinator.transition(to: .hide, policy: motionPolicy) { [weak self] in
             MainActor.assumeIsolated {
-                // 若期间又 show(), 令牌过期 → 禁止过期 orderOut 关掉已重开的窗口。
-                guard self.transition.completeHide(transitionToken), window.isVisible else { return }
+                guard let self,
+                      self.transition.completeHide(
+                          transitionToken,
+                          expectedState: .dismissing
+                      ),
+                      window.isVisible else { return }
+                // 背景和前景已在 CA 层收至 hidden；此刻再关 window alpha 并
+                // orderOut，避免 stale completion 把新一轮 show 关掉。
+                window.alphaValue = 0
                 window.orderOut(nil)
             }
         }
@@ -640,7 +1008,11 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
 
     private func openFolder(_ folderID: FolderID) {
         guard let window, let contentView = window.contentView else { return }
-        closeFolderView()
+        closeFolderView(immediately: true)
+        let source = gridViewController?.folderTransitionSource(
+            for: folderID,
+            in: contentView
+        )
         // 文件夹是覆盖主网格与搜索栏的临时 overlay;底层内容保持可见,由 overlay 暗化。
         let folderView = FolderViewController(
             store: store, iconProvider: iconProvider, folderID: folderID
@@ -667,6 +1039,8 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
             dragController.endDrag(at: point, completion: completion)
         }
         folderViewController = folderView
+        // presentation 一开始即移交 Folder ownership，防止同一 mouse session
+        // 在 overlay 挂载过程中落回 Grid。
         interactionSurface = .folder
         gridViewController?.suspendPagingForSurface()
         contentView.addSubview(folderView.view)
@@ -677,14 +1051,44 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
             folderView.view.topAnchor.constraint(equalTo: contentView.topAnchor),
             folderView.view.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
         ])
+
+        guard let target = folderView.transitionTarget(in: contentView) else {
+            finishFolderClose(folderView)
+            return
+        }
+        let coordinator = FolderTransitionCoordinator(
+            hostView: contentView,
+            source: source,
+            target: target,
+            reduceMotion: MotionEnvironment.reduceMotion
+        )
+        folderTransitionCoordinator = coordinator
+        coordinator.startOpening()
     }
 
-    private func closeFolderView() {
+    private func closeFolderView(immediately: Bool = false) {
         guard let folderViewController else { return }
         folderViewController.cancelActiveDrag()
         if dragController?.isDragging == true {
             dragController?.cancelDrag()
         }
+        if !immediately, let coordinator = folderTransitionCoordinator {
+            coordinator.requestClose { [weak self, weak folderViewController] in
+                MainActor.assumeIsolated {
+                    guard let self, let folderViewController else { return }
+                    self.finishFolderClose(folderViewController)
+                }
+            }
+            return
+        }
+        folderTransitionCoordinator?.cancelAndTeardown()
+        folderTransitionCoordinator = nil
+        finishFolderClose(folderViewController)
+    }
+
+    private func finishFolderClose(_ folderViewController: FolderViewController) {
+        guard self.folderViewController === folderViewController else { return }
+        folderTransitionCoordinator = nil
         folderViewController.onBack = nil
         folderViewController.onDragExit = nil
         folderViewController.onDragExitMove = nil
@@ -806,10 +1210,12 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
     }
 
     public func diagnosticRequestSettingsClose() {
+        settingsOwnership.beginConsumingSequence()
         requestSettingsClose()
     }
 
     public func diagnosticShieldMouseUp() {
+        settingsOwnership.consumeSequence()
         shieldClickConsumed()
     }
 
@@ -823,6 +1229,16 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
 
     public func dragStateForDiag() -> String {
         gridViewController?.dragController?.stateForDiag ?? "nil"
+    }
+
+    /// 诊断: 触发文件夹标题编辑。
+    public func diagnosticFolderStartTitleEdit() {
+        folderViewController?.startTitleEditingForDiagnostic()
+    }
+
+    /// 诊断: 文件夹标题编辑状态。
+    public func diagnosticFolderTitleEditState() -> String {
+        folderViewController?.diagnosticTitleEditState() ?? "no-folder"
     }
 
     public func threeFingerDragCancel() {

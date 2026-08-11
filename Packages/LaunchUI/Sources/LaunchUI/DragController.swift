@@ -59,6 +59,7 @@ final class DragController {
     private var createFolderCandidateSince: CFTimeInterval = 0
     /// 拖拽开始时的显示修订(外部变化陈旧防护, 评审 M7)。
     private var dragStartRevision: UInt64 = 0
+    private var sessionInvalidated = false
 
     /// 文件夹局部拖拽在 handoff 后被取消时, 由窗口控制器恢复文件夹 chrome。
     var onFolderExitDragCancelled: (() -> Void)?
@@ -69,6 +70,11 @@ final class DragController {
     }
 
     var isDragging: Bool { state == .dragging }
+
+    func invalidateActiveSessionForDisplayChange() {
+        guard state == .dragging, !sessionInvalidated else { return }
+        sessionInvalidated = true
+    }
 
     /// 诊断: overlay 是否仍挂在网格层上(teardown 后应为 false)。
     var hasOverlayForDiag: Bool {
@@ -96,6 +102,7 @@ final class DragController {
         // 已有一个拖动 session → 其他输入源不得二次 begin
         guard state == .idle, activeInputSource == nil else { return }
         guard let grid, !grid.isSearchMode, let sourceIndex = grid.flatIndex(of: item) else { return }
+        sessionInvalidated = false
         state = .dragging
         activeInputSource = inputSource
         folderExitSession = nil
@@ -169,6 +176,7 @@ final class DragController {
               store.folderChildren(folder)?.contains(app) == true else { return false }
         guard folderExitLifecycle.begin() else { return false }
 
+        sessionInvalidated = false
         state = .dragging
         activeInputSource = inputSource
         folderExitSession = FolderExitDragSession(app: app, folder: folder)
@@ -409,6 +417,7 @@ final class DragController {
 
     private func teardown(restoreFolderExitVisual: Bool = false) {
         let shouldRestoreFolderExitVisual = restoreFolderExitVisual && folderExitSession != nil
+        DragOverlayLayer.clearPendingSourceVisualCenter()
         grid?.setCreateFolderTargetHighlight(appID: nil, active: false)
         if let sourceItem {
             grid?.endDragSource(for: sourceItem)
@@ -445,6 +454,7 @@ final class DragController {
         displayAtDragStart = nil
         lastKnownPoint = nil
         dragStartRevision = 0
+        sessionInvalidated = false
         createFolderCandidate = nil
         createFolderCandidateSince = 0
         if shouldRestoreFolderExitVisual {
@@ -505,8 +515,7 @@ final class DragController {
         guard state == .dragging, let item = sourceItem,
               let display = displayAtDragStart else { return }
 
-        // 外部目录/布局/配置变化 → 取消拖拽(陈旧 session 防护, 评审 M5)
-        if store.displayRevision != dragStartRevision {
+        if sessionInvalidated {
             cancelDrag()
             return
         }
@@ -601,7 +610,7 @@ final class DragController {
               folderExitLifecycle.phase == .active,
               let grid else { return }
 
-        if store.displayRevision != dragStartRevision {
+        if sessionInvalidated {
             cancelDrag()
             return
         }

@@ -80,6 +80,26 @@ final class PagingTargetResolverTests: XCTestCase {
         XCTAssertEqual(target, 2)
     }
 
+    func testVelocityFlingUsesBothSignsAtShortDisplacements() {
+        for fraction in [CGFloat(0.05), 0.08, 0.09] {
+            XCTAssertEqual(PagingTargetResolver.resolve(
+                currentPage: 1,
+                pageCount: 3,
+                pageWidth: pageWidth,
+                displacement: -pageWidth * fraction,
+                releaseVelocity: -PagingTuning.flingVelocityThreshold - 1
+            ), 2, "left fling at \(fraction) page")
+
+            XCTAssertEqual(PagingTargetResolver.resolve(
+                currentPage: 1,
+                pageCount: 3,
+                pageWidth: pageWidth,
+                displacement: pageWidth * fraction,
+                releaseVelocity: PagingTuning.flingVelocityThreshold + 1
+            ), 0, "right fling at \(fraction) page")
+        }
+    }
+
     func testVelocityTooLowNoFling() {
         let target = PagingTargetResolver.resolve(
             currentPage: 1, pageCount: 3, pageWidth: pageWidth,
@@ -160,22 +180,62 @@ final class PagingSpringTests: XCTestCase {
 /// 外边缘 rubber band 测试(v0.1.6 §18)。
 final class PagingRubberBandTests: XCTestCase {
     func testDirectMappingInsideRange() {
-        XCTAssertEqual(PagingRubberBand.clamp(0, minX: 0, maxX: 2940), 0)
-        XCTAssertEqual(PagingRubberBand.clamp(1470, minX: 0, maxX: 2940), 1470)
-        XCTAssertEqual(PagingRubberBand.clamp(2940, minX: 0, maxX: 2940), 2940)
+        XCTAssertEqual(PagingRubberBand.clamp(0, minX: 0, maxX: 2940, pageWidth: 1470), 0)
+        XCTAssertEqual(PagingRubberBand.clamp(1470, minX: 0, maxX: 2940, pageWidth: 1470), 1470)
+        XCTAssertEqual(PagingRubberBand.clamp(2940, minX: 0, maxX: 2940, pageWidth: 1470), 2940)
     }
 
     func testRubberBandAtFirstEdge() {
         // 越过 0 → 阻尼外溢(不直接钳死, 有饱和)
-        let clamped = PagingRubberBand.clamp(-100, minX: 0, maxX: 2940)
+        let clamped = PagingRubberBand.clamp(-100, minX: 0, maxX: 2940, pageWidth: 1470)
         XCTAssertLessThan(clamped, 0)
         XCTAssertGreaterThan(clamped, -100) // 被阻尼
     }
 
     func testRubberBandAtLastEdge() {
-        let clamped = PagingRubberBand.clamp(3040, minX: 0, maxX: 2940)
+        let clamped = PagingRubberBand.clamp(3040, minX: 0, maxX: 2940, pageWidth: 1470)
         XCTAssertGreaterThan(clamped, 2940)
         XCTAssertLessThan(clamped, 3040)
+    }
+
+    func testRubberBandCapUsesSinglePageWidthForTwoThreeAndFivePages() {
+        let pageWidth: CGFloat = 1000
+        let cap = PagingTuning.rubberBandMaxOverflowPages * pageWidth
+        let epsilon: CGFloat = 0.001
+
+        for pageCount in [2, 3, 5] {
+            let minX: CGFloat = 0
+            let maxX = CGFloat(pageCount - 1) * pageWidth
+            let clamp: (CGFloat) -> CGFloat = { offset in
+                PagingRubberBand.clamp(offset, minX: minX, maxX: maxX, pageWidth: pageWidth)
+            }
+
+            // Within-range mapping remains identity, including both boundaries.
+            for offset in [minX, pageWidth * 0.25, maxX - pageWidth * 0.25, maxX] {
+                XCTAssertEqual(clamp(offset), offset, accuracy: 0.0001)
+            }
+
+            // The edge remains continuous and the single-page cap is invariant
+            // as the number of pages changes.
+            XCTAssertEqual(clamp(minX - epsilon), minX - epsilon * PagingTuning.rubberBandStiffness, accuracy: 0.000001)
+            XCTAssertEqual(clamp(maxX + epsilon), maxX + epsilon * PagingTuning.rubberBandStiffness, accuracy: 0.000001)
+            XCTAssertEqual(clamp(minX - 2 * pageWidth), minX - cap, accuracy: 0.0001)
+            XCTAssertEqual(clamp(maxX + 2 * pageWidth), maxX + cap, accuracy: 0.0001)
+
+            // The complete mapping is monotonic and bounded by the same cap.
+            let lowerBound = minX - cap
+            let upperBound = maxX + cap
+            var previous = clamp(minX - 2 * pageWidth)
+            var offset = minX - 2 * pageWidth + pageWidth / 20
+            while offset <= maxX + 2 * pageWidth {
+                let current = clamp(offset)
+                XCTAssertGreaterThanOrEqual(current, previous - 0.000001)
+                XCTAssertGreaterThanOrEqual(current, lowerBound - 0.000001)
+                XCTAssertLessThanOrEqual(current, upperBound + 0.000001)
+                previous = current
+                offset += pageWidth / 20
+            }
+        }
     }
 
     func testClampStrict() {

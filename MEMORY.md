@@ -21,7 +21,10 @@
 
 ## Current Phase
 
-**v0.3.7 → interaction/folder/motion 基线推进中(未发布新版本)。**
+**Stage D 自动化与代码审查门禁已完成，v0.3.8 待发布。**
+
+物理/视觉 gate 尚未验收：时间连续性、真实触控板甩动速度与 120 Hz 手感仍为
+`MANUAL_PHYSICAL_GATE`，不得表述为 Stage D 已完成实机验收。
 
 当前状态:
 - 提交: `709e757` interaction: isolate settings input ownership
@@ -329,4 +332,13 @@ v0.2.3 release commit (tag `v0.2.3`); 基线为 `v0.2.2` / `9ee1264`
 
 ## Last Updated
 
-2026-08-10
+2026-08-11
+
+## Stage D motion system 收尾（2026-08-11）
+
+- 主要实现: Launcher/Folder/Settings 转场、press/drag、paging、accessibility/material、lifecycle/perf/diagnostics。
+- 自动化已验证: LaunchCore 87 XCTest + 143 Swift Testing；LaunchPlatform 127 Swift Testing；LaunchUI 5 XCTest + 152 Swift Testing；Debug/Release `BUILD SUCCEEDED`；`git diff --check` 通过。
+- 历史探针 `motionprobe/layoutdiag/pagetest/pagingprobe/dragcacheprobe/smoke --folders/searchprobe/settingsownershipprobe` 曾通过；最终 Settings 修复后的 `motionprobe` 复跑进入 `NSApplication.run` 后无输出，结果不确定，不宣称通过。
+- 性能: 首次 show 36.2 ms、warm 2.2–5.6 ms；首次 wallpaper 232.8 ms、warm 2.1–5.5 ms。
+- 独立最终 Sol medium 审查: 0 blocker / 0 major / 0 minor。
+- Computer Use/屏幕捕获受 `.screenSaver`/权限链路限制；时间连续性、真实触控板甩动速度、120 Hz 手感均为 `MANUAL_PHYSICAL_GATE`，尚未验收。报告: `Docs/Reports/stage-d-motion-validation.md`。

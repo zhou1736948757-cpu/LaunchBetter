@@ -55,9 +55,16 @@ public struct PagingSpring: Sendable {
 /// 仅当 offset 越过 [minX, maxX] 边界时作用。
 public enum PagingRubberBand {
     /// 对原始 offset 施加 rubber band(刚度阻尼 + 饱和上限, v0.1.6 m3)。
+    /// `pageWidth` 是单页宽度，而不是整个内容的可滚动范围；这样 cap
+    /// 不会随着页数增加而变软。
     /// - Returns: 施加后位置。正常范围内恒等于输入(direct mapping)。
-    public static func clamp(_ offset: CGFloat, minX: CGFloat, maxX: CGFloat) -> CGFloat {
-        let maxOverflow = PagingTuning.rubberBandMaxOverflowPages * max(0, maxX - minX)
+    public static func clamp(
+        _ offset: CGFloat,
+        minX: CGFloat,
+        maxX: CGFloat,
+        pageWidth: CGFloat
+    ) -> CGFloat {
+        let maxOverflow = PagingTuning.rubberBandMaxOverflowPages * max(0, pageWidth)
         if offset < minX {
             let overflow = minX - offset
             let damped = min(overflow * PagingTuning.rubberBandStiffness, maxOverflow)
@@ -68,6 +75,11 @@ public enum PagingRubberBand {
             return maxX + damped
         }
         return offset
+    }
+
+    /// 兼容只掌握滚动范围的旧调用方；分页调用方应传入单页 `pageWidth`。
+    public static func clamp(_ offset: CGFloat, minX: CGFloat, maxX: CGFloat) -> CGFloat {
+        clamp(offset, minX: minX, maxX: maxX, pageWidth: maxX - minX)
     }
 
     /// 施加后位置(含边界钳制版本, 用于 settle 目标落位)。

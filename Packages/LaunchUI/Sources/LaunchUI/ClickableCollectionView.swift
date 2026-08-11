@@ -1,6 +1,27 @@
 import AppKit
 import LaunchCore
 
+/// Source-aware threshold routing: resolve identity only at the paired
+/// mouseDown point, while preserving the threshold-crossing point for the
+/// semantic drag stream.
+@MainActor
+struct DragSourceAnchorSelection<Value> {
+    let source: Value
+    let currentPoint: NSPoint
+}
+
+@MainActor
+enum DragSourceAnchorResolver {
+    static func resolve<Value>(
+        sourcePoint: NSPoint,
+        currentPoint: NSPoint,
+        valueAt: (NSPoint) -> Value?
+    ) -> DragSourceAnchorSelection<Value>? {
+        guard let source = valueAt(sourcePoint) else { return nil }
+        return DragSourceAnchorSelection(source: source, currentPoint: currentPoint)
+    }
+}
+
 /// 可点击/可拖拽集合视图:
 /// - 单击(无拖动)→ onClick
 /// - 按住移动超过阈值 → 进入拖拽(经 onDragBegin/onDragMove/onDragEnd)
@@ -16,6 +37,15 @@ final class ClickableCollectionView: NSCollectionView {
     var onDragBegin: ((NSPoint) -> Void)?
     var onDragMove: ((NSPoint) -> Void)?
     var onDragEnd: ((NSPoint) -> Void)?
+
+    /// Source-aware drag callback. `sourcePoint` is the paired mouseDown anchor;
+    /// `currentPoint` is the pointer at threshold crossing. The legacy callback
+    /// remains unchanged for existing callers.
+    var onDragBeginWithSource: ((NSPoint, NSPoint) -> Void)?
+
+    /// During the active drag callback, this remains the original mouseDown
+    /// point rather than the threshold-crossing pointer.
+    private(set) var activeDragSourcePoint: NSPoint?
 
     /// 分页锁定的文档宽度(0 = 未锁定)。
     private var lockedDocumentWidth: CGFloat = 0
@@ -54,6 +84,9 @@ final class ClickableCollectionView: NSCollectionView {
 
     private var mouseDownPoint: NSPoint?
     private var dragging = false
+    /// 当前 mouse session 的视觉 press owner。实际拖拽 session 仍由上层
+    /// onDragBegin/onDragMove/onDragEnd callback 负责，这里只负责 AppCell 反馈。
+    private weak var pressedAppCell: AppCellView?
     /// 本鼠标会话是否收到过 mouseDown。
     /// 覆盖层(Folder/Settings)可能在同一物理点击中于 mouseDown 后移除祖先,
     /// 导致后续 mouseUp 落到本视图; 无配对 mouseDown 的 mouseUp 必须忽略,
@@ -64,6 +97,10 @@ final class ClickableCollectionView: NSCollectionView {
         receivedMouseDown = true
         mouseDownPoint = event.locationInWindow
         dragging = false
+        activeDragSourcePoint = nil
+        pressedAppCell?.cancelPressFeedback()
+        pressedAppCell = appCell(at: event.locationInWindow)
+        pressedAppCell?.beginPressFeedback(at: event.locationInWindow)
     }
 
     override func mouseDragged(with event: NSEvent) {
@@ -74,6 +111,11 @@ final class ClickableCollectionView: NSCollectionView {
             let dy = point.y - start.y
             if (dx * dx + dy * dy) >= dragThreshold * dragThreshold {
                 dragging = true
+                activeDragSourcePoint = start
+                // 先通知 press owner 保留当前 presentation，再交给既有 drag
+                // callback；因此 threshold crossing 不会先回弹。
+                pressedAppCell?.updatePressFeedback(at: point)
+                onDragBeginWithSource?(start, point)
                 onDragBegin?(point)
             }
         } else {
@@ -85,19 +127,29 @@ final class ClickableCollectionView: NSCollectionView {
         defer {
             mouseDownPoint = nil
             receivedMouseDown = false
+            pressedAppCell = nil
+            activeDragSourcePoint = nil
         }
         guard receivedMouseDown else { return }
         let point = event.locationInWindow
         if dragging {
             dragging = false
+            pressedAppCell?.endPressFeedback(afterDragging: true)
             onDragEnd?(point)
         } else {
+            pressedAppCell?.endPressFeedback(afterDragging: false)
             onClick?(point)
         }
     }
 
     override func menu(for event: NSEvent) -> NSMenu? {
         onContextMenu?(event.locationInWindow)
+    }
+
+    private func appCell(at point: NSPoint) -> AppCellView? {
+        let local = convert(point, from: nil)
+        guard let indexPath = indexPathForItem(at: local) else { return nil }
+        return item(at: indexPath) as? AppCellView
     }
 
     // MARK: - 翻页滚轮/滑动(响应链: 集合视图最先收到)

@@ -31,6 +31,17 @@ struct PagingLifecycleTests {
         return controller
     }
 
+    private func makeHeadlessController(
+        pageWidth: CGFloat = 1000,
+        currentOffset: CGFloat = 1000
+    ) -> PagingInteractionController {
+        let controller = PagingInteractionController()
+        controller.onReadCurrentOffset = { currentOffset }
+        controller.onReadPageWidth = { pageWidth }
+        controller.onReadPageCount = { 3 }
+        return controller
+    }
+
     @Test("禁用分页(搜索模式)中断在途 settle 并停止 display link")
     func disablingPagingStopsActiveSettle() {
         let window = makeWindow()
@@ -69,5 +80,75 @@ struct PagingLifecycleTests {
         controller.isEnabled = false
         #expect(controller.phase == .idle)
         #expect(controller.isDisplayLinkActive == false)
+    }
+
+    @Test("5%-9%短距快速左/右 fling 使用与 resolver 一致的方向")
+    func shortFastFlingUsesResolverDirectionBothWays() {
+        var leftTarget: Int?
+        let left = makeHeadlessController()
+        left.onSettleTargetPage = { leftTarget = $0 }
+        left.probeGesture(deltaXs: [-10, -50])
+        #expect(leftTarget == 2)
+
+        var rightTarget: Int?
+        let right = makeHeadlessController()
+        right.onSettleTargetPage = { rightTarget = $0 }
+        right.probeGesture(deltaXs: [10, 50])
+        #expect(rightTarget == 0)
+    }
+
+    @Test("零水平位移不启动无意义 settle 或 display link")
+    func zeroHorizontalGestureDoesNotStartAnimation() {
+        let window = makeWindow()
+        defer { window.orderOut(nil) }
+        let controller = makeController(window: window)
+
+        controller.probeGesture(deltaXs: [0, 0])
+
+        #expect(controller.phase == .idle)
+        #expect(controller.settleCount == 0)
+        #expect(controller.isDisplayLinkActive == false)
+        #expect(controller.scrollWriteCount == 0)
+    }
+
+    @Test("未锁定的垂直手势不启动无意义 settle 或 display link")
+    func verticalGestureWithoutHorizontalLockDoesNotStartAnimation() {
+        let window = makeWindow()
+        defer { window.orderOut(nil) }
+        let controller = makeController(window: window)
+
+        controller.probeGesture(deltaXs: [3, 2], deltaYs: [20, 30])
+
+        #expect(controller.phase == .idle)
+        #expect(controller.settleCount == 0)
+        #expect(controller.isDisplayLinkActive == false)
+        #expect(controller.scrollWriteCount == 0)
+    }
+
+    @Test("settle 收敛帧精确写入最终 target")
+    func settleFinalFrameWritesExactTarget() {
+        let controller = PagingInteractionController()
+        let pageWidth: CGFloat = 800
+        var currentOffset: CGFloat = 0
+        var writes: [CGFloat] = []
+        controller.onReadCurrentOffset = { currentOffset }
+        controller.onReadPageWidth = { pageWidth }
+        controller.onReadPageCount = { 3 }
+        controller.onScroll = { offset in
+            currentOffset = offset
+            writes.append(offset)
+        }
+
+        controller.jumpTo(page: 1)
+        // Simulate a residual offset that is inside the old 0.5pt skip window,
+        // while the writer still remembers the previous exact page position.
+        currentOffset = pageWidth + 0.25
+        controller.startSettle(toPage: 1)
+
+        #expect(controller.probeDisplayFrame() == true)
+        #expect(controller.phase == .idle)
+        #expect(currentOffset == pageWidth)
+        #expect(writes.last == pageWidth)
+        #expect(controller.settlingSkippedWriteCount == 0)
     }
 }

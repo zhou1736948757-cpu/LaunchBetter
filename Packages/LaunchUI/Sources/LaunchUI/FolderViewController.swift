@@ -1,6 +1,74 @@
 import AppKit
 import LaunchCore
 
+/// Pure mapping/apply seam for the Folder card and its settled dim surface.
+///
+/// The apply path never writes transition-owned opacity or shadow values. This
+/// lets live accessibility changes update material while Folder motion keeps
+/// consuming its existing presentation state.
+struct FolderViewAppearance: Equatable, Sendable {
+    let surfaceTreatment: AccessibilitySurfaceTreatment
+    let surfaceOpacity: Float
+    let boundaryTreatment: AccessibilityBoundaryTreatment
+    let foregroundSeparation: AccessibilityForegroundSeparation
+    let dimOpacity: Float
+
+    static func make(for policy: AccessibilityMaterialPolicy) -> Self {
+        Self(
+            surfaceTreatment: policy.surfaceTreatment,
+            surfaceOpacity: policy.surfaceOpacity,
+            boundaryTreatment: policy.boundaryTreatment,
+            foregroundSeparation: policy.foregroundSeparation,
+            dimOpacity: policy.emphasizesBoundary ? 0.22 : 0.18
+        )
+    }
+
+    @MainActor
+    static func apply(
+        _ appearance: Self,
+        to card: NSVisualEffectView,
+        dimLayer: CALayer
+    ) {
+        card.wantsLayer = true
+        card.blendingMode = .withinWindow
+        card.state = .active
+        card.isEmphasized = appearance.foregroundSeparation == .enhanced
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        switch appearance.surfaceTreatment {
+        case .translucent:
+            card.material = .hudWindow
+            card.layer?.backgroundColor = nil
+        case .opaque:
+            // `.windowBackground` is a public AppKit surface that does not
+            // require blur to remain legible under Reduce Transparency.
+            card.material = .windowBackground
+            card.layer?.backgroundColor = NSColor.windowBackgroundColor
+                .withAlphaComponent(CGFloat(appearance.surfaceOpacity))
+                .cgColor
+        }
+
+        switch appearance.boundaryTreatment {
+        case .standard:
+            card.layer?.borderWidth = 0
+            card.layer?.borderColor = nil
+        case .emphasized:
+            card.layer?.borderWidth = 1
+            card.layer?.borderColor = NSColor.separatorColor
+                .withAlphaComponent(0.85)
+                .cgColor
+        }
+
+        // Keep the transition's current opacity untouched; only the settled
+        // dim color changes with the view policy.
+        dimLayer.backgroundColor = NSColor.black
+            .withAlphaComponent(CGFloat(appearance.dimOpacity))
+            .cgColor
+        CATransaction.commit()
+    }
+}
+
 /// 文件夹视图: 显示文件夹内应用(单页网格),并承接文件夹内的局部操作。
 @MainActor
 final class FolderViewController: NSViewController, NSTextFieldDelegate {
@@ -8,6 +76,7 @@ final class FolderViewController: NSViewController, NSTextFieldDelegate {
     private let store: any LauncherStoring
     private let iconProvider: (any IconImageProviding)?
     private let folderID: FolderID
+    private var accessibilityMaterialPolicy: AccessibilityMaterialPolicy
 
     var onBack: (() -> Void)?
     /// 文件夹拖拽越过卡片后交给窗口控制器, 后续事件仍来自同一 mouse session。
@@ -18,6 +87,7 @@ final class FolderViewController: NSViewController, NSTextFieldDelegate {
     private var rootView: FolderRootView!
     private var cardShadowView: NSView!
     private var visualCardView: NSVisualEffectView!
+    private let transitionDimLayer = CALayer()
     private var titleLabel: FolderTitleView!
     private var editField: NSTextField?
     private var collectionView: ClickableCollectionView!
@@ -28,6 +98,19 @@ final class FolderViewController: NSViewController, NSTextFieldDelegate {
     private var dataObserverToken: UUID?
     private var orderOutObserver: NSObjectProtocol?
     private var isClosing = false
+    private var transitionLayoutRevision: UInt64 = 0
+    private var lastTransitionRootBounds: CGRect = .null
+    private var lastTransitionCardFrame: CGRect = .null
+
+    private let titleEditorHorizontalPadding = FolderTitleEditingMetrics.editorHorizontalPadding
+
+    private struct TitleEditorState {
+        let string: String
+        let selectedRange: NSRange
+    }
+
+    private var lastValidTitleEditorState: TitleEditorState?
+    private var isRestoringTitleEditorState = false
 
     // 文件夹覆盖层自己的鼠标拖拽状态; 不进入 LauncherStore 持久状态。
     private var draggingApp: AppID?
@@ -42,6 +125,9 @@ final class FolderViewController: NSViewController, NSTextFieldDelegate {
         self.store = store
         self.iconProvider = iconProvider
         self.folderID = folderID
+        self.accessibilityMaterialPolicy = AccessibilityMaterialPolicy(
+            snapshot: MotionEnvironment.liveSnapshot()
+        )
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -52,7 +138,10 @@ final class FolderViewController: NSViewController, NSTextFieldDelegate {
     override func loadView() {
         let root = FolderRootView()
         root.wantsLayer = true
-        root.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.18).cgColor
+        root.layer?.backgroundColor = NSColor.clear.cgColor
+        transitionDimLayer.backgroundColor = NSColor.black.withAlphaComponent(0.18).cgColor
+        transitionDimLayer.frame = root.bounds
+        root.layer?.addSublayer(transitionDimLayer)
         root.onWindowChange = { [weak self] in
             self?.folderRootWindowDidChange()
         }
@@ -91,7 +180,7 @@ final class FolderViewController: NSViewController, NSTextFieldDelegate {
             targetHeight,
         ])
 
-        let card = NSVisualEffectView()
+        let card = FolderCardView()
         card.material = .hudWindow
         card.blendingMode = .withinWindow
         card.state = .active
@@ -111,6 +200,7 @@ final class FolderViewController: NSViewController, NSTextFieldDelegate {
         ])
         visualCardView = card
         root.cardView = cardShadowView
+        applyAccessibilityMaterialPolicy(accessibilityMaterialPolicy)
 
         // 标题: 居中, 长按重命名(无可见 Rename/Dissolve 按钮)。
         // FolderTitleView 是 NSView 容器: 一定接收 mouseDown, 自实现长按进入编辑。
@@ -149,6 +239,7 @@ final class FolderViewController: NSViewController, NSTextFieldDelegate {
 
         scrollView = NSScrollView()
         scrollView.drawsBackground = false
+        scrollView.wantsLayer = true
         scrollView.hasHorizontalScroller = false
         scrollView.hasVerticalScroller = true
         scrollView.autohidesScrollers = true
@@ -196,8 +287,8 @@ final class FolderViewController: NSViewController, NSTextFieldDelegate {
                   case .app(let id) = item else { return }
             self.store.launch(id)
         }
-        collectionView.onDragBegin = { [weak self] point in
-            self?.beginDrag(at: point)
+        collectionView.onDragBeginWithSource = { [weak self] sourcePoint, currentPoint in
+            self?.beginDrag(from: sourcePoint, at: currentPoint)
         }
         collectionView.onDragMove = { [weak self] point in
             self?.updateDrag(at: point)
@@ -210,8 +301,28 @@ final class FolderViewController: NSViewController, NSTextFieldDelegate {
         refresh()
     }
 
+    /// Updates only the card/dim material properties. Folder transition layers
+    /// continue to own their current opacity and existing soft shadow weight.
+    func applyAccessibilityMaterialPolicy(_ policy: AccessibilityMaterialPolicy) {
+        accessibilityMaterialPolicy = policy
+        guard isViewLoaded, let card = visualCardView else { return }
+        FolderViewAppearance.apply(
+            FolderViewAppearance.make(for: policy),
+            to: card,
+            dimLayer: transitionDimLayer
+        )
+    }
+
     override func viewDidLayout() {
         super.viewDidLayout()
+        transitionDimLayer.frame = rootView.bounds
+        let rootBounds = rootView.bounds
+        let cardFrame = cardShadowView?.frame ?? .zero
+        if rootBounds != lastTransitionRootBounds || cardFrame != lastTransitionCardFrame {
+            transitionLayoutRevision &+= 1
+            lastTransitionRootBounds = rootBounds
+            lastTransitionCardFrame = cardFrame
+        }
         updateDocumentFrame()
     }
 
@@ -306,16 +417,27 @@ final class FolderViewController: NSViewController, NSTextFieldDelegate {
         }
     }
 
-    private func beginDrag(at point: NSPoint) {
+    private func beginDrag(from sourcePoint: NSPoint, at currentPoint: NSPoint) {
         guard !isClosing, !folderExitHandedOff else { return }
-        let local = collectionView.convert(point, from: nil)
-        guard let indexPath = collectionView.indexPathForItem(at: local),
-              let item = dataSource.itemIdentifier(for: indexPath),
-              case .app(let app) = item,
+        guard let selection = DragSourceAnchorResolver.resolve(
+            sourcePoint: sourcePoint,
+            currentPoint: currentPoint,
+            valueAt: { (sourcePoint: NSPoint) -> (IndexPath, DisplayModel.DisplayItem)? in
+                let local = collectionView.convert(sourcePoint, from: nil)
+                guard let indexPath = collectionView.indexPathForItem(at: local),
+                      let item = dataSource.itemIdentifier(for: indexPath) else {
+                    return nil
+                }
+                return (indexPath, item)
+            }
+        ),
+              case .app(let app) = selection.source.1,
               let sourceIndex = displayedChildren.firstIndex(of: app) else {
             resetDrag()
             return
         }
+        let indexPath = selection.source.0
+        let point = selection.currentPoint
         draggingApp = app
         draggingSourceIndex = sourceIndex
         draggingOutside = !folderInteractionRect.contains(view.convert(point, from: nil))
@@ -433,9 +555,10 @@ final class FolderViewController: NSViewController, NSTextFieldDelegate {
         // 保持视图层级参与事件分发，仅将视觉透明；提交成功后再由 closeFolderView 移除。
         cardShadowView?.isHidden = false
         cardShadowView?.alphaValue = visible ? 1 : 0
-        rootView?.layer?.backgroundColor = visible
-            ? NSColor.black.withAlphaComponent(0.18).cgColor
-            : NSColor.clear.cgColor
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        transitionDimLayer.opacity = visible ? 1 : 0
+        CATransaction.commit()
     }
 
     private func handoffFolderDrag(at point: NSPoint) {
@@ -552,6 +675,38 @@ final class FolderViewController: NSViewController, NSTextFieldDelegate {
         onBack?()
     }
 
+    /// Auto Layout 完成一次真实 card frame 后暴露 Folder transition target。
+    /// 调用方应在动画开始前调用；动画帧只消费返回的 CALayer 引用。
+    func transitionTarget(in targetView: NSView) -> FolderTransitionTarget? {
+        guard isViewLoaded, view.window === targetView.window,
+              let cardShadowView,
+              let cardLayer = cardShadowView.layer,
+              let materialLayer = visualCardView?.layer else {
+            return nil
+        }
+        view.layoutSubtreeIfNeeded()
+        let frame = cardShadowView.convert(cardShadowView.bounds, to: targetView)
+        guard frame.width > 0, frame.height > 0 else { return nil }
+
+        let revision = transitionLayoutRevision
+        let targetLayer = transitionDimLayer
+        let contentLayers = [titleLabel?.layer, scrollView?.layer].compactMap { $0 }
+        return FolderTransitionTarget(
+            frameInContentView: frame,
+            cornerRadius: materialLayer.cornerRadius,
+            baseShadowOpacity: cardLayer.shadowOpacity,
+            dimLayer: targetLayer,
+            cardLayer: cardLayer,
+            materialLayer: materialLayer,
+            contentLayers: contentLayers,
+            isCurrent: { [weak self, weak targetView] in
+                guard let self, let targetView else { return false }
+                return self.view.window === targetView.window
+                    && self.transitionLayoutRevision == revision
+            }
+        )
+    }
+
     @objc private func renameTapped() {
         beginTitleEditing()
     }
@@ -580,15 +735,26 @@ final class FolderViewController: NSViewController, NSTextFieldDelegate {
         card.layoutSubtreeIfNeeded()
         titleLabel.layoutSubtreeIfNeeded()
 
-        let editor = NSTextField(frame: titleLabel.frame)
-        editor.stringValue = titleLabel.text
-        editor.font = titleLabel.titleFont
+        let titleFrame = titleLabel.frame
+        let titleText = titleLabel.text
+        let titleFont = titleLabel.titleFont
+        let editorFrame = titleEditorFrame(
+            for: titleText,
+            font: titleFont,
+            in: card,
+            preserving: titleFrame
+        )
+
+        let editor = NSTextField(frame: editorFrame)
+        editor.stringValue = titleText
+        editor.font = titleFont
         editor.alignment = .center
         editor.isBordered = false
         editor.isBezeled = false
         editor.drawsBackground = false
         editor.textColor = .labelColor
         editor.focusRingType = .none
+        editor.usesSingleLineMode = true
         editor.delegate = self
         editor.autoresizingMask = []
         // 编辑态视觉提示: 浅色圆角底, 明确"已进入可编辑状态"; 聚焦后 field editor
@@ -599,6 +765,10 @@ final class FolderViewController: NSViewController, NSTextFieldDelegate {
         card.addSubview(editor, positioned: .above, relativeTo: titleLabel)
         titleLabel.isHidden = true
         applyTitlePressFeedback(false)
+        lastValidTitleEditorState = TitleEditorState(
+            string: titleText,
+            selectedRange: NSRange(location: 0, length: (titleText as NSString).length)
+        )
         editField = editor
         // 长按仍在鼠标事件序列中(mouseUp 未到)。延迟到事件序列结束后再聚焦,
         // 避免在途 mouseUp 打断 first responder / field editor。
@@ -609,8 +779,29 @@ final class FolderViewController: NSViewController, NSTextFieldDelegate {
                 self.madeTitleEditorFirstResponder =
                     self.view.window?.makeFirstResponder(editor) ?? false
                 editor.currentEditor()?.selectAll(nil)
+                self.rememberLastValidTitleEditorState(for: editor)
             }
         }
+    }
+
+    private func titleEditorFrame(
+        for text: String,
+        font: NSFont,
+        in card: NSView,
+        preserving referenceFrame: NSRect
+    ) -> NSRect {
+        let measuredTextWidth = FolderTitleEditingMetrics.renderedTextWidth(text, font: font)
+        let availableWidth = FolderTitleEditingMetrics.availableEditorWidth(cardWidth: card.bounds.width)
+        let editorWidth = min(
+            measuredTextWidth + titleEditorHorizontalPadding,
+            availableWidth
+        )
+        return NSRect(
+            x: referenceFrame.midX - editorWidth / 2,
+            y: referenceFrame.minY,
+            width: editorWidth,
+            height: referenceFrame.height
+        )
     }
 
     /// 诊断: 最近一次 makeFirstResponder 是否成功。
@@ -634,13 +825,117 @@ final class FolderViewController: NSViewController, NSTextFieldDelegate {
         return "editing=true madeFR=\(madeTitleEditorFirstResponder) isEditor=\(isEditor) isFieldEditor=\(isFieldEditor) fr=\(frDesc) currentEditor=\(ce) frame=\(editor.frame) editable=\(editor.isEditable) title=\(titleLabel.text) intrinsic=\(titleLabel.intrinsicContentSize)"
     }
 
+    private func rememberLastValidTitleEditorState(for editor: NSTextField) {
+        guard !isRestoringTitleEditorState else { return }
+        let fallbackSelection = lastValidTitleEditorState?.selectedRange
+            ?? NSRange(location: (editor.stringValue as NSString).length, length: 0)
+        let selectedRange = (editor.currentEditor() as? NSTextView)?.selectedRange ?? fallbackSelection
+        lastValidTitleEditorState = TitleEditorState(
+            string: editor.stringValue,
+            selectedRange: selectedRange
+        )
+    }
+
+    private func restoreLastValidTitleEditorState(in editor: NSTextField) {
+        guard let state = lastValidTitleEditorState else { return }
+        isRestoringTitleEditorState = true
+        defer { isRestoringTitleEditorState = false }
+
+        let fieldEditor = editor.currentEditor() as? NSTextView
+        editor.stringValue = state.string
+        guard let fieldEditor else { return }
+        fieldEditor.string = state.string
+
+        let stringLength = (state.string as NSString).length
+        let location = min(max(0, state.selectedRange.location), stringLength)
+        let length = min(
+            max(0, state.selectedRange.length),
+            stringLength - location
+        )
+        fieldEditor.setSelectedRange(NSRange(location: location, length: length))
+    }
+
+    private func currentTitleEditorStateCanBeKept(
+        _ editor: NSTextField,
+        font: NSFont,
+        card: NSView
+    ) -> Bool {
+        guard let lastValidTitleEditorState else { return false }
+        let currentString = editor.stringValue
+        guard !FolderTitleEditingMetrics.textFits(
+            currentString,
+            font: font,
+            cardWidth: card.bounds.width
+        ) else {
+            return true
+        }
+
+        // An over-wide persisted name is not silently truncated. Deleting or
+        // shortening it remains an accepted edit even while it is still over
+        // the new limit; subsequent widening input is still rejected.
+        let currentWidth = FolderTitleEditingMetrics.renderedTextWidth(currentString, font: font)
+        let lastValidWidth = FolderTitleEditingMetrics.renderedTextWidth(
+            lastValidTitleEditorState.string,
+            font: font
+        )
+        return currentWidth < lastValidWidth
+            || (
+                currentWidth == lastValidWidth
+                    && (currentString as NSString).length
+                        < (lastValidTitleEditorState.string as NSString).length
+            )
+    }
+
+    private func restoreOverWideTitleEditorIfNeeded(
+        _ editor: NSTextField,
+        font: NSFont,
+        card: NSView
+    ) {
+        if let fieldEditor = editor.currentEditor() as? NSTextView, fieldEditor.hasMarkedText() {
+            return
+        }
+        guard !FolderTitleEditingMetrics.textFits(
+            editor.stringValue,
+            font: font,
+            cardWidth: card.bounds.width
+        ) else { return }
+        restoreLastValidTitleEditorState(in: editor)
+    }
+
+    private func updateTitleEditorFrame(_ editor: NSTextField, in card: NSView) {
+        guard let font = editor.font else { return }
+        let currentFrame = editor.frame
+        let updatedFrame = titleEditorFrame(
+            for: editor.stringValue,
+            font: font,
+            in: card,
+            preserving: currentFrame
+        )
+        guard updatedFrame != currentFrame else { return }
+
+        // 只改变控件 frame, 不重写 string 或重新成为 first responder。
+        // 因此 field editor 的选择/光标位置保持不变; 额外恢复 NSTextView
+        // 的选区以防 AppKit 在 frame 调整时重置它。
+        let fieldEditor = editor.currentEditor() as? NSTextView
+        let selectedRange = fieldEditor?.selectedRange
+        editor.frame = updatedFrame
+        if let fieldEditor, let selectedRange {
+            fieldEditor.setSelectedRange(selectedRange)
+        }
+    }
+
     /// 结束内联编辑。commit=false 取消并恢复原标题。
     private func endTitleEditing(commit: Bool) {
         guard let editor = editField else { return }
+        if commit, let font = editor.font, let card = visualCardView {
+            restoreOverWideTitleEditorIfNeeded(editor, font: font, card: card)
+        }
         editField = nil
         let candidate = editor.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         editor.removeFromSuperview()
         titleLabel.isHidden = false
+        lastValidTitleEditorState = nil
+        isRestoringTitleEditorState = false
 
         guard commit else { return }
         guard !candidate.isEmpty else {
@@ -668,6 +963,34 @@ final class FolderViewController: NSViewController, NSTextFieldDelegate {
 
     // MARK: - NSTextFieldDelegate(内联重命名)
 
+    func controlTextDidBeginEditing(_ obj: Notification) {
+        guard let editor = obj.object as? NSTextField,
+              editor === editField else { return }
+        rememberLastValidTitleEditorState(for: editor)
+    }
+
+    func control(
+        _ control: NSControl,
+        textView: NSTextView,
+        shouldChangeCharactersIn affectedCharRange: NSRange,
+        replacementString: String?
+    ) -> Bool {
+        guard let editor = control as? NSTextField,
+              editor === editField,
+              let font = editor.font,
+              let card = visualCardView else {
+            return true
+        }
+        return FolderTitleEditingMetrics.allowsChange(
+            currentText: textView.string,
+            affectedRange: affectedCharRange,
+            replacementString: replacementString,
+            font: font,
+            cardWidth: card.bounds.width,
+            hasMarkedText: textView.hasMarkedText()
+        )
+    }
+
     func control(
         _ control: NSControl,
         textView: NSTextView,
@@ -690,8 +1013,101 @@ final class FolderViewController: NSViewController, NSTextFieldDelegate {
         endTitleEditing(commit: true)
     }
 
+    func controlTextDidChange(_ obj: Notification) {
+        guard let editor = obj.object as? NSTextField,
+              editor === editField,
+              let card = visualCardView,
+              let font = editor.font else { return }
+
+        let fieldEditor = editor.currentEditor() as? NSTextView
+        if !isRestoringTitleEditorState, !(fieldEditor?.hasMarkedText() ?? false) {
+            if currentTitleEditorStateCanBeKept(editor, font: font, card: card) {
+                rememberLastValidTitleEditorState(for: editor)
+            } else {
+                restoreOverWideTitleEditorIfNeeded(editor, font: font, card: card)
+            }
+        }
+        updateTitleEditorFrame(editor, in: card)
+    }
+
     private func stableColorIndex(_ key: String) -> Int {
         abs(key.unicodeScalars.reduce(0) { $0 &+ Int($1.value) }) % 12
+    }
+}
+
+/// Folder title editing geometry and replacement policy.
+///
+/// The policy deliberately works on complete Swift strings. It never truncates
+/// a replacement, so a rejected paste cannot leave a partial grapheme behind.
+enum FolderTitleEditingMetrics {
+    static let cardHorizontalInset: CGFloat = 24
+    static let editorHorizontalPadding: CGFloat = 16
+
+    static func renderedTextWidth(_ text: String, font: NSFont) -> CGFloat {
+        ceil((text as NSString).size(withAttributes: [.font: font]).width)
+    }
+
+    static func availableEditorWidth(cardWidth: CGFloat) -> CGFloat {
+        max(0, cardWidth - 2 * cardHorizontalInset)
+    }
+
+    static func maximumTextWidth(cardWidth: CGFloat) -> CGFloat {
+        max(0, availableEditorWidth(cardWidth: cardWidth) - editorHorizontalPadding)
+    }
+
+    static func editorWidth(for text: String, font: NSFont, cardWidth: CGFloat) -> CGFloat {
+        min(
+            renderedTextWidth(text, font: font) + editorHorizontalPadding,
+            availableEditorWidth(cardWidth: cardWidth)
+        )
+    }
+
+    static func textFits(_ text: String, font: NSFont, cardWidth: CGFloat) -> Bool {
+        renderedTextWidth(text, font: font) <= maximumTextWidth(cardWidth: cardWidth)
+    }
+
+    static func proposedString(
+        currentText: String,
+        affectedRange: NSRange,
+        replacementString: String?
+    ) -> String? {
+        guard let range = Range(affectedRange, in: currentText) else { return nil }
+        return currentText.replacingCharacters(
+            in: range,
+            with: replacementString ?? ""
+        )
+    }
+
+    static func allowsChange(
+        currentText: String,
+        affectedRange: NSRange,
+        replacementString: String?,
+        font: NSFont,
+        cardWidth: CGFloat,
+        hasMarkedText: Bool
+    ) -> Bool {
+        // AppKit owns the marked-text selection while an IME composition is in
+        // progress. Let it finish; controlTextDidChange validates the committed
+        // result and restores the last complete state if needed.
+        if hasMarkedText { return true }
+        guard let proposedText = proposedString(
+            currentText: currentText,
+            affectedRange: affectedRange,
+            replacementString: replacementString
+        ) else {
+            return false
+        }
+
+        if textFits(proposedText, font: font, cardWidth: cardWidth) {
+            return true
+        }
+
+        // Deletion/shortening is never blocked. This also preserves an existing
+        // persisted title that predates the width limit without truncating it.
+        let isDeletion = (replacementString ?? "").isEmpty && affectedRange.length > 0
+        let proposedWidth = renderedTextWidth(proposedText, font: font)
+        let currentWidth = renderedTextWidth(currentText, font: font)
+        return isDeletion || proposedWidth < currentWidth
     }
 }
 
@@ -706,6 +1122,21 @@ struct FolderPanelMetrics: Equatable {
 
     static func iconPointSize(for configuredSize: Int) -> Int {
         min(max(16, configuredSize), iconSizeLimit)
+    }
+}
+
+/// NSVisualEffectView 作为卡片背景时可能在真实窗口命中测试中截断子视图下探。
+/// 保留卡片自身作为空白区命中目标, 但让标题/滚动区收到真实鼠标事件。
+private final class FolderCardView: NSVisualEffectView {
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard bounds.contains(point) else { return nil }
+        for subview in subviews.reversed() {
+            let pointInSubview = subview.convert(point, from: self)
+            if let hit = subview.hitTest(pointInSubview) {
+                return hit
+            }
+        }
+        return self
     }
 }
 
@@ -761,7 +1192,7 @@ final class FolderTitleView: NSView {
 
     let label = FolderTitleLabel(frame: .zero)
 
-    private let minimumPressDuration: TimeInterval = 0.5
+    private let minimumPressDuration: TimeInterval = 0.3
     private let allowableMovement: CGFloat = 6
     private var pressStartPoint: CGPoint?
     private var pressTimer: Timer?
@@ -801,8 +1232,21 @@ final class FolderTitleView: NSView {
 
     var titleFont: NSFont {
         get { label.font ?? .systemFont(ofSize: 13) }
-        set { label.font = newValue }
+        set {
+            label.font = newValue
+            label.invalidateIntrinsicContentSize()
+            invalidateIntrinsicContentSize()
+        }
     }
+
+    /// NSTextField 的 label 子视图必须让容器接收命中, 否则 AppKit 会把
+    /// mouseDown 直接交给 label, 外层长按状态机永远不会开始。
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard !isHidden, bounds.contains(point) else { return nil }
+        return self
+    }
+
+    override var mouseDownCanMoveWindow: Bool { false }
 
     override func mouseDown(with event: NSEvent) {
         pointerInside = true
@@ -818,8 +1262,9 @@ final class FolderTitleView: NSView {
                 self?.activateRenameIfStillPressing()
             }
         }
-        // eventTracking: 按住拖动期间仍触发。
-        RunLoop.main.add(timer, forMode: .eventTracking)
+        // common 覆盖 AppKit 默认模式和鼠标 tracking 模式, 真实事件循环和
+        // 单元测试推进默认模式时都能触发。
+        RunLoop.main.add(timer, forMode: .common)
         pressTimer = timer
     }
 

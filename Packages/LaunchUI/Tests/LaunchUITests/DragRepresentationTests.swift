@@ -53,6 +53,47 @@ struct DragRepresentationTests {
         #expect(overlay.layer.sublayers?.first?.contentsScale == representation.rasterScale)
     }
 
+    @Test("folder source geometry uses the real thumbnail frame and suppression is reversible")
+    func folderSourceGeometryAndSuppression() throws {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 240, height: 180),
+            styleMask: .borderless,
+            backing: .buffered,
+            defer: false
+        )
+        let root = NSView(frame: window.contentView?.bounds ?? .zero)
+        window.contentView = root
+        defer {
+            window.orderOut(nil)
+            window.contentView = nil
+        }
+
+        let cell = AppCellView()
+        cell.view.frame = NSRect(x: 60, y: 40, width: 100, height: 100)
+        root.addSubview(cell.view)
+        cell.configureFolder(
+            displayName: "Folder",
+            accessibilityHint: "Folder",
+            folderID: FolderID("folder://source-geometry")!,
+            children: [],
+            pointSize: 64,
+            iconProvider: nil
+        )
+        window.layoutIfNeeded()
+        cell.view.layoutSubtreeIfNeeded()
+
+        let frame = try #require(cell.transitionSourceFrame(in: root))
+        #expect(frame.width == 64)
+        #expect(frame.height == 64)
+        #expect(frame.midX == cell.view.convert(cell.view.bounds, to: root).midX)
+        #expect(frame.maxY <= cell.view.convert(cell.view.bounds, to: root).maxY)
+
+        cell.setTransitionSourceSuppressed(true)
+        #expect(cell.view.layer?.opacity == 0)
+        cell.setTransitionSourceSuppressed(false)
+        #expect(cell.view.layer?.opacity == 1)
+    }
+
     @Test("active source identity is reapplied when cells are reconfigured")
     func sourceIdentitySurvivesReconfiguration() throws {
         let first = AppID("/Applications/DragSourceA.app")!

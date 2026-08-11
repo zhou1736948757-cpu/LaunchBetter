@@ -33,24 +33,123 @@ struct MotionSpringSpec: Equatable {
     let dampingRatio: CGFloat
 }
 
+/// 一次动效决策使用的无障碍环境快照。
+///
+/// 读取在过渡开始时完成；逐帧动画只消费这个值，不在 display frame 中访问
+/// NSWorkspace。测试可以直接构造快照，而产品代码仍通过 `liveSnapshot()` 实时读取。
+struct MotionEnvironmentSnapshot: Equatable, Sendable {
+    let reduceMotion: Bool
+    let reduceTransparency: Bool
+    let increaseContrast: Bool
+}
+
+/// Launcher M1/M2 的纯动效策略。
+///
+/// 背景只改变 alpha，前景 surface 才有克制的 0.985 → 1 缩放。Reduce Motion
+/// 时两端 scale 都固定为 1，因此策略只留下短淡入淡出；material/contrast
+/// 的具体视觉实现留给后续阶段。
+struct LauncherMotionPolicy: Equatable, Sendable {
+    let reduceMotion: Bool
+    let reduceTransparency: Bool
+    let increaseContrast: Bool
+    let materialPolicy: AccessibilityMaterialPolicy
+    let duration: TimeInterval
+
+    let hiddenSurfaceScale: CGFloat
+    let visibleSurfaceScale: CGFloat
+    let hiddenSurfaceOpacity: Float
+    let visibleSurfaceOpacity: Float
+    let hiddenBackgroundOpacity: Float
+    let visibleBackgroundOpacity: Float
+    let hiddenDimOpacity: Float
+    let visibleDimOpacity: Float
+
+    var animatesSurfaceScale: Bool {
+        !reduceMotion
+    }
+
+    init(snapshot: MotionEnvironmentSnapshot) {
+        reduceMotion = snapshot.reduceMotion
+        reduceTransparency = snapshot.reduceTransparency
+        increaseContrast = snapshot.increaseContrast
+        materialPolicy = AccessibilityMaterialPolicy(snapshot: snapshot)
+        duration = snapshot.reduceMotion
+            ? MotionEnvironment.reducedFadeDuration
+            : MotionEnvironment.standardFadeDuration
+
+        hiddenSurfaceScale = snapshot.reduceMotion ? 1 : 0.985
+        visibleSurfaceScale = 1
+        hiddenSurfaceOpacity = 0
+        visibleSurfaceOpacity = 1
+        hiddenBackgroundOpacity = 0
+        visibleBackgroundOpacity = 1
+        hiddenDimOpacity = 0
+        visibleDimOpacity = 1
+    }
+
+    func presentation(for intent: LauncherTransitionIntent) -> LauncherTransitionPresentation {
+        switch intent {
+        case .show:
+            return LauncherTransitionPresentation(
+                surfaceScale: visibleSurfaceScale,
+                surfaceOpacity: visibleSurfaceOpacity,
+                backgroundOpacity: visibleBackgroundOpacity,
+                dimOpacity: visibleDimOpacity
+            )
+        case .hide:
+            return LauncherTransitionPresentation(
+                surfaceScale: hiddenSurfaceScale,
+                surfaceOpacity: hiddenSurfaceOpacity,
+                backgroundOpacity: hiddenBackgroundOpacity,
+                dimOpacity: hiddenDimOpacity
+            )
+        }
+    }
+}
+
 /// 系统无障碍动效环境(随系统设置实时变化)。
 enum MotionEnvironment {
+    /// 每次访问都从系统读取，不能缓存为进程级常量。
+    @MainActor
+    static func liveSnapshot() -> MotionEnvironmentSnapshot {
+        MotionEnvironmentSnapshot(
+            reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
+            reduceTransparency: NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency,
+            increaseContrast: NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+        )
+    }
+
+    /// 测试和过渡入口使用的策略工厂；不会读取系统状态。
+    static func policy(for snapshot: MotionEnvironmentSnapshot) -> LauncherMotionPolicy {
+        LauncherMotionPolicy(snapshot: snapshot)
+    }
+
+    /// 过渡开始时取得一次实时快照。
+    @MainActor
+    static var launcherPolicy: LauncherMotionPolicy {
+        policy(for: liveSnapshot())
+    }
+
+    @MainActor
     static var reduceMotion: Bool {
-        NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        liveSnapshot().reduceMotion
     }
 
+    @MainActor
     static var reduceTransparency: Bool {
-        NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
+        liveSnapshot().reduceTransparency
     }
 
+    @MainActor
     static var increaseContrast: Bool {
-        NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+        liveSnapshot().increaseContrast
     }
 
     /// Reduce Motion 下的短淡入淡出时长(保留反馈, 不做大位移)。
     static var reducedFadeDuration: TimeInterval { 0.08 }
     static var standardFadeDuration: TimeInterval { 0.12 }
 
+    @MainActor
     static var launcherFadeDuration: TimeInterval {
         reduceMotion ? reducedFadeDuration : standardFadeDuration
     }

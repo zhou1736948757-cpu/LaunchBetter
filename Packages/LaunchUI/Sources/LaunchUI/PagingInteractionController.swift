@@ -42,6 +42,7 @@ final class PagingInteractionController {
     private var lastAppliedOffset: CGFloat = 0
 
     private var displayLink: CADisplayLink?
+    private var displayLinkTarget: DisplayLinkTarget?
     private let animator = PageSnapAnimator()
 
     // 搜索模式: 禁用分页交互。禁用时中断在途手势/动画并停止 display link(§C4 停止路径),
@@ -57,6 +58,13 @@ final class PagingInteractionController {
 
     /// 诊断/测试: display link 当前是否活动(§C4 生命周期验证)。
     var isDisplayLinkActive: Bool { displayLink != nil }
+
+    /// 显式生命周期收尾；可安全重复调用。
+    func shutdown() {
+        animator.cancel()
+        phase = .idle
+        stopDisplayLink()
+    }
 
     /// 创建 DisplayLink 所绑定的视图(macOS 14+ NSView.displayLink)。
     weak var linkView: NSView?
@@ -76,7 +84,9 @@ final class PagingInteractionController {
     init() {
         animator.onFrame = { [weak self] position, settled in
             guard let self else { return }
-            self.applyScroll(position, allowSkip: true)
+            // 收敛帧必须无条件写入 target；否则 target 与上一帧相差
+            // <0.5pt 时会被 epsilon skip，留下不可见但真实的残余偏移。
+            self.applyScroll(position, allowSkip: !settled)
             if settled {
                 self.finishSettle()
             }
@@ -139,11 +149,12 @@ final class PagingInteractionController {
 
     /// Deterministic diagnostic entry after NSEvent normalization. This keeps the
     /// probe focused on axis lock, target resolution, animation, and page writes.
-    func probeGesture(deltaXs: [CGFloat]) {
+    func probeGesture(deltaXs: [CGFloat], deltaYs: [CGFloat] = []) {
         resetCounters()
         beginGesture()
-        for deltaX in deltaXs {
-            feedTracking(deltaX: deltaX, deltaY: 0)
+        for (index, deltaX) in deltaXs.enumerated() {
+            let deltaY = deltaYs.indices.contains(index) ? deltaYs[index] : 0
+            feedTracking(deltaX: deltaX, deltaY: deltaY)
         }
         endGesture()
     }
@@ -156,6 +167,9 @@ final class PagingInteractionController {
             animator.cancel()
             interruptionCount += 1
         }
+        // 未确认水平轴之前不需要 display link；若这里打断了旧 settle，
+        // 也先移除旧 link，待新的水平位移真正到来时再创建。
+        stopDisplayLink()
         axisLock.began()
         velocity.reset()
         displacement = 0
@@ -164,7 +178,6 @@ final class PagingInteractionController {
         latestDesiredOffset = baseOffset
         gestureStartTime = ProcessInfo.processInfo.systemUptime
         phase = .tracking
-        ensureDisplayLink()
     }
 
     private func feedTracking(deltaX: CGFloat, deltaY: CGFloat) {
@@ -173,8 +186,10 @@ final class PagingInteractionController {
         guard axisLock.accumulate(deltaX: deltaX, deltaY: deltaY) else {
             return
         }
+        let pageWidth = onReadPageWidth()
+        guard pageWidth > 0 else { return }
         // 一次手势最多一页(§17); 跟手位移应用灵敏度系数(§16, v0.1.7 0.85)
-        let maxDisp = onReadPageWidth() * PagingTuning.maxGestureDisplacementPages
+        let maxDisp = pageWidth * PagingTuning.maxGestureDisplacementPages
         let applied = deltaX * PagingTuning.followSensitivity
         displacement = min(max(displacement + applied, -maxDisp), maxDisp)
         // 方向: 手指左滑(deltaX 负, 自然滚动)→ 内容左移 → offset 增加
@@ -196,19 +211,27 @@ final class PagingInteractionController {
 
     private func endGesture() {
         guard phase == .tracking else { return }
+        lastGestureDuration = ProcessInfo.processInfo.systemUptime - gestureStartTime
+        guard axisLock.isHorizontal, displacement != 0 else {
+            finishTrackingWithoutSettle()
+            return
+        }
         // 解析目标页: 位移 + 速度(§21-22)
         let pageWidth = onReadPageWidth()
         let pageCount = onReadPageCount()
         let currentPage = min(max(0, Int((baseOffset / max(1, pageWidth)).rounded())), max(0, pageCount - 1))
+        // velocity 在跟手阶段记录的是 offset 轴速度(offset = base - displacement)，
+        // 而 resolver 的 releaseVelocity 必须与 displacement 同向；settle 仍使用
+        // offset 轴速度，保持既有 spring 方向与动量语义。
+        let offsetVelocity = velocity.estimatedVelocity
         let targetPage = PagingTargetResolver.resolve(
             currentPage: currentPage,
             pageCount: pageCount,
             pageWidth: pageWidth,
             displacement: displacement,
-            releaseVelocity: velocity.estimatedVelocity
+            releaseVelocity: -offsetVelocity
         )
-        lastGestureDuration = ProcessInfo.processInfo.systemUptime - gestureStartTime
-        startSettle(toPage: targetPage, fromOffset: onReadCurrentOffset(), velocity: velocity.estimatedVelocity)
+        startSettle(toPage: targetPage, fromOffset: onReadCurrentOffset(), velocity: offsetVelocity)
     }
 
     /// 启动一次 settle(目标页动画), 供键盘翻页 / 鼠标滚轮 / 手势松手共用(§31)。
@@ -231,11 +254,14 @@ final class PagingInteractionController {
     /// 立即(无动画)跳到某页, 并停交互(初始化 / 测试)。
     func jumpTo(page: Int) {
         animator.cancel()
+        stopDisplayLink()
         phase = .idle
-        let target = CGFloat(page) * onReadPageWidth()
-        onScroll(target)
-        lastAppliedOffset = target
-        stopDisplayLinkIfIdle()
+        let pageWidth = onReadPageWidth()
+        let pageCount = onReadPageCount()
+        let targetPage = min(max(0, page), max(0, pageCount - 1))
+        let target = CGFloat(targetPage) * pageWidth
+        // jump 也必须经过统一写入路径, 禁止绕过 clamp/计数直接调用 onScroll。
+        applyScroll(target, allowSkip: false)
     }
 
     private func finishSettle() {
@@ -244,23 +270,41 @@ final class PagingInteractionController {
         stopDisplayLinkIfIdle()
     }
 
+    private func finishTrackingWithoutSettle() {
+        phase = .idle
+        axisLock.ended()
+        velocity.reset()
+        displacement = 0
+        stopDisplayLinkIfIdle()
+    }
+
     // MARK: - DisplayLink(唯一 offset writer)
 
     private func ensureDisplayLink() {
         guard displayLink == nil, let view = linkView else { return }
         // macOS 14+ API: NSView.displayLink(target:selector:), 随视图刷新驱动
-        let link = view.displayLink(target: self, selector: #selector(tick(_:)))
+        let target = DisplayLinkTarget(owner: self)
+        let link = view.displayLink(
+            target: target,
+            selector: #selector(DisplayLinkTarget.tick(_:))
+        )
+        displayLinkTarget = target
         link.add(to: .main, forMode: .common)
         displayLink = link
     }
 
     private func stopDisplayLinkIfIdle() {
         guard phase == .idle else { return }
-        displayLink?.invalidate()
-        displayLink = nil
+        stopDisplayLink()
     }
 
-    @objc private func tick(_ link: CADisplayLink) {
+    private func stopDisplayLink() {
+        displayLink?.invalidate()
+        displayLink = nil
+        displayLinkTarget = nil
+    }
+
+    private func displayTick() {
         processDisplayFrame()
     }
 
@@ -275,6 +319,10 @@ final class PagingInteractionController {
         displayFrameCount += 1
         switch phase {
         case .tracking:
+            guard axisLock.isHorizontal, displacement != 0 else {
+                stopDisplayLink()
+                return
+            }
             // TRACKING: 直接应用最新目标, 不做 epsilon skip(§15, 慢速也保持直接操作)
             applyScroll(latestDesiredOffset, allowSkip: false)
         case .settling:
@@ -289,7 +337,12 @@ final class PagingInteractionController {
         let pageCount = onReadPageCount()
         let maxOffset = max(0, CGFloat(pageCount) * pageWidth - pageWidth)
         // rubber band 仅作用于边缘(§18); 正常范围 direct mapping
-        let clamped = PagingRubberBand.clamp(offset, minX: 0, maxX: maxOffset)
+        let clamped = PagingRubberBand.clamp(
+            offset,
+            minX: 0,
+            maxX: maxOffset,
+            pageWidth: pageWidth
+        )
         if allowSkip, abs(clamped - lastAppliedOffset) < PagingTuning.positionTolerance {
             settlingSkippedWriteCount += 1
             return
@@ -297,5 +350,30 @@ final class PagingInteractionController {
         onScroll(clamped)
         lastAppliedOffset = clamped
         scrollWriteCount += 1
+    }
+
+    @MainActor
+    final class DisplayLinkTarget: NSObject {
+        weak var owner: PagingInteractionController?
+
+        init(owner: PagingInteractionController?) {
+            self.owner = owner
+        }
+
+        @objc func tick(_ link: CADisplayLink) {
+            guard let owner else {
+                link.invalidate()
+                return
+            }
+            owner.displayTick()
+        }
+
+        /// 确定性测试 seam：owner 已释放时，下一帧必须 invalidate。
+        @discardableResult
+        func tickForTesting(invalidate: () -> Void) -> Bool {
+            guard owner == nil else { return false }
+            invalidate()
+            return true
+        }
     }
 }

@@ -10,10 +10,106 @@ public protocol SettingsHandling: AnyObject {
     var allApps: [(id: AppID, name: String)] { get }
 }
 
+/// Pure mapping for the Settings surface. AppKit values are applied only at
+/// the view boundary below, so tests can cover all accessibility combinations
+/// without changing system display settings.
+struct SettingsAccessibilityAppearance: Equatable, Sendable {
+    enum Material: Equatable, Sendable {
+        case hudWindow
+        case opaqueDark
+    }
+
+    enum BlendingMode: Equatable, Sendable {
+        case behindWindow
+        case withinWindow
+    }
+
+    enum SurfaceFill: Equatable, Sendable {
+        case existingHudWindow
+        case explicitDark
+    }
+
+    enum Boundary: Equatable, Sendable {
+        case standard
+        case emphasized
+    }
+
+    enum ForegroundSeparation: Equatable, Sendable {
+        case standard
+        case enhanced
+    }
+
+    let material: Material
+    let blendingMode: BlendingMode
+    let surfaceFill: SurfaceFill
+    let boundary: Boundary
+    let foregroundSeparation: ForegroundSeparation
+
+    static func make(for snapshot: MotionEnvironmentSnapshot) -> Self {
+        let materialPolicy = AccessibilityMaterialPolicy(snapshot: snapshot)
+        return Self(
+            material: materialPolicy.usesOpaqueSurface ? .opaqueDark : .hudWindow,
+            blendingMode: materialPolicy.usesOpaqueSurface ? .withinWindow : .behindWindow,
+            surfaceFill: materialPolicy.usesOpaqueSurface ? .explicitDark : .existingHudWindow,
+            boundary: materialPolicy.emphasizesBoundary ? .emphasized : .standard,
+            foregroundSeparation: materialPolicy.enhancesForegroundSeparation ? .enhanced : .standard
+        )
+    }
+
+    /// Apply only surface/material properties. It does not touch window frame,
+    /// alpha, transforms, or the Settings transition coordinator.
+    @MainActor
+    static func apply(_ appearance: Self, to effect: NSVisualEffectView) {
+        effect.material = appearance.material == .opaqueDark ? .windowBackground : .hudWindow
+        effect.blendingMode = appearance.blendingMode == .withinWindow
+            ? .withinWindow
+            : .behindWindow
+        effect.state = .active
+        effect.isEmphasized = appearance.foregroundSeparation == .enhanced
+
+        if appearance.surfaceFill == .explicitDark || appearance.boundary == .emphasized {
+            effect.wantsLayer = true
+        }
+
+        guard let layer = effect.layer else { return }
+        switch appearance.surfaceFill {
+        case .existingHudWindow:
+            layer.backgroundColor = nil
+        case .explicitDark:
+            layer.backgroundColor = NSColor(
+                calibratedRed: 0.10,
+                green: 0.11,
+                blue: 0.14,
+                alpha: 1
+            ).cgColor
+        }
+
+        switch appearance.boundary {
+        case .standard:
+            layer.borderWidth = 0
+            layer.borderColor = nil
+        case .emphasized:
+            layer.borderWidth = 1
+            layer.borderColor = NSColor(
+                calibratedWhite: 1,
+                alpha: 0.32
+            ).cgColor
+        }
+    }
+}
+
 /// 设置窗口(AppKit; 与启动器一致深色毛玻璃风格)。
 @MainActor
 public final class SettingsWindowController: NSWindowController {
     private let handler: any SettingsHandling
+    private let notificationTokens = NotificationTokenRegistry()
+    private var transitionCoordinator: SettingsTransitionCoordinator!
+    private var accessibilityDisplayObserver: AccessibilityDisplayObserver?
+    private weak var materialEffectView: NSVisualEffectView?
+    private var pendingAccessibilityAppearance: SettingsAccessibilityAppearance?
+    private var closeRequested = false
+    private var closeCallbackDelivered = false
+    private var finalizingClose = false
 
     /// 由启动器作为 child window 挂载(浮在启动器上方, 启动器不退出)。
     public weak var launcherWindow: NSWindow?
@@ -40,27 +136,88 @@ public final class SettingsWindowController: NSWindowController {
         // 拖动面板空白区域即移动设置窗口, 不会把事件透传/误触发底下的启动器应用(v0.3.4)
         window.isMovableByWindowBackground = true
         super.init(window: window)
+        accessibilityDisplayObserver = makeAccessibilityDisplayObserver()
         buildContent()
+        transitionCoordinator = SettingsTransitionCoordinator(window: window)
+        accessibilityDisplayObserver?.start()
+        window.delegate = self
     }
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }
 
-    /// 显示(由启动器先 addChildWindow 再调用; 关闭时自动从父窗口移除)。
+    /// 兼容旧调用方的显示入口。由启动器先 addChildWindow，再传入齿轮中心
+    /// 的 screen point 时应使用 `present(from:)`。
     public func show() {
-        guard let window else { return }
-        window.makeKeyAndOrderFront(nil)
+        present()
     }
 
-    /// 关闭(含窗口关闭按钮/失焦)时从启动器父窗口移除 child, 并通知所有权恢复。
+    /// 从齿轮 source point 呈现 Settings。source point 使用 screen coordinates；
+    /// 此方法不负责 addChildWindow，保留调用方的 child-window ownership 语义。
+    public func present(
+        from sourcePoint: NSPoint? = nil,
+        completion: (() -> Void)? = nil
+    ) {
+        registerWindowNotificationObserverIfNeeded()
+        startAccessibilityDisplayObservationIfNeeded()
+        guard let transitionCoordinator else {
+            completion?()
+            return
+        }
+
+        closeRequested = false
+        closeCallbackDelivered = false
+        transitionCoordinator.present(from: sourcePoint) { [weak self] in
+            self?.applyPendingAccessibilityAppearanceIfSettled()
+            completion?()
+        }
+    }
+
+    /// 解散 Settings。未传 source point 时复用最近一次齿轮点；过渡只使用
+    /// 当前 window frame 的 presentation，不会把已手动移动的窗口跳回原中心。
+    public func dismiss(
+        to sourcePoint: NSPoint? = nil,
+        completion: (() -> Void)? = nil
+    ) {
+        guard let transitionCoordinator else {
+            completion?()
+            return
+        }
+        guard !closeCallbackDelivered else {
+            completion?()
+            return
+        }
+        guard !closeRequested else { return }
+
+        closeRequested = true
+        transitionCoordinator.dismiss(to: sourcePoint) { [weak self] in
+            MainActor.assumeIsolated {
+                self?.finalizeClose()
+                completion?()
+            }
+        }
+    }
+
+    /// 关闭(含窗口关闭按钮/失焦)时从启动器父窗口移除 child，并通知所有权恢复。
+    /// 实际 close 延后到 dismiss transition 完成，保留原生 close callback 语义。
     public override func close() {
-        let closeCallback = onClose
+        dismiss()
+    }
+
+    private func finalizeClose() {
+        guard !closeCallbackDelivered else { return }
+        closeCallbackDelivered = true
+        finalizingClose = true
+        defer { finalizingClose = false }
+
+        notificationTokens.teardown()
         if let launcherWindow, let window {
             launcherWindow.removeChildWindow(window)
         }
+        teardownAccessibilityDisplayObservation()
         super.close()
-        closeCallback?()
+        onClose?()
     }
 
     // MARK: - UI
@@ -86,10 +243,9 @@ public final class SettingsWindowController: NSWindowController {
     private var hiddenList: NSTableView!
     private var hiddenData: [AppID] = []
 
-    private func buildContent() {
-        guard let window else { return }
-        // 点击面板外(设置失去 key)→ 关闭设置(用户要求)
-        NotificationCenter.default.addObserver(
+    private func registerWindowNotificationObserverIfNeeded() {
+        guard notificationTokens.isEmpty, let window else { return }
+        notificationTokens.append(NotificationCenter.default.addObserver(
             forName: NSWindow.didResignKeyNotification,
             object: window,
             queue: .main
@@ -97,13 +253,24 @@ public final class SettingsWindowController: NSWindowController {
             MainActor.assumeIsolated {
                 self?.close()
             }
-        }
+        })
+    }
+
+    private func buildContent() {
+        guard let window else { return }
+        registerWindowNotificationObserverIfNeeded()
+        // 点击面板外(设置失去 key)→ 关闭设置(用户要求)
         // 毛玻璃背景(与启动器一致)
         let effect = NSVisualEffectView()
         effect.material = .hudWindow
         effect.blendingMode = .behindWindow
         effect.state = .active
+        materialEffectView = effect
         window.contentView = effect
+
+        if let snapshot = accessibilityDisplayObserver?.snapshot {
+            applyAccessibilitySnapshot(snapshot)
+        }
 
         let root = effect
         let grid = NSGridView(views: [])
@@ -240,6 +407,61 @@ public final class SettingsWindowController: NSWindowController {
             content.trailingAnchor.constraint(lessThanOrEqualTo: root.trailingAnchor, constant: -20),
             content.bottomAnchor.constraint(lessThanOrEqualTo: root.bottomAnchor, constant: -20),
         ])
+    }
+
+    private func makeAccessibilityDisplayObserver() -> AccessibilityDisplayObserver {
+        AccessibilityDisplayObserver(
+            initialSnapshot: MotionEnvironment.liveSnapshot(),
+            snapshotProvider: { [weak self] in
+                let snapshot = MotionEnvironment.liveSnapshot()
+                self?.applyAccessibilitySnapshot(snapshot)
+                return snapshot
+            }
+        )
+    }
+
+    private func startAccessibilityDisplayObservationIfNeeded() {
+        guard accessibilityDisplayObserver == nil else { return }
+        let observer = makeAccessibilityDisplayObserver()
+        accessibilityDisplayObserver = observer
+        observer.start()
+        applyAccessibilitySnapshot(observer.snapshot)
+    }
+
+    private func teardownAccessibilityDisplayObservation() {
+        accessibilityDisplayObserver?.teardown()
+        accessibilityDisplayObserver = nil
+        pendingAccessibilityAppearance = nil
+    }
+
+    private func applyAccessibilitySnapshot(_ snapshot: MotionEnvironmentSnapshot) {
+        let appearance = SettingsAccessibilityAppearance.make(for: snapshot)
+        guard let materialEffectView else {
+            pendingAccessibilityAppearance = appearance
+            return
+        }
+
+        guard transitionCoordinator?.isTransitioning != true else {
+            pendingAccessibilityAppearance = appearance
+            return
+        }
+
+        pendingAccessibilityAppearance = nil
+        SettingsAccessibilityAppearance.apply(appearance, to: materialEffectView)
+    }
+
+    private func applyPendingAccessibilityAppearanceIfSettled() {
+        guard transitionCoordinator?.isTransitioning != true,
+              let pendingAccessibilityAppearance,
+              let materialEffectView else {
+            return
+        }
+
+        self.pendingAccessibilityAppearance = nil
+        SettingsAccessibilityAppearance.apply(
+            pendingAccessibilityAppearance,
+            to: materialEffectView
+        )
     }
 
     private func row(_ title: String, _ view: NSView) -> NSStackView {
@@ -472,5 +694,33 @@ extension SettingsWindowController: NSTableViewDataSource, NSTableViewDelegate {
                 : tableView.superview?.subviews.compactMap { $0 as? NSStackView }.first?.views.compactMap { $0 as? NSButton }.first { $0.identifier?.rawValue == "removeHidden" }
             button?.isEnabled = tableView.selectedRow >= 0
         }
+    }
+}
+
+extension SettingsWindowController: NSWindowDelegate {
+    public func windowWillClose(_ notification: Notification) {
+        notificationTokens.teardown()
+        teardownAccessibilityDisplayObservation()
+    }
+
+    public func windowShouldClose(_ sender: NSWindow) -> Bool {
+        if finalizingClose || closeCallbackDelivered {
+            return true
+        }
+        dismiss()
+        return false
+    }
+
+    /// AppKit native movement wins over Settings presentation immediately.
+    public func windowWillMove(_ notification: Notification) {
+        transitionCoordinator?.cancelForManualMove()
+        applyPendingAccessibilityAppearanceIfSettled()
+    }
+
+    /// Resize is also direct manipulation; do not leave a presentation transform
+    /// competing with AppKit's live resize path.
+    public func windowWillStartLiveResize(_ notification: Notification) {
+        transitionCoordinator?.cancelForManualMove()
+        applyPendingAccessibilityAppearanceIfSettled()
     }
 }

@@ -24,6 +24,7 @@ public final class ActivationCoordinator {
             "--smoke", "--dragtest", "--folders", "--screenshot",
             "--iconbench", "--pagetest", "--threefingerdiag",
             "--dragcacheprobe", "--pagingprobe", "--searchprobe", "--gridtest", "--perf",
+            "--motionprobe",
         ]
         return !nonInteractiveFlags.contains { args.contains($0) }
     }
