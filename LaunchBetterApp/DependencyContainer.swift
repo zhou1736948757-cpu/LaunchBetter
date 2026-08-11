@@ -157,7 +157,10 @@ public final class DependencyContainer {
         self.threeFingerCoordinator = threeFinger
 
         // 设置窗口
-        let settingsController = SettingsWindowController(handler: store)
+        let settingsController = SettingsWindowController(
+            handler: store,
+            iconProvider: iconAdapter
+        )
         self.settingsController = settingsController
         // 启动器右上角齿轮 → 打开设置: 作为启动器 child window(浮在上方, 启动器不退出)
         windowController.settingsController = settingsController

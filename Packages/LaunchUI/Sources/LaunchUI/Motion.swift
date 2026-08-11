@@ -21,7 +21,7 @@ enum MotionTokens {
     static let momentumSettle = MotionSpringSpec(response: 0.40, dampingRatio: 0.8)
 
     /// 按压反馈幅度。
-    static let pressScale: CGFloat = 0.97
+    static let pressScale: CGFloat = 0.95
 
     /// 标题按压反馈幅度(克制)。
     static let titlePressScale: CGFloat = 0.98

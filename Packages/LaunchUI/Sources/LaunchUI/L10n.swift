@@ -45,6 +45,8 @@ public enum L10n {
         case remove
         case hiddenAppsLabel
         case addHiddenApp
+        case hiddenAppNoCandidates
+        case hiddenAppNoResults
         case settingsTitle
         case permissionSection
         case permissionStatus
@@ -60,7 +62,7 @@ public enum L10n {
         case aboutLabel
         case blurIntensityLabel
         case searchBarSection
-        case searchBarWidthLabel
+        case searchBarSizeLabel
     }
 
     nonisolated(unsafe) private static let zhHans: [Key: String] = [
@@ -79,6 +81,8 @@ public enum L10n {
         .wallpaperLabel: "壁纸模糊背景", .customSourcesLabel: "自定义应用源目录",
         .addSource: "添加目录…", .remove: "移除", .hiddenAppsLabel: "隐藏应用",
         .addHiddenApp: "添加…", .settingsTitle: "LaunchBetter 设置",
+        .hiddenAppNoCandidates: "没有可隐藏的应用",
+        .hiddenAppNoResults: "没有匹配的应用",
         .permissionSection: "手势", .permissionStatus: "输入监控权限",
         .permissionOpenSettings: "打开系统设置", .permissionTitle: "需要输入监控权限",
         .permissionMessage: "四指捏合手势需要“输入监控”权限才能工作。\n请点击“打开系统设置”，在“隐私与安全性” → “输入监控”中启用 LaunchBetter，然后回到应用。",
@@ -88,7 +92,7 @@ public enum L10n {
         .aboutLabel: "关于",
         .blurIntensityLabel: "模糊强度",
         .searchBarSection: "搜索栏",
-        .searchBarWidthLabel: "搜索栏宽度",
+        .searchBarSizeLabel: "尺寸百分比",
     ]
 
     nonisolated(unsafe) private static let zhHant: [Key: String] = [
@@ -107,6 +111,8 @@ public enum L10n {
         .wallpaperLabel: "模糊桌布", .customSourcesLabel: "自訂應用程式來源",
         .addSource: "加入目錄…", .remove: "移除", .hiddenAppsLabel: "隱藏應用程式",
         .addHiddenApp: "加入…", .settingsTitle: "LaunchBetter 設定",
+        .hiddenAppNoCandidates: "沒有可隱藏的應用程式",
+        .hiddenAppNoResults: "沒有符合的應用程式",
         .permissionSection: "手勢", .permissionStatus: "輸入監控權限",
         .permissionOpenSettings: "開啟系統設定", .permissionTitle: "需要輸入監控權限",
         .permissionMessage: "四指捏合手勢需要「輸入監控」權限才能運作。\n請點擊「開啟系統設定」，在「隱私權與安全性」→「輸入監控」中啟用 LaunchBetter，然後返回應用程式。",
@@ -116,7 +122,7 @@ public enum L10n {
         .aboutLabel: "關於",
         .blurIntensityLabel: "模糊強度",
         .searchBarSection: "搜尋列",
-        .searchBarWidthLabel: "搜尋列寬度",
+        .searchBarSizeLabel: "尺寸百分比",
     ]
 
     nonisolated(unsafe) private static let english: [Key: String] = [
@@ -135,6 +141,8 @@ public enum L10n {
         .wallpaperLabel: "Blurred Wallpaper", .customSourcesLabel: "Custom App Sources",
         .addSource: "Add Folder…", .remove: "Remove", .hiddenAppsLabel: "Hidden Apps",
         .addHiddenApp: "Add…", .settingsTitle: "LaunchBetter Settings",
+        .hiddenAppNoCandidates: "No applications are available to hide",
+        .hiddenAppNoResults: "No matching applications",
         .permissionSection: "Gestures", .permissionStatus: "Input Monitoring",
         .permissionOpenSettings: "Open System Settings", .permissionTitle: "Input Monitoring Permission Required",
         .permissionMessage: "The four-finger pinch gesture requires Input Monitoring permission.\nClick “Open System Settings”, then enable LaunchBetter in Privacy & Security → Input Monitoring and return to the app.",
@@ -144,7 +152,7 @@ public enum L10n {
         .aboutLabel: "About",
         .blurIntensityLabel: "Blur Intensity",
         .searchBarSection: "Search Bar",
-        .searchBarWidthLabel: "Search Bar Width",
+        .searchBarSizeLabel: "Size Percentage",
     ]
 
     nonisolated(unsafe) private static var language: AppLanguage = .system

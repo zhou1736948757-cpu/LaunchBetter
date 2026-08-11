@@ -75,6 +75,10 @@ final class GridViewController: NSViewController {
 
     private let store: any LauncherStoring
     private let iconProvider: (any IconImageProviding)?
+    private let renamePromptPresenter = RenamePromptPresenter()
+    /// Test seam for verifying that context-menu rename remains launcher-owned.
+    var activeRenameAlert: NSAlert? { renamePromptPresenter.activeAlert }
+    var activeRenameTextField: NSTextField? { renamePromptPresenter.activeTextField }
     private var collectionView: NSCollectionView!
     private var scrollView: NSScrollView!
     private var dataSource: NSCollectionViewDiffableDataSource<Int, Item>!
@@ -666,9 +670,10 @@ final class GridViewController: NSViewController {
     @objc private func renameFolder(_ sender: NSMenuItem) {
         guard let folderID = sender.representedObject as? FolderID else { return }
         let current = store.folderName(for: folderID)
-        let name = promptForName(defaultValue: current, titleKey: .rename)
-        guard let name, !name.isEmpty else { return }
-        store.renameFolder(folderID, to: name)
+        presentRenamePrompt(defaultValue: current, titleKey: .rename) { [weak self] name in
+            guard let self, let name, !name.isEmpty else { return }
+            self.store.renameFolder(folderID, to: name)
+        }
     }
 
     @objc private func dissolveFolder(_ sender: NSMenuItem) {
@@ -683,11 +688,14 @@ final class GridViewController: NSViewController {
 
     @objc private func renameApp(_ sender: NSMenuItem) {
         guard let appID = sender.representedObject as? AppID else { return }
-        let name = promptForName(
-            defaultValue: store.displayName(for: appID), titleKey: .renameApp
-        )
-        guard let name, !name.isEmpty else { return }
-        store.setCustomName(appID, name: name)
+        presentRenamePrompt(
+            defaultValue: store.displayName(for: appID),
+            titleKey: .renameApp,
+            appID: appID
+        ) { [weak self] name in
+            guard let self, let name, !name.isEmpty else { return }
+            self.store.setCustomName(appID, name: name)
+        }
     }
 
     @objc private func moveToTrash(_ sender: NSMenuItem) {
@@ -732,16 +740,22 @@ final class GridViewController: NSViewController {
         return "tell application \"Finder\" to open information window of (POSIX file \"\(escaped)\")"
     }
 
-    private func promptForName(defaultValue: String, titleKey: L10n.Key) -> String? {
-        let alert = NSAlert()
-        alert.messageText = L10n.t(titleKey)
-        alert.addButton(withTitle: L10n.t(.ok))
-        alert.addButton(withTitle: L10n.t(.cancel))
-        let field = NSTextField(string: defaultValue)
-        field.frame = NSRect(x: 0, y: 0, width: 240, height: 24)
-        alert.accessoryView = field
-        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
-        return field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+    private func presentRenamePrompt(
+        defaultValue: String,
+        titleKey: L10n.Key,
+        appID: AppID? = nil,
+        completion: @escaping (String?) -> Void
+    ) {
+        guard let parentWindow = view.window else { return }
+        renamePromptPresenter.present(
+            in: parentWindow,
+            defaultValue: defaultValue,
+            title: L10n.t(titleKey),
+            appID: appID,
+            iconProvider: iconProvider,
+            iconPointSize: 64,
+            completion: completion
+        )
     }
 
     // MARK: - 分页交互(v0.1.6 PART A)
@@ -857,7 +871,7 @@ final class GridViewController: NSViewController {
     /// 布局诊断(§56/§83): 一次交互中 prepare / attribute query 计数。
     var layoutDiagnostics: String {
         let layout = collectionView.collectionViewLayout as? PagingGridLayout
-        return "prepare=\(layout?.prepareCount ?? 0) attributeQueries=\(layout?.attributeQueryCount ?? 0)"
+        return "prepare=\(layout?.prepareCount ?? 0) attributeQueries=\(layout?.attributeQueryCount ?? 0) attributeCandidatesLast=\(layout?.lastAttributeCandidateCount ?? 0) attributeCandidatesMax=\(layout?.maxAttributeCandidateCount ?? 0) itemFrames=\(layout?.itemFrameCount ?? 0)"
     }
 
     /// 确定性诊断(冒烟验证用): 当前快照结构。

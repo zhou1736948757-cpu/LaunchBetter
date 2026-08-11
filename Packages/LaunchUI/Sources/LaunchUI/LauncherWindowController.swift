@@ -39,17 +39,12 @@ public struct LauncherLayoutDiagnostics {
 private enum LauncherChromeMetrics {
     static let searchTopMargin: CGFloat = 24
     static let settingsTopMargin: CGFloat = 20
-    static let searchMinimumHeight: CGFloat = 22
-    static let searchAspectRatio: CGFloat = 16
     static let searchToGridGap: CGFloat = 24
     static let searchContentPadding: CGFloat = GridGeometry.defaultSearchPadding
     static let pageDotHitHeight: CGFloat = 24
     static let pageDotBottomMargin: CGFloat = 12
     static let gridBottomGap: CGFloat = 8
 
-    static func searchHeight(for width: CGFloat) -> CGFloat {
-        max(searchMinimumHeight, width / searchAspectRatio)
-    }
 }
 
 /// Owns block-based NotificationCenter tokens for one controller lifecycle.
@@ -600,12 +595,15 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         searchField.sendsSearchStringImmediately = true
         foregroundView.addSubview(searchField)
         searchField.translatesAutoresizingMaskIntoConstraints = false
-        // 搜索栏等比大小(宽 = 标尺, 高 = 宽/16; 居中)。顶部 safe area
+        // 搜索栏等比大小(320×22 为 100%；宽高使用同一倍率；居中)。顶部 safe area
         // 由 updateChromeLayoutForCurrentScreen() 与网格保留区统一更新。
-        let size = CGFloat(store.searchBarWidth)
-        let height = LauncherChromeMetrics.searchHeight(for: size)
-        searchFieldWidthConstraint = searchField.widthAnchor.constraint(equalToConstant: size)
-        searchFieldHeightConstraint = searchField.heightAnchor.constraint(equalToConstant: height)
+        let searchSize = SearchBarSizing.size(forPersistedWidth: store.searchBarWidth)
+        searchFieldWidthConstraint = searchField.widthAnchor.constraint(
+            equalToConstant: searchSize.width
+        )
+        searchFieldHeightConstraint = searchField.heightAnchor.constraint(
+            equalToConstant: searchSize.height
+        )
         searchFieldTopConstraint = searchField.topAnchor.constraint(
             equalTo: foregroundView.topAnchor,
             constant: 0
@@ -863,15 +861,14 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
     private func updateChromeLayoutForCurrentScreen() {
         guard let contentView = window?.contentView else { return }
         let safeArea = (window?.screen ?? NSScreen.main)?.safeAreaInsets ?? NSEdgeInsetsZero
-        let width = CGFloat(store.searchBarWidth)
-        let searchHeight = LauncherChromeMetrics.searchHeight(for: width)
+        let searchSize = SearchBarSizing.size(forPersistedWidth: store.searchBarWidth)
 
         searchFieldTopConstraint?.constant = LauncherChromeMetrics.searchTopMargin + max(0, safeArea.top)
         settingsButtonTopConstraint?.constant = LauncherChromeMetrics.settingsTopMargin + max(0, safeArea.top)
-        searchFieldWidthConstraint?.constant = width
-        searchFieldHeightConstraint?.constant = searchHeight
+        searchFieldWidthConstraint?.constant = searchSize.width
+        searchFieldHeightConstraint?.constant = searchSize.height
 
-        let insets = currentContentInsets(for: safeArea, searchHeight: searchHeight)
+        let insets = currentContentInsets(for: safeArea, searchHeight: searchSize.height)
         gridViewController?.setContentInsets(top: insets.top, bottom: insets.bottom)
         contentView.layoutSubtreeIfNeeded()
     }

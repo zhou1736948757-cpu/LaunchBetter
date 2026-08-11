@@ -4,6 +4,102 @@ import Testing
 
 @Suite("Settings transition policy")
 struct SettingsTransitionTests {
+    @Test("fresh Settings placement matches the launcher screenshot ratios")
+    func freshPlacementMatchesLauncherRatios() {
+        let launcher = NSRect(x: 100, y: 200, width: 1_000, height: 800)
+        let settingsSize = NSSize(width: 400, height: 300)
+        let visibleFrame = NSRect(x: 0, y: 0, width: 2_000, height: 1_500)
+
+        let frame = SettingsWindowPlacement.frame(
+            launcherFrame: launcher,
+            settingsSize: settingsSize,
+            visibleFrame: visibleFrame
+        )
+
+        #expect(frame.midX == launcher.minX + launcher.width * 0.70)
+        #expect(frame.midY == launcher.minY + launcher.height * 0.52)
+        #expect(frame.size == settingsSize)
+    }
+
+    @Test("placement respects non-zero and negative screen origins")
+    func placementRespectsScreenOrigins() {
+        let launcher = NSRect(x: -1_700, y: 250, width: 900, height: 700)
+        let settingsSize = NSSize(width: 500, height: 400)
+        let visibleFrame = NSRect(x: -1_920, y: 120, width: 1_920, height: 1_000)
+
+        let frame = SettingsWindowPlacement.frame(
+            launcherFrame: launcher,
+            settingsSize: settingsSize,
+            visibleFrame: visibleFrame
+        )
+
+        #expect(frame.midX == launcher.minX + launcher.width * 0.70)
+        #expect(frame.midY == launcher.minY + launcher.height * 0.52)
+        #expect(frame.minX >= visibleFrame.minX)
+        #expect(frame.maxX <= visibleFrame.maxX)
+        #expect(frame.minY >= visibleFrame.minY)
+        #expect(frame.maxY <= visibleFrame.maxY)
+    }
+
+    @Test(
+        "placement clamps independently to every visible edge",
+        arguments: [
+            (
+                NSRect(x: -500, y: 398, width: 100, height: 100),
+                NSPoint(x: 100, y: 300)
+            ),
+            (
+                NSRect(x: 1_900, y: 398, width: 100, height: 100),
+                NSPoint(x: 1_500, y: 300)
+            ),
+            (
+                NSRect(x: 630, y: -500, width: 100, height: 100),
+                NSPoint(x: 500, y: 200)
+            ),
+            (
+                NSRect(x: 630, y: 1_500, width: 100, height: 100),
+                NSPoint(x: 500, y: 700)
+            ),
+        ]
+    )
+    func placementClampsToEachVisibleEdge(
+        launcher: NSRect,
+        expectedOrigin: NSPoint
+    ) {
+        let frame = SettingsWindowPlacement.frame(
+            launcherFrame: launcher,
+            settingsSize: NSSize(width: 400, height: 300),
+            visibleFrame: NSRect(x: 100, y: 200, width: 1_800, height: 800)
+        )
+
+        #expect(frame.origin == expectedOrigin)
+    }
+
+    @Test("oversized Settings keeps its size and aligns to the visible minimum")
+    func oversizedPlacementPreservesSize() {
+        let settingsSize = NSSize(width: 1_200, height: 900)
+        let visibleFrame = NSRect(x: -800, y: 140, width: 1_000, height: 700)
+
+        let frame = SettingsWindowPlacement.frame(
+            launcherFrame: NSRect(x: -700, y: 200, width: 800, height: 600),
+            settingsSize: settingsSize,
+            visibleFrame: visibleFrame
+        )
+
+        #expect(frame.origin == visibleFrame.origin)
+        #expect(frame.size == settingsSize)
+        #expect(frame.origin.x.isFinite)
+        #expect(frame.origin.y.isFinite)
+    }
+
+    @Test("only a hidden transition receives automatic placement")
+    func onlyFreshPresentationPositionsWindow() {
+        #expect(SettingsWindowPlacement.shouldPosition(for: .hidden))
+        #expect(!SettingsWindowPlacement.shouldPosition(for: .presenting))
+        #expect(!SettingsWindowPlacement.shouldPosition(for: .visible))
+        #expect(!SettingsWindowPlacement.shouldPosition(for: .dismissing))
+    }
+
     @Test("standard policy is restrained and source-biased")
     func standardPolicy() {
         let policy = SettingsMotionPolicy(reduceMotion: false)

@@ -62,6 +62,20 @@ struct ConfigurationTests {
         #expect(decoded.language == .system)
     }
 
+    @Test("旧 searchBarWidth 持久值映射为百分比且保持宽高比例")
+    func searchBarSizingCompatibility() throws {
+        let data = Data(#"{"schemaVersion":1,"searchBarWidth":512}"#.utf8)
+        let decoded = try JSONDecoder().decode(AppConfiguration.self, from: data)
+        let size = SearchBarSizing.size(forPersistedWidth: decoded.searchBarWidth)
+
+        #expect(decoded.searchBarWidth == 512)
+        #expect(SearchBarSizing.percent(forPersistedWidth: 320) == 100)
+        #expect(SearchBarSizing.persistedWidth(forPercent: 160) == 512)
+        #expect(size.width == 512)
+        #expect(size.height == 35.2)
+        #expect(abs(size.width / size.height - 320.0 / 22.0) < 0.000_001)
+    }
+
     @Test("HotkeyModifiers OptionSet 组合")
     func modifiersCombination() {
         let combo = HotkeyModifiers([.command, .option])

@@ -71,6 +71,58 @@ struct PressDragPresentationTests {
         #expect(presentation.modelScaleForDiagnostics == 1)
     }
 
+    @Test("fast release uses the pressed model when presentation is still identity")
+    func fastReleaseUsesPressedModelWhenPresentationLags() {
+        let layer = CALayer()
+        let presentation = PressDragPresentation(
+            layer: layer,
+            presentationTransformProvider: { CATransform3DIdentity }
+        )
+
+        presentation.begin(at: NSPoint(x: 10, y: 10))
+        presentation.end(afterDragging: false)
+
+        #expect(presentation.lastAnimationFromScaleForDiagnostics == MotionTokens.pressScale)
+        #expect(presentation.lastAnimationFromScaleForDiagnostics != 1)
+        #expect(layer.animation(forKey: "LaunchBetter.pressFeedback") != nil)
+        #expect(presentation.modelScaleForDiagnostics == 1)
+    }
+
+    @Test("normal press release records a non-identity animation start")
+    func normalPressReleaseRestoresIdentity() {
+        let layer = CALayer()
+        let presentation = PressDragPresentation(
+            layer: layer,
+            presentationTransformProvider: {
+                CATransform3DMakeScale(MotionTokens.pressScale, MotionTokens.pressScale, 1)
+            }
+        )
+
+        presentation.begin(at: NSPoint(x: 10, y: 10))
+        presentation.end(afterDragging: false)
+
+        #expect(presentation.lastAnimationFromScaleForDiagnostics == MotionTokens.pressScale)
+        #expect(layer.animation(forKey: "LaunchBetter.pressFeedback") != nil)
+        #expect(presentation.modelScaleForDiagnostics == 1)
+    }
+
+    @Test("drag end and cancellation restore identity immediately")
+    func dragEndAndCancellationRestoreIdentity() {
+        let layer = CALayer()
+        let presentation = PressDragPresentation(layer: layer)
+
+        presentation.begin(at: NSPoint(x: 10, y: 10))
+        presentation.move(to: NSPoint(x: 15, y: 10))
+        presentation.end(afterDragging: true)
+        #expect(presentation.modelScaleForDiagnostics == 1)
+        #expect(presentation.presentationScaleForDiagnostics == 1)
+
+        presentation.begin(at: NSPoint(x: 10, y: 10))
+        presentation.cancel()
+        #expect(presentation.modelScaleForDiagnostics == 1)
+        #expect(presentation.presentationScaleForDiagnostics == 1)
+    }
+
     @Test("threshold keeps mouseDown source anchor and passes current pointer separately")
     func clickableSourceAnchor() {
         let collectionView = ClickableCollectionView(

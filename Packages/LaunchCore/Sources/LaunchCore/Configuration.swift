@@ -8,6 +8,47 @@ public enum AppLanguage: String, Codable, Sendable, Hashable {
     case traditionalChinese
 }
 
+/// 搜索栏尺寸兼容策略。
+///
+/// 持久层继续保存历史 `searchBarWidth` 点值，避免 schema 迁移；设置 UI 以
+/// 默认宽度 320pt 为 100% 显示。运行时宽高使用同一缩放因子，保持固定比例。
+public enum SearchBarSizing {
+    public static let minimumPersistedWidth = 200
+    public static let maximumPersistedWidth = 600
+    public static let baseWidth = 320
+    public static let baseHeight = 22.0
+
+    public static var minimumPercent: Double {
+        percent(forPersistedWidth: minimumPersistedWidth)
+    }
+
+    public static var maximumPercent: Double {
+        percent(forPersistedWidth: maximumPersistedWidth)
+    }
+
+    public static func percent(forPersistedWidth width: Int) -> Double {
+        Double(clampedPersistedWidth(width)) / Double(baseWidth) * 100
+    }
+
+    public static func persistedWidth(forPercent percent: Double) -> Int {
+        let clampedPercent = min(max(percent, minimumPercent), maximumPercent)
+        return Int((clampedPercent / 100 * Double(baseWidth)).rounded())
+    }
+
+    public static func size(forPersistedWidth width: Int) -> CGSize {
+        let normalizedWidth = clampedPersistedWidth(width)
+        let scale = Double(normalizedWidth) / Double(baseWidth)
+        return CGSize(
+            width: Double(normalizedWidth),
+            height: baseHeight * scale
+        )
+    }
+
+    public static func clampedPersistedWidth(_ width: Int) -> Int {
+        min(max(width, minimumPersistedWidth), maximumPersistedWidth)
+    }
+}
+
 /// 应用配置(持久用户数据,非缓存)。
 ///
 /// 包含显示/行为偏好,与 Catalog(存在哪些应用)、Layout(如何排列)严格分离。
@@ -31,7 +72,8 @@ public struct AppConfiguration: Codable, Sendable {
     /// 壁纸模糊强度(半径 pt, 0 = 关闭, 默认 30)。
     public var wallpaperBlurRadius: Int
 
-    /// 搜索栏宽度(pt, 默认 320)。
+    /// 搜索栏宽度(pt, 默认 320)。设置 UI 通过 `SearchBarSizing` 映射为百分比；
+    /// 保留此字段以兼容已有配置。
     public var searchBarWidth: Int
 
     /// 自定义应用源目录

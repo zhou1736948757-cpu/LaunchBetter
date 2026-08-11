@@ -19,9 +19,11 @@ final class PressDragPresentation {
     private static let animationKey = "LaunchBetter.pressFeedback"
 
     private let layer: CALayer
+    private let presentationTransformProvider: () -> CATransform3D?
     private var pressStartPoint: NSPoint?
 
     private(set) var phase: Phase = .idle
+    private(set) var lastAnimationFromScaleForDiagnostics: CGFloat?
 
     /// 超过阈值时由 AppCell 注册 visual grab offset；不改变语义 pointer。
     var onDragThresholdCrossed: ((NSPoint) -> Void)?
@@ -29,8 +31,11 @@ final class PressDragPresentation {
     /// 一次 press session 结束时清除未被 overlay 消费的 pending offset。
     var onSessionEnded: (() -> Void)?
 
-    init(layer: CALayer) {
+    init(layer: CALayer, presentationTransformProvider: (() -> CATransform3D?)? = nil) {
         self.layer = layer
+        self.presentationTransformProvider = presentationTransformProvider ?? {
+            layer.presentation()?.transform
+        }
         layer.actions = [
             "transform": NSNull(),
         ]
@@ -112,6 +117,7 @@ final class PressDragPresentation {
     }
 
     private func animate(to targetScale: CGFloat) {
+        lastAnimationFromScaleForDiagnostics = nil
         let from = currentTransform()
         let target = CATransform3DMakeScale(targetScale, targetScale, 1)
         layer.removeAnimation(forKey: Self.animationKey)
@@ -136,6 +142,7 @@ final class PressDragPresentation {
         animation.initialVelocity = 0
         animation.duration = animation.settlingDuration
         layer.add(animation, forKey: Self.animationKey)
+        lastAnimationFromScaleForDiagnostics = from.m11
     }
 
     private func holdCurrentPresentation() {
@@ -164,6 +171,16 @@ final class PressDragPresentation {
     }
 
     private func currentTransform() -> CATransform3D {
-        layer.presentation()?.transform ?? layer.transform
+        let model = layer.transform
+        guard let presentation = presentationTransformProvider() else { return model }
+
+        // A very fast mouseUp can arrive before Core Animation publishes the
+        // model change in presentation(). Keep the visible press as the start
+        // of release instead of animating identity to identity.
+        if CATransform3DEqualToTransform(presentation, CATransform3DIdentity),
+           !CATransform3DEqualToTransform(model, CATransform3DIdentity) {
+            return model
+        }
+        return presentation
     }
 }

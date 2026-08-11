@@ -84,13 +84,49 @@ struct FolderTransitionTests {
         #expect(spring.targetProgress == 0)
     }
 
-    @Test("60 and 120 Hz reach the same state for the same wall clock")
+    @Test("60 Hz opening has more intermediate samples and stabilizes near half a second")
+    func tunedOpeningHasFullerIntermediateMotion() throws {
+        let frameDuration = 1.0 / 60.0
+        var tuned = MotionProgressSpring(target: 1)
+        var previousTuning = MotionProgressSpring(target: 1, angularFrequency: 18)
+        var tunedIntermediateFrames = 0
+        var previousIntermediateFrames = 0
+        var elapsed: TimeInterval = 0
+        var visualStabilityTime: TimeInterval?
+
+        for _ in 0..<60 {
+            elapsed += frameDuration
+            let tunedProgress = tuned.advance(by: frameDuration)
+            let previousProgress = previousTuning.advance(by: frameDuration)
+
+            if tunedProgress > 0.1, tunedProgress < 0.9 {
+                tunedIntermediateFrames += 1
+            }
+            if previousProgress > 0.1, previousProgress < 0.9 {
+                previousIntermediateFrames += 1
+            }
+            if visualStabilityTime == nil, tunedProgress >= 0.99 {
+                visualStabilityTime = elapsed
+            }
+        }
+
+        let stableAt = try #require(visualStabilityTime)
+        #expect(tuned.angularFrequency == 14)
+        #expect(tunedIntermediateFrames >= 14)
+        #expect(tunedIntermediateFrames > previousIntermediateFrames)
+        #expect(stableAt >= 0.45)
+        #expect(stableAt <= 0.55)
+    }
+
+    @Test("60 and 120 Hz reach the same in-flight state for the same wall clock")
     func frameRateIndependent() {
         var at60 = MotionProgressSpring(target: 1)
         var at120 = MotionProgressSpring(target: 1)
-        for _ in 0..<60 { _ = at60.advance(by: 1.0 / 60.0) }
-        for _ in 0..<120 { _ = at120.advance(by: 1.0 / 120.0) }
+        for _ in 0..<18 { _ = at60.advance(by: 1.0 / 60.0) }
+        for _ in 0..<36 { _ = at120.advance(by: 1.0 / 120.0) }
 
+        #expect(!at60.isSettled)
+        #expect(!at120.isSettled)
         #expect(abs(at60.currentProgress - at120.currentProgress) < 0.0001)
         #expect(abs(at60.velocity - at120.velocity) < 0.002)
     }

@@ -107,11 +107,61 @@ struct ContextMenuTests {
                 == "tell application \"Finder\" to open information window of (POSIX file \"\(expectedEscaped)\")"
         )
     }
+
+    @Test("app rename context action presents a launcher sheet and commits the trimmed name")
+    func appRenameUsesLauncherSheet() async throws {
+        let appID = AppID("/Applications/RenameMenuApp.app")!
+        let (grid, window, store) = try makeGrid([.app(appID)])
+        defer {
+            window.orderOut(nil)
+            window.contentView = nil
+        }
+
+        let menu = try #require(grid.contextMenu(at: try menuPoint(grid: grid)))
+        let rename = try #require(menu.items.first { $0.title == L10n.t(.renameApp) })
+        let action = try #require(rename.action)
+        #expect(NSApp.sendAction(action, to: rename.target, from: rename))
+
+        let alert = try #require(grid.activeRenameAlert)
+        let field = try #require(grid.activeRenameTextField)
+        #expect(window.attachedSheet === alert.window)
+        field.stringValue = "  Custom Name  "
+        window.endSheet(alert.window, returnCode: .alertFirstButtonReturn)
+        await Task.yield()
+
+        #expect(store.customNames[appID] == "Custom Name")
+    }
+
+    @Test("folder rename context action keeps sheet confirmation behavior")
+    func folderRenameUsesLauncherSheet() async throws {
+        let folderID = FolderID("folder://rename-menu-test")!
+        let (grid, window, store) = try makeGrid([.folder(folderID)])
+        defer {
+            window.orderOut(nil)
+            window.contentView = nil
+        }
+
+        let menu = try #require(grid.contextMenu(at: try menuPoint(grid: grid)))
+        let rename = try #require(menu.items.first { $0.title == L10n.t(.rename) })
+        let action = try #require(rename.action)
+        #expect(NSApp.sendAction(action, to: rename.target, from: rename))
+
+        let alert = try #require(grid.activeRenameAlert)
+        let field = try #require(grid.activeRenameTextField)
+        #expect(window.attachedSheet === alert.window)
+        field.stringValue = "Renamed Folder"
+        window.endSheet(alert.window, returnCode: .alertFirstButtonReturn)
+        await Task.yield()
+
+        #expect(store.renamedFolders[folderID] == "Renamed Folder")
+    }
 }
 
 @MainActor
 private final class ContextMenuTestStore: LauncherStoring {
     var items: [DisplayModel.DisplayItem]
+    var customNames: [AppID: String] = [:]
+    var renamedFolders: [FolderID: String] = [:]
     var onDataChange: (() -> Void)?
     var searchQuery = ""
     let gridColumns = 2
@@ -141,7 +191,7 @@ private final class ContextMenuTestStore: LauncherStoring {
     func folderName(for folderID: FolderID) -> String { folderID.rawValue }
     func launch(_ appID: AppID) {}
     func createFolder(name: String, appIDs: [AppID]) {}
-    func renameFolder(_ id: FolderID, to name: String) {}
+    func renameFolder(_ id: FolderID, to name: String) { renamedFolders[id] = name }
     func dissolveFolder(_ id: FolderID) {}
     func addToFolder(app: AppID, folder: FolderID) {}
     func moveOutOfFolder(
@@ -157,7 +207,7 @@ private final class ContextMenuTestStore: LauncherStoring {
     func folderChildren(_ id: FolderID) -> [AppID]? { nil }
     func applyDragDrop(_ mutation: LayoutTransaction.LayoutMutation) {}
     func setHidden(_ appID: AppID, hidden: Bool) {}
-    func setCustomName(_ appID: AppID, name: String?) {}
+    func setCustomName(_ appID: AppID, name: String?) { customNames[appID] = name }
     func moveToTrash(_ appID: AppID) {}
     func isHidden(_ appID: AppID) -> Bool { false }
 }

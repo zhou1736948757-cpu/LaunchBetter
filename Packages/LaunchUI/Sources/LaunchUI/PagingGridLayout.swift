@@ -187,6 +187,9 @@ public final class PagingGridLayout: NSCollectionViewLayout {
     }
 
     private var itemFrames: [IndexPath: CGRect] = [:]
+    /// 分页模式的轻量 section 索引。逐帧 attributes 查询先用静态页几何
+    /// 定位相交 section，再只访问这些页内的 itemFrames。
+    private var pagedSectionItemCounts: [Int] = []
     private var contentWidth: CGFloat = 0
     private var contentHeight: CGFloat = 0
 
@@ -198,6 +201,11 @@ public final class PagingGridLayout: NSCollectionViewLayout {
 
     /// 诊断: layoutAttributesForElements 查询计数(§56 测量)。
     public private(set) var attributeQueryCount = 0
+
+    /// 诊断: 最近一次 / 历史最大 attributes 查询候选帧数。
+    /// 分页滚动时应与相交页 item 数相关，而不是与 itemFrameCount 相关。
+    public private(set) var lastAttributeCandidateCount = 0
+    public private(set) var maxAttributeCandidateCount = 0
 
 
     /// 最近一次 prepare 使用的几何(供 GridViewController/DragController 同步读取)。
@@ -315,6 +323,9 @@ public final class PagingGridLayout: NSCollectionViewLayout {
         let geometry = buildGeometry(usingClipWidth: visibleClipWidth)
         currentGeometry = geometry
         itemFrames = [:]
+        pagedSectionItemCounts = []
+        lastAttributeCandidateCount = 0
+        maxAttributeCandidateCount = 0
         lastVisibleWidth = geometry.pageWidth
         // 失效基准 = clip 可视高(搜索模式文档更高, 不能以文档高为基准, 否则每次滚动都失效)
         lastVisibleHeight = collectionView.enclosingScrollView?.contentView.bounds.height
@@ -340,9 +351,11 @@ public final class PagingGridLayout: NSCollectionViewLayout {
         guard sectionCount > 0 else { return }
 
         lockDocumentWidth(contentWidth, collectionView: collectionView)
+        pagedSectionItemCounts.reserveCapacity(sectionCount)
 
         for section in 0..<sectionCount {
             let itemCount = collectionView.numberOfItems(inSection: section)
+            pagedSectionItemCounts.append(itemCount)
             for index in 0..<itemCount {
                 itemFrames[IndexPath(item: index, section: section)] = geometry.frame(
                     forSlot: index, in: section
@@ -404,12 +417,86 @@ public final class PagingGridLayout: NSCollectionViewLayout {
 
     public override func layoutAttributesForElements(in rect: NSRect) -> [NSCollectionViewLayoutAttributes] {
         attributeQueryCount += 1
+        guard mode == .paged,
+              !pagedSectionItemCounts.isEmpty else {
+            return attributesFromAllFrames(intersecting: rect)
+        }
+        guard let sections = pagedSections(intersecting: rect) else {
+            recordAttributeCandidates(0)
+            return []
+        }
+
+        var candidateCount = 0
+        for section in sections {
+            candidateCount += pagedSectionItemCounts[section]
+        }
+        recordAttributeCandidates(candidateCount)
+
+        var attributes: [NSCollectionViewLayoutAttributes] = []
+        attributes.reserveCapacity(candidateCount)
+        for section in sections {
+            for item in 0..<pagedSectionItemCounts[section] {
+                let indexPath = IndexPath(item: item, section: section)
+                guard let frame = itemFrames[indexPath], frame.intersects(rect) else {
+                    continue
+                }
+                let attrs = NSCollectionViewLayoutAttributes(forItemWith: indexPath)
+                attrs.frame = frame
+                attributes.append(attrs)
+            }
+        }
+        return attributes
+    }
+
+    private func attributesFromAllFrames(
+        intersecting rect: NSRect
+    ) -> [NSCollectionViewLayoutAttributes] {
+        recordAttributeCandidates(itemFrames.count)
         return itemFrames.compactMap { indexPath, frame in
             guard frame.intersects(rect) else { return nil }
             let attrs = NSCollectionViewLayoutAttributes(forItemWith: indexPath)
             attrs.frame = frame
             return attrs
         }
+    }
+
+    /// 返回 item frame 水平范围可能与查询 rect 相交的 section。
+    /// 使用实际 grid 水平边界而非简单的 rect/pageWidth，可在极窄窗口下
+    /// 网格越过页边界时继续保持与全量扫描相同的结果。
+    private func pagedSections(intersecting rect: NSRect) -> ClosedRange<Int>? {
+        guard !rect.isEmpty,
+              rect.minX.isFinite,
+              rect.maxX.isFinite,
+              let geometry = currentGeometry,
+              geometry.pageWidth > 0,
+              geometry.pageWidth.isFinite else {
+            return nil
+        }
+
+        let localMinX = geometry.gridOrigin.x
+        let localMaxX = localMinX + geometry.gridWidth
+        guard localMinX.isFinite, localMaxX.isFinite else { return nil }
+
+        // section * pageWidth + [localMinX, localMaxX) 与 rect 严格相交。
+        let rawFirst = floor((rect.minX - localMaxX) / geometry.pageWidth) + 1
+        let rawLast = ceil((rect.maxX - localMinX) / geometry.pageWidth) - 1
+        let maximumSection = pagedSectionItemCounts.count - 1
+        guard rawFirst.isFinite,
+              rawLast.isFinite,
+              rawLast >= 0,
+              rawFirst <= CGFloat(maximumSection) else {
+            return nil
+        }
+
+        let first = Int(max(0, rawFirst))
+        let last = Int(min(CGFloat(maximumSection), rawLast))
+        guard first <= last else { return nil }
+        return first...last
+    }
+
+    private func recordAttributeCandidates(_ count: Int) {
+        lastAttributeCandidateCount = count
+        maxAttributeCandidateCount = max(maxAttributeCandidateCount, count)
     }
 
     public override func layoutAttributesForItem(at indexPath: IndexPath) -> NSCollectionViewLayoutAttributes? {

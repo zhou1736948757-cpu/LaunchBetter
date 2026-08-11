@@ -46,7 +46,7 @@ public protocol LauncherStoring: AnyObject {
     /// 壁纸模糊强度(半径 pt, 0 = 关闭)。
     var wallpaperBlurRadius: Int { get }
 
-    /// 搜索栏宽度(pt)。
+    /// 搜索栏宽度(pt，兼容持久值；运行时宽高由 `SearchBarSizing` 统一映射)。
     var searchBarWidth: Int { get }
 
     /// 显示修订号: 目录/布局/配置/搜索任一变化即递增(无变化跳过 full snapshot)。

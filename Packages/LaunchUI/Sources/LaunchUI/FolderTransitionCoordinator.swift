@@ -7,6 +7,10 @@ import QuartzCore
 /// 这是一个小型、确定性的临界阻尼解：不依赖帧率，也不保存任何 UI 或
 /// Store 状态。retarget 只改变目标，当前位置和速度保持连续。
 struct MotionProgressSpring: Equatable {
+    /// Folder transition tuning: critically damped and visually stable (~99%)
+    /// after roughly 0.48 seconds, while preserving responsive retargeting.
+    static let folderAngularFrequency: CGFloat = 14
+
     private(set) var currentProgress: CGFloat
     private(set) var velocity: CGFloat
     private(set) var targetProgress: CGFloat
@@ -17,12 +21,15 @@ struct MotionProgressSpring: Equatable {
         progress: CGFloat = 0,
         velocity: CGFloat = 0,
         target: CGFloat = 0,
-        angularFrequency: CGFloat = 18
+        angularFrequency: CGFloat = Self.folderAngularFrequency
     ) {
         self.currentProgress = Self.finite(progress, fallback: 0)
         self.velocity = Self.finite(velocity, fallback: 0)
         self.targetProgress = Self.clamped(target)
-        let frequency = Self.finite(angularFrequency, fallback: 18)
+        let frequency = Self.finite(
+            angularFrequency,
+            fallback: Self.folderAngularFrequency
+        )
         self.angularFrequency = max(0.001, frequency)
     }
 
