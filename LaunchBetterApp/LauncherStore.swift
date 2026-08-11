@@ -44,6 +44,7 @@ public final class LauncherStore: LauncherStoring, LayoutMutationCompleting, Set
     private let layoutStore: LayoutStore
     private let settingsStore: SettingsStore
     private var catalogSnapshot: CatalogSnapshot
+    private var catalogIndex: [AppID: AppRecord] = [:]
     private var layout: LayoutSnapshot
     public private(set) var config: AppConfiguration
     private var searchIndex = SearchIndex()
@@ -99,6 +100,7 @@ public final class LauncherStore: LauncherStoring, LayoutMutationCompleting, Set
         self.catalogActor = catalogActor
         self.layoutStore = layoutStore
         self.catalogSnapshot = initialSnapshot
+        rebuildCatalogIndex()
         self.layout = initialLayout
         do {
             self.config = try settingsStore.load() ?? AppConfiguration()
@@ -191,6 +193,10 @@ public final class LauncherStore: LauncherStoring, LayoutMutationCompleting, Set
         }
     }
 
+    private func rebuildCatalogIndex() {
+        catalogIndex = Dictionary(uniqueKeysWithValues: catalogSnapshot.apps.map { ($0.id, $0) })
+    }
+
     private func rebuildSearchIndex() {
         searchIndexRebuildCount += 1
         searchIndex.removeAll()
@@ -235,7 +241,7 @@ public final class LauncherStore: LauncherStoring, LayoutMutationCompleting, Set
         if let custom = config.customDisplayNames[appID] {
             return custom
         }
-        guard let record = catalogSnapshot.app(with: appID) else {
+        guard let record = catalogIndex[appID] else {
             return appID.rawValue.lastPathComponent
         }
         return resolvedDisplayName(for: record)
@@ -254,7 +260,7 @@ public final class LauncherStore: LauncherStoring, LayoutMutationCompleting, Set
     }
 
     public func launch(_ appID: AppID) {
-        guard let record = catalogSnapshot.app(with: appID) else { return }
+        guard let record = catalogIndex[appID] else { return }
         NSWorkspace.shared.open(record.url)
     }
 
@@ -446,6 +452,7 @@ public final class LauncherStore: LauncherStoring, LayoutMutationCompleting, Set
             // Successfully committed a current snapshot; next failure starts from 250ms.
             retry.reset()
             catalogSnapshot = snapshot
+            rebuildCatalogIndex()   // ← keep index in sync with snapshot
             layout = result.layout
             rebuildSearchIndex()
             bumpRevision()

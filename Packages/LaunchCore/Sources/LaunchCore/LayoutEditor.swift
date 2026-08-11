@@ -61,6 +61,7 @@ public enum LayoutEditor {
         }.sorted { $0.displayIndex < $1.displayIndex }
         guard ordered.count == appIDs.count else { return nil }
         let orderedIDs = ordered.map(\.id)
+        let selectedIDs = Set(orderedIDs)          // ← moved up: O(1) contains in loop below
         let folderID = FolderID(normalized: "F-\(UUID().uuidString)")
         let folder = FolderRecord(id: folderID, name: name, children: orderedIDs)
 
@@ -70,12 +71,11 @@ public enum LayoutEditor {
         for page in 0..<pages.count {
             pages[page].removeAll { item in
                 if case .app(let id) = item {
-                    return orderedIDs.contains(id)
+                    return selectedIDs.contains(id)  // ← O(1) Set lookup
                 }
                 return false
             }
         }
-        let selectedIDs = Set(orderedIDs)
         let remainingOrder = displayOrder.filter { item in
             if case .app(let id) = item {
                 return !selectedIDs.contains(id)

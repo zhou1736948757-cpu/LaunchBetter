@@ -98,7 +98,9 @@ public final class IconMemoryCache {
     }
 
     private func removeFromLRU(_ key: IconKey) {
-        lruOrder.removeAll { $0 == key }
+        if let index = lruOrder.firstIndex(of: key) {
+            lruOrder.remove(at: index)
+        }
     }
 
     private func removeEntry(_ key: IconKey) {
