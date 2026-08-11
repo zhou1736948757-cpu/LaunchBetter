@@ -18,7 +18,7 @@ final class FolderViewController: NSViewController, NSTextFieldDelegate {
     private var rootView: FolderRootView!
     private var cardShadowView: NSView!
     private var visualCardView: NSVisualEffectView!
-    private var titleLabel: FolderTitleLabel!
+    private var titleLabel: FolderTitleView!
     private var editField: NSTextField?
     private var collectionView: ClickableCollectionView!
     private var scrollView: NSScrollView!
@@ -113,12 +113,10 @@ final class FolderViewController: NSViewController, NSTextFieldDelegate {
         root.cardView = cardShadowView
 
         // 标题: 居中, 长按重命名(无可见 Rename/Dissolve 按钮)。
-        // 用 init(frame:) + stringValue, 不用 NSTextField(string:)/labelWithString
-        // (ObjC convenience init 会绕过子类 label 样式设置)。
-        titleLabel = FolderTitleLabel(frame: .zero)
-        titleLabel.stringValue = store.folderName(for: folderID)
-        titleLabel.font = .boldSystemFont(ofSize: 24)
-        titleLabel.setAccessibilityLabel(L10n.format(.folderLabel, store.folderName(for: folderID)))
+        // FolderTitleView 是 NSView 容器: 一定接收 mouseDown, 自实现长按进入编辑。
+        titleLabel = FolderTitleView(frame: .zero)
+        titleLabel.text = store.folderName(for: folderID)
+        titleLabel.titleFont = .boldSystemFont(ofSize: 24)
         titleLabel.onPressFeedback = { [weak self] pressed in
             self?.applyTitlePressFeedback(pressed)
         }
@@ -254,8 +252,7 @@ final class FolderViewController: NSViewController, NSTextFieldDelegate {
 
     private func refreshLocalizedPresentation(folderName: String? = nil) {
         let name = folderName ?? store.folderName(for: folderID)
-        titleLabel.stringValue = name
-        titleLabel.setAccessibilityLabel(L10n.format(.folderLabel, name))
+        titleLabel.text = name
         visualCardView?.setAccessibilityLabel(L10n.format(.folderLabel, name))
         visualCardView?.setAccessibilityHelp(L10n.t(.folderContentsHelp))
     }
@@ -584,8 +581,8 @@ final class FolderViewController: NSViewController, NSTextFieldDelegate {
         titleLabel.layoutSubtreeIfNeeded()
 
         let editor = NSTextField(frame: titleLabel.frame)
-        editor.stringValue = store.folderName(for: folderID)
-        editor.font = titleLabel.font
+        editor.stringValue = titleLabel.text
+        editor.font = titleLabel.titleFont
         editor.alignment = .center
         editor.isBordered = false
         editor.isBezeled = false
@@ -677,21 +674,16 @@ struct FolderPanelMetrics: Equatable {
     }
 }
 
-/// 文件夹标题: 即时按压反馈 + 长按触发内联重命名 + 无障碍自定义动作。
-private final class FolderTitleLabel: NSTextField {
-    /// 按压反馈(按下 true / 恢复 false)。
-    var onPressFeedback: ((Bool) -> Void)?
-    /// 长按达标 → 激活内联重命名。
+/// 文件夹标题文本(纯 label 样式 + 无障碍重命名动作)。
+/// 手势由 FolderTitleView 负责: NSTextField 的 cell 可能吞掉 mouseDown,
+/// NSPressGestureRecognizer 挂 label 上不可靠。
+final class FolderTitleLabel: NSTextField {
+    /// 无障碍动作触发重命名。
     var onRenameActivate: (() -> Void)?
-
-    private let pressRecognizer = NSPressGestureRecognizer(
-        target: self, action: #selector(handlePress(_:))
-    )
-    private var pointerInside = false
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
-        // 必须显式走 init(frame:) 并在此设置全部 label 样式:
+        // 显式走 init(frame:) 设置全部 label 样式:
         // NSTextField(string:) / labelWithString 是 ObjC convenience init,
         // 会绕过子类 override, 导致显示成默认可编辑的带边框小框。
         isEditable = false
@@ -703,42 +695,10 @@ private final class FolderTitleLabel: NSTextField {
         focusRingType = .none
         alignment = .center
         lineBreakMode = .byTruncatingTail
-        pressRecognizer.minimumPressDuration = 0.5
-        pressRecognizer.allowableMovement = 6
-        addGestureRecognizer(pressRecognizer)
     }
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
-    }
-
-    @objc private func handlePress(_ recognizer: NSPressGestureRecognizer) {
-        switch recognizer.state {
-        case .began:
-            onRenameActivate?()
-        case .ended, .cancelled, .failed:
-            onPressFeedback?(false)
-        default:
-            break
-        }
-    }
-
-    override func mouseDown(with event: NSEvent) {
-        pointerInside = true
-        onPressFeedback?(true)
-    }
-
-    override func mouseDragged(with event: NSEvent) {
-        let point = convert(event.locationInWindow, from: nil)
-        if !bounds.contains(point) {
-            pointerInside = false
-            onPressFeedback?(false)
-        }
-    }
-
-    override func mouseUp(with event: NSEvent) {
-        pointerInside = false
-        onPressFeedback?(false)
     }
 
     // 无障碍: 移除可见按钮后仍可重命名。
@@ -753,6 +713,109 @@ private final class FolderTitleLabel: NSTextField {
 
     @objc private func renameFromAccessibility() {
         onRenameActivate?()
+    }
+}
+
+/// 文件夹标题容器: 接收 mouseDown(NSView 一定收到, 不依赖 NSTextField cell),
+/// 自实现长按(minimumPressDuration / allowableMovement)进入内联重命名。
+final class FolderTitleView: NSView {
+    /// 按压反馈(按下 true / 恢复 false)。
+    var onPressFeedback: ((Bool) -> Void)?
+    /// 长按达标 → 激活内联重命名。
+    var onRenameActivate: (() -> Void)?
+
+    let label = FolderTitleLabel(frame: .zero)
+
+    private let minimumPressDuration: TimeInterval = 0.5
+    private let allowableMovement: CGFloat = 6
+    private var pressStartPoint: CGPoint?
+    private var pressTimer: Timer?
+    private var pointerInside = false
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        label.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(label)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: leadingAnchor),
+            label.trailingAnchor.constraint(equalTo: trailingAnchor),
+            label.topAnchor.constraint(equalTo: topAnchor),
+            label.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    var text: String {
+        get { label.stringValue }
+        set {
+            label.stringValue = newValue
+            label.setAccessibilityLabel(L10n.format(.folderLabel, newValue))
+        }
+    }
+
+    var titleFont: NSFont {
+        get { label.font ?? .systemFont(ofSize: 13) }
+        set { label.font = newValue }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        pointerInside = true
+        pressStartPoint = convert(event.locationInWindow, from: nil)
+        onPressFeedback?(true)
+        schedulePressCheck()
+    }
+
+    private func schedulePressCheck() {
+        pressTimer?.invalidate()
+        let timer = Timer(timeInterval: minimumPressDuration, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.activateRenameIfStillPressing()
+            }
+        }
+        // eventTracking: 按住拖动期间仍触发。
+        RunLoop.main.add(timer, forMode: .eventTracking)
+        pressTimer = timer
+    }
+
+    private func activateRenameIfStillPressing() {
+        guard pointerInside else { return }
+        cancelPress()
+        onRenameActivate?()
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        if let start = pressStartPoint {
+            let dx = point.x - start.x
+            let dy = point.y - start.y
+            if (dx * dx + dy * dy) > allowableMovement * allowableMovement {
+                pointerInside = false
+                onPressFeedback?(false)
+                cancelPress()
+                return
+            }
+        }
+        if !bounds.contains(point) {
+            pointerInside = false
+            onPressFeedback?(false)
+            cancelPress()
+        }
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        pointerInside = false
+        onPressFeedback?(false)
+        cancelPress()
+    }
+
+    private func cancelPress() {
+        pressTimer?.invalidate()
+        pressTimer = nil
+        pressStartPoint = nil
     }
 }
 
