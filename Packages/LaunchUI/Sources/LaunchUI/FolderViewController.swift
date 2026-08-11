@@ -113,7 +113,10 @@ final class FolderViewController: NSViewController, NSTextFieldDelegate {
         root.cardView = cardShadowView
 
         // 标题: 居中, 长按重命名(无可见 Rename/Dissolve 按钮)。
-        titleLabel = FolderTitleLabel(string: store.folderName(for: folderID))
+        // 用 init(frame:) + stringValue, 不用 NSTextField(string:)/labelWithString
+        // (ObjC convenience init 会绕过子类 label 样式设置)。
+        titleLabel = FolderTitleLabel(frame: .zero)
+        titleLabel.stringValue = store.folderName(for: folderID)
         titleLabel.font = .boldSystemFont(ofSize: 24)
         titleLabel.setAccessibilityLabel(L10n.format(.folderLabel, store.folderName(for: folderID)))
         titleLabel.onPressFeedback = { [weak self] pressed in
@@ -576,14 +579,20 @@ final class FolderViewController: NSViewController, NSTextFieldDelegate {
         guard editField == nil,
               let card = visualCardView,
               store.folderChildren(folderID) != nil else { return }
-        let editor = NSTextField(string: store.folderName(for: folderID))
+        // 先落定标题约束, 保证 editor 与已解析的标题 frame 完全一致(避免小竖框/跳变)。
+        card.layoutSubtreeIfNeeded()
+        titleLabel.layoutSubtreeIfNeeded()
+
+        let editor = NSTextField(frame: titleLabel.frame)
+        editor.stringValue = store.folderName(for: folderID)
         editor.font = titleLabel.font
         editor.alignment = .center
         editor.isBordered = false
+        editor.isBezeled = false
         editor.drawsBackground = false
+        editor.textColor = .labelColor
         editor.focusRingType = .none
         editor.delegate = self
-        editor.frame = titleLabel.frame
         editor.autoresizingMask = []
         card.addSubview(editor, positioned: .above, relativeTo: titleLabel)
         titleLabel.isHidden = true
@@ -682,10 +691,15 @@ private final class FolderTitleLabel: NSTextField {
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
+        // 必须显式走 init(frame:) 并在此设置全部 label 样式:
+        // NSTextField(string:) / labelWithString 是 ObjC convenience init,
+        // 会绕过子类 override, 导致显示成默认可编辑的带边框小框。
         isEditable = false
         isSelectable = false
         isBordered = false
+        isBezeled = false
         drawsBackground = false
+        textColor = .labelColor
         focusRingType = .none
         alignment = .center
         lineBreakMode = .byTruncatingTail

@@ -226,6 +226,11 @@ struct L10nTests {
             views.compactMap { $0 as? NSTextField }.first { $0.stringValue == "Test Folder" }
         )
         #expect(title.accessibilityLabel() == folderLabel)
+        // 标题必须是纯 label 样式(非默认可编辑的带边框小框, 回归保护)。
+        #expect(!title.isEditable)
+        #expect(!title.isBordered)
+        #expect(!title.isBezeled)
+        #expect(title.alignment == .center)
         let customActions = title.accessibilityCustomActions() ?? []
         #expect(customActions.contains { $0.name == renameHelp })
     }
