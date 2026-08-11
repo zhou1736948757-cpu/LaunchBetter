@@ -21,12 +21,13 @@
 
 ## Current Phase
 
-**Stage D 自动化与代码审查门禁已完成，v0.3.8 待发布。**
+**Stage D 自动化与代码审查门禁已完成，v0.3.8 已发布。**
 
 物理/视觉 gate 尚未验收：时间连续性、真实触控板甩动速度与 120 Hz 手感仍为
 `MANUAL_PHYSICAL_GATE`，不得表述为 Stage D 已完成实机验收。
 
 当前状态:
+- 发布: `v0.3.8` / `9f50d2a`（GitHub Release 已发布）
 - 提交: `709e757` interaction: isolate settings input ownership
 - 提交: `ee6d8ee` folder: inline title rename via long-press, remove header buttons
 - 提交: `(最新)` motion tokens + reduce-motion + launcher transition lifecycle
