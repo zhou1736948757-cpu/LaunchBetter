@@ -1,8 +1,7 @@
 ---
-description: 独立代码与架构评审代理 (GPT-5.6 Luna, variant: max),只读。Phase Gate/架构/并发边界评审。
+description: 独立代码与架构评审代理 (MiMo V2.5 Pro),只读。Phase Gate/架构/并发边界评审。
 mode: all
-model: opencode-go/gpt-5.6-luna
-variant: max
+model: opencode-go/mimo-v2.5-pro
 permission:
   edit: deny
   read: allow

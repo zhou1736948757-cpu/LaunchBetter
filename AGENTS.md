@@ -66,18 +66,19 @@ xcodebuild -project LaunchBetter.xcodeproj -scheme LaunchBetter test
 - 禁止: force push、重写已发布历史、未授权重置用户工作、删除含未合并工作的分支
 - 提交信息简明描述变更
 
-## 模型路由(用户指令,2026-08-10 更新)
+## 模型路由(用户指令,2026-08-11 更新)
 
-- **总控(主对话)**: opencode-go/deepseek-v4-flash —— 阶段规划、任务打包、调度评审、
+- **总控(主对话)**: opencode-go/gpt-5.6-luna **variant: max** —— 阶段规划、任务打包、调度评审、
   验证收口、Git 提交、MEMORY 维护。
   **总控不直接写生产代码** —— 实现一律交独立 implementer 窗口(防上下文污染)。
+  启动: `opencode run -m opencode-go/gpt-5.6-luna`(max 思考深度)。
 - **实现(独立 subagent)**: opencode-go/deepseek-v4-flash **variant: max**(Max 思考深度)。
   运行方式: `opencode run -m opencode-go/deepseek-v4-flash "<任务包指令>"` 起独立窗口,
   与主对话**完全隔离上下文**。任务包在 `Docs/Tasks/<name>.md`(模板见 implementer.md);
   implementer 返回(改动清单/假设清单/测试结果/偏差/进度 `[PROGRESS]`);
   总控收到后必须独立验证(build/测试/探针),不盲信。
   **主对话禁止在同一会话里改生产文件**;只有总控的验证/提交/评审属例外。
-- **方案门 + 阶段评审**: opencode-go/gpt-5.6-luna (variant: max),经 `.opencode/agents/reviewer.md`
+- **方案门 + 阶段评审**: opencode-go/mimo-v2.5-pro,经 `.opencode/agents/reviewer.md`
   独立窗口 —— 高风险任务(几何/手势/并发/性能)动手前先评审执行计划;阶段末评审
   0 BLOCKER 0 MAJOR 才能完成
 - **视觉评审**: opencode-go/mimo-v2.5,经 `.opencode/agents/visual-reviewer.md` —— 仅截图证据场景;
