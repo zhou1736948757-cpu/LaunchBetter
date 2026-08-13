@@ -1,6 +1,18 @@
 import AppKit
 import LaunchCore
 
+/// 外层 diffable data source 的 item 包装(Stage E8)。
+///
+/// - `.appLibrary`: 物理 section 0 的 Library host, 恒单 item。
+/// - `.layout(item)`: 普通 display item(页面内容 / 搜索结果)。
+///
+/// 普通 `Item`/Folder/Drag/diagnostic 调用方仍只面对
+/// `DisplayModel.DisplayItem`;host 不产生 AppCell/Drag identity。
+enum LauncherSurfaceItem: Hashable {
+    case appLibrary
+    case layout(DisplayModel.DisplayItem)
+}
+
 enum GridDragSourceIdentity: Equatable {
     case app(AppID)
     case folder(FolderID)
@@ -81,16 +93,60 @@ final class GridViewController: NSViewController {
     var activeRenameTextField: NSTextField? { renamePromptPresenter.activeTextField }
     private var collectionView: NSCollectionView!
     private var scrollView: NSScrollView!
-    private var dataSource: NSCollectionViewDiffableDataSource<Int, Item>!
+    private var dataSource: NSCollectionViewDiffableDataSource<Int, LauncherSurfaceItem>!
     private var cachedDisplayItems: [Item] = []
     private var cachedSectionCounts: [Int] = []
     private var currentPage = 0
     private var pageCount = 1
+    /// 语义 surface(默认 `.layoutPage(0)`, 即物理 1)。
+    private var currentSurface: LauncherSurface = .layoutPage(0)
+    /// 进入 Search 前保存的语义 surface(不是 raw page number, Stage E8)。
+    private var surfaceBeforeSearch: LauncherSurface = .layoutPage(0)
     /// 当前页(诊断)。
     var currentPageValue: Int { currentPage }
 
-    /// 页数(诊断)。
+    /// 页数(诊断, 普通 Layout page count, ≥ 1)。
     var pageCountValue: Int { pageCount }
+
+    /// 当前语义 surface(诊断/导航)。
+    var currentSurfaceValue: LauncherSurface { currentSurface }
+
+    /// 是否启用 leading surface(物理 section 0 = App Library host)。
+    /// 仅当 store 提供 `AppLibraryDataProviding` 时启用, 否则保持既有
+    /// 单表面几何/分页语义(所有非 provider 测试替身不受影响)。
+    private var leadingSurfaceEnabled: Bool { store is any AppLibraryDataProviding }
+
+    /// 物理 section 偏移: paged + leading = 1; search 恒 0。
+    private var ordinarySectionOffset: Int {
+        (searchMode || !leadingSurfaceEnabled) ? 0 : 1
+    }
+
+    /// 普通 Layout 页在文档坐标中的 leading 偏移(未启用时 0)。
+    private var leadingDocumentOffset: CGFloat {
+        (searchMode || !leadingSurfaceEnabled) ? 0 : geometry.pageWidth
+    }
+
+    /// 物理 surface 数(分页引擎用): leading = 普通页数 + 1(Library), 否则 = 普通页数。
+    /// 搜索模式禁用 leading surface, 单垂直 section → 恒 1。
+    var physicalSurfaceCount: Int {
+        if searchMode { return 1 }
+        return leadingSurfaceEnabled
+            ? LauncherSurfaceIndex(layoutPageCount: pageCount).physicalSurfaceCount
+            : pageCount
+    }
+
+    /// 当前物理 surface 索引: 0 = App Library, n + 1 = Layout page n。
+    /// 初始值 1 = `.layoutPage(0)`; 未启用 leading 时 = 普通 currentPage。
+    /// 搜索模式禁用 leading surface → 恒 0。
+    var physicalSurfaceIndex: Int {
+        if searchMode { return 0 }
+        return leadingSurfaceEnabled
+            ? LauncherSurfaceIndex(layoutPageCount: pageCount).physicalIndex(for: currentSurface)
+            : currentPage
+    }
+
+    /// App Library host(物理 section 0 的内容)。
+    private lazy var hostItem = AppLibraryHostItem(store: store, iconProvider: iconProvider)
 
     /// 分页交互控制器(v0.1.6): 手势状态 + 唯一 offset writer。
     private let paging = PagingInteractionController()
@@ -110,11 +166,17 @@ final class GridViewController: NSViewController {
 
     /// 顶部/底部保留区(由窗口层计算: 顶部搜索框 + 底部页点)。
     /// 保持 GridGeometry 唯一真值: 只更新布局的可用内容区, 重新 prepare。
+    /// 同时把顶部 chrome 保留区转发给 App Library host(底部用 Library 默认
+    /// 小 padding, 不吞掉网格页点保留带)。
     func setContentInsets(top: CGFloat, bottom: CGFloat) {
         if gridLayout.topInset != max(0, top) || gridLayout.bottomInset != max(0, bottom) {
             dragController?.invalidateActiveSessionForDisplayChange()
         }
         gridLayout.setContentInsets(top: top, bottom: bottom)
+        hostItem.setContentInsets(
+            top: max(0, top),
+            bottom: AppLibraryLayoutMetrics.defaultContentInsets.bottom
+        )
         updateFolderTransitionGeometryRevision()
         refreshCellsIfEffectivePointSizeChanged()
     }
@@ -161,6 +223,14 @@ final class GridViewController: NSViewController {
 
     /// 点击空白处回调(退出启动器)。
     var onClickBlank: (() -> Void)?
+
+    /// 语义 surface 变更回调(Stage E9a)。WindowController 据此同步输入 owner:
+    /// `.appLibrary` → `.appLibrary`, `.layoutPage` → `.launcher`。
+    var onSurfaceChange: ((LauncherSurface) -> Void)?
+
+    /// App Library category detail 打开/关闭回调(Stage E9a)。由 Library 控制器
+    /// 经 host 转发; 打开/关闭必须幂等, WindowController 以当前 owner 门控。
+    var onAppLibraryCategoryDetailChange: ((Bool) -> Void)?
 
     /// 页码指示点容器。
     private var pageDots: NSStackView!
@@ -215,14 +285,17 @@ final class GridViewController: NSViewController {
         let container = NSView()
 
         let collectionView = ClickableCollectionView()
-        collectionView.collectionViewLayout = PagingGridLayout(
+        let pagedLayout = PagingGridLayout(
             columns: store.gridColumns, rows: store.gridRows,
             cellSize: cellSize, iconSize: iconSize,
             horizontalSpacing: horizontalSpacing, verticalSpacing: verticalSpacing
         )
+        pagedLayout.leadingSurfaceEnabled = leadingSurfaceEnabled
+        collectionView.collectionViewLayout = pagedLayout
         collectionView.backgroundColors = [.clear]
         collectionView.isSelectable = false
         collectionView.register(AppCellView.self, forItemWithIdentifier: AppCellView.identifier)
+        collectionView.register(AppLibraryHostCell.self, forItemWithIdentifier: AppLibraryHostCell.reuseIdentifier)
         collectionView.onClick = { [weak self] point in
             self?.handleClick(at: point)
         }
@@ -297,17 +370,56 @@ final class GridViewController: NSViewController {
     }
 
     private func configureDataSource() {
-        dataSource = NSCollectionViewDiffableDataSource<Int, Item>(
+        dataSource = NSCollectionViewDiffableDataSource<Int, LauncherSurfaceItem>(
             collectionView: collectionView
         ) { [weak self] _, indexPath, item in
             guard let self else { return nil }
-            let cell = collectionView.makeItem(
-                withIdentifier: AppCellView.identifier, for: indexPath
-            ) as? AppCellView
-            configure(cell, with: item)
-            return cell
+            switch item {
+            case .appLibrary:
+                let cell = collectionView.makeItem(
+                    withIdentifier: AppLibraryHostCell.reuseIdentifier, for: indexPath
+                ) as? AppLibraryHostCell
+                configureHost(cell)
+                return cell
+            case .layout(let layoutItem):
+                // host 复用: 离开 Library 时释放冻结 session, 下次进入取最新 model。
+                hostItem.endSession()
+                let cell = collectionView.makeItem(
+                    withIdentifier: AppCellView.identifier, for: indexPath
+                ) as? AppCellView
+                configure(cell, with: layoutItem)
+                return cell
+            }
         }
         collectionView.dataSource = dataSource
+        // detail 状态转发: Library 控制器 → host → Grid → Window。
+        hostItem.onDetailChange = { [weak self] open in
+            guard let self else { return }
+            self.onAppLibraryCategoryDetailChange?(open)
+        }
+        // 水平滚动路由: Library → host → Grid 复用外层分页引擎(Stage E9b)。
+        hostItem.onAppLibraryHorizontalScroll = { [weak self] event in
+            self?.handleAppLibraryHorizontalScroll(event) ?? false
+        }
+    }
+
+    /// 配置 App Library host cell: 挂载 Library 控制器视图(只挂一次)。
+    /// 挂载时同步当前 chrome 顶部保留带(幂等; controller 创建前/后都生效)。
+    private func configureHost(_ cell: AppLibraryHostCell?) {
+        guard let cell else { return }
+        hostItem.setContentInsets(
+            top: max(0, gridLayout.topInset),
+            bottom: AppLibraryLayoutMetrics.defaultContentInsets.bottom
+        )
+        guard let controller = hostItem.makeController() else {
+            cell.view.subviews.forEach { $0.removeFromSuperview() }
+            return
+        }
+        guard controller.view.superview !== cell.view else { return }
+        cell.view.subviews.forEach { $0.removeFromSuperview() }
+        controller.view.frame = cell.view.bounds
+        controller.view.autoresizingMask = [.width, .height]
+        cell.view.addSubview(controller.view)
     }
 
     private func configure(_ cell: AppCellView?, with item: Item) {
@@ -406,12 +518,28 @@ final class GridViewController: NSViewController {
         if let results = store.searchResults() {
             enterSearchMode(with: results)
         } else {
+            let restoringSearchExit = searchMode
             if searchMode {
                 exitSearchMode()
-                // 退出搜索恢复搜索前页码(Stage 1 §12)
-                currentPage = min(pagedPageBeforeSearch, max(0, pageCount - 1))
             }
             applyDisplayModel(store.displayModel())
+            // Stage E: 先恢复普通 display model/pageCount(applyDisplayModel),
+            // 再按普通 pageCount 确定性 clamp 原语义 surface, 最后经 paging
+            // 唯一 writer jump(不直接写 clip offset)。搜索态 pageCount==1 的
+            // clamp 已无效。保存的是 LauncherSurface(Library 或普通页), 不是
+            // raw page number。
+            if restoringSearchExit {
+                switch surfaceBeforeSearch {
+                case .appLibrary:
+                    setCurrentSurface(.appLibrary)
+                    currentPage = 0
+                case .layoutPage(let page):
+                    currentPage = Self.clampedPage(page, pageCount: pageCount)
+                    setCurrentSurface(.layoutPage(currentPage))
+                }
+                paging.jumpTo(page: physicalSurfaceIndex)
+                updatePageDots()
+            }
         }
     }
 
@@ -422,17 +550,20 @@ final class GridViewController: NSViewController {
         searchMode = true
         paging.isEnabled = false
         if wasPagedMode {
-            pagedPageBeforeSearch = currentPage
+            // 保存语义 surface(Library 或普通页), 不是 raw page number(Stage E8)。
+            surfaceBeforeSearch = currentSurface
         }
+        // 离开 Library surface: 释放冻结 session, 下次进入取最新 model。
+        hostItem.endSession()
         gridLayout.mode = .search
         gridLayout.invalidateLayout()
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = false
         cachedDisplayItems = results
         cachedSectionCounts = [results.count]
-        var snapshot = NSDiffableDataSourceSnapshot<Int, Item>()
+        var snapshot = NSDiffableDataSourceSnapshot<Int, LauncherSurfaceItem>()
         snapshot.appendSections([0])
-        snapshot.appendItems(results, toSection: 0)
+        snapshot.appendItems(results.map(LauncherSurfaceItem.layout), toSection: 0)
         pageCount = 1
         currentPage = 0
         dataSource.apply(snapshot, animatingDifferences: false)
@@ -467,10 +598,20 @@ final class GridViewController: NSViewController {
     private func applyDisplayModel(_ display: DisplayModel) {
         cachedDisplayItems = display.pages.flatMap { $0 }
         cachedSectionCounts = display.pages.map(\.count)
-        var snapshot = NSDiffableDataSourceSnapshot<Int, Item>()
-        for (pageIndex, page) in display.pages.enumerated() {
-            snapshot.appendSections([pageIndex])
-            snapshot.appendItems(page, toSection: pageIndex)
+        var snapshot = NSDiffableDataSourceSnapshot<Int, LauncherSurfaceItem>()
+        if leadingSurfaceEnabled {
+            // 物理 section 0 = App Library host(恒单 item), 普通页从 section 1 开始。
+            snapshot.appendSections([0])
+            snapshot.appendItems([.appLibrary], toSection: 0)
+            for (pageIndex, page) in display.pages.enumerated() {
+                snapshot.appendSections([pageIndex + 1])
+                snapshot.appendItems(page.map(LauncherSurfaceItem.layout), toSection: pageIndex + 1)
+            }
+        } else {
+            for (pageIndex, page) in display.pages.enumerated() {
+                snapshot.appendSections([pageIndex])
+                snapshot.appendItems(page.map(LauncherSurfaceItem.layout), toSection: pageIndex)
+            }
         }
         // §A14: folder 身份稳定, 子项 payload 独立刷新。已显示的 folder 的可见子项
         // 变化 → reload 该 item(重新 configure → 缩略图/子项更新), identity 不变。
@@ -481,13 +622,19 @@ final class GridViewController: NSViewController {
             return folderPayloads[id] != previous
         }
         if !changed.isEmpty {
-            snapshot.reloadItems(changed.map(Item.folder))
+            snapshot.reloadItems(changed.map { .layout(.folder($0)) })
         }
         lastAppliedFolderPayloads = folderPayloads
         pageCount = max(1, display.pages.count)
         currentPage = min(currentPage, pageCount - 1)
+        // 默认 surface 保持 Page1/物理 1, 除非当前已明确处于 Library。
+        if currentSurface != .appLibrary {
+            setCurrentSurface(
+                .layoutPage(min(max(0, currentPage), max(0, pageCount - 1)))
+            )
+        }
         dataSource.apply(snapshot, animatingDifferences: false)
-        paging.jumpTo(page: currentPage)
+        paging.jumpTo(page: physicalSurfaceIndex)
         updatePageDots()
     }
 
@@ -508,30 +655,172 @@ final class GridViewController: NSViewController {
         // Diffable 对相同 item 复用 cell(不重新调用数据源闭包) →
         // 必须 reloadData 强制重配置, 否则 iconPointSize 停留在旧值(评审 M2)
         collectionView.reloadData()
-        paging.jumpTo(page: currentPage)
+        // geometry-config 跳跃也沿物理 surface 走(普通页 0 → 物理 1, Library 存在时不落进 Library)。
+        paging.jumpTo(page: physicalIndex(forLayoutPage: currentPage))
     }
 
     // MARK: - 页面导航
 
+    /// 页码确定性 clamp(Stage E): 负数 → 0, 超界 → 最后一页, pageCount 至少按 1 处理。
+    /// 与 PagingInteractionController 的 settle/jump 目标 clamp 语义一致。
+    static func clampedPage(_ page: Int, pageCount: Int) -> Int {
+        min(max(0, page), max(0, pageCount - 1))
+    }
+
+    /// 切换语义 surface 并维护 host session 生命周期。
+    /// 离开 Library 时释放冻结 model(host 复用语义), 进入由 cell configure 重新固定;
+    /// 同时清理仍打开的 category detail(幂等), 并经 `onSurfaceChange` 通知 Window。
+    private func setCurrentSurface(_ surface: LauncherSurface) {
+        guard surface != currentSurface else { return }
+        if currentSurface == .appLibrary, surface != .appLibrary {
+            hostItem.endSession()
+            hostItem.closeDetail()
+        }
+        currentSurface = surface
+        onSurfaceChange?(surface)
+    }
+
+    /// 关闭 App Library category detail(幂等; 无 detail 时为 no-op)。
+    /// 由 WindowController 在 Settings 打开 / Launcher 隐藏时调用。
+    func closeAppLibraryDetail() {
+        hostItem.closeDetail()
+    }
+
+    /// 诊断: 当前 App Library 控制器(host 尚未挂载时为 nil)。
+    var libraryControllerForDiag: AppLibraryViewController? {
+        hostItem.libraryControllerForDiag
+    }
+
+    // MARK: - E10 诊断 seam(App Library 视觉证据)
+
+    /// E10: 导航到 App Library surface(Page1 → previousPage 语义; 已在
+    /// Library 时 no-op)。leading surface 未启用时返回 false。
+    func libraryShotNavigateToLibrary() -> Bool {
+        guard leadingSurfaceEnabled else { return false }
+        if currentSurface != .appLibrary {
+            previousPage()
+        }
+        return true
+    }
+
+    /// E10: 分页 settle 是否已完成(驱动一帧; 未完成返回 false, 调用方轮询)。
+    func libraryShotWaitSettled() -> Bool {
+        pagingProbeDisplayFrame()
+    }
+
+    /// E10: Library 内部垂直滚动到内容约 55%(45%-60% 目标); 内容不足 → stable no-op。
+    func libraryShotScrollMid() -> (scrolled: Bool, fraction: Double) {
+        guard let library = libraryControllerForDiag else { return (false, 0) }
+        return library.scrollVerticalToFractionForDiagnostic(0.55)
+    }
+
+    /// E10: 打开第一个 category detail(无分类卡返回 false)。
+    func libraryShotOpenFirstCategoryDetail() -> Bool {
+        guard let library = libraryControllerForDiag else { return false }
+        return library.openFirstCategoryDetailForDiagnostic()
+    }
+
+    /// E10: surface / 搜索 / 卡片 / 可见 cell / detail 状态快照。
+    func libraryShotState() -> String {
+        let surface: String
+        switch currentSurface {
+        case .appLibrary: surface = "appLibrary"
+        case .layoutPage(let page): surface = "layoutPage(\(page))"
+        }
+        let counts = libraryControllerForDiag?.libraryShotCounts() ?? "cards=0 visible=0 detail=0"
+        return "surface=\(surface) search=\(searchMode ? 1 : 0) \(counts)"
+    }
+
     func goToPage(_ page: Int, animated: Bool = true) {
         guard !searchMode else { return }
-        let clamped = min(max(0, page), pageCount - 1)
+        let clamped = Self.clampedPage(page, pageCount: pageCount)
         if animated {
-            // 动画翻页统一经 PageSnapAnimator(time-based spring, v0.1.6 §23/§31)
-            paging.startSettle(toPage: clamped)
+            // 动画翻页统一经 PageSnapAnimator(time-based spring, v0.1.6 §23/§31);
+            // 目标 = 普通页的物理 surface。
+            paging.startSettle(toPage: physicalIndex(forLayoutPage: clamped))
         } else {
             currentPage = clamped
-            paging.jumpTo(page: clamped)
+            setCurrentSurface(.layoutPage(clamped))
+            paging.jumpTo(page: physicalIndex(forLayoutPage: clamped))
             updatePageDots()
         }
         prewarmAdjacentPages(clamped)
     }
 
-    func nextPage() { goToPage(currentPage + 1) }
-    func previousPage() { goToPage(currentPage - 1) }
+    /// 普通 Layout page → 分页引擎的物理页索引(leading 开启时 + 1, 否则原样)。
+    private func physicalIndex(forLayoutPage page: Int) -> Int {
+        leadingSurfaceEnabled
+            ? LauncherSurfaceIndex(layoutPageCount: pageCount).physicalIndex(for: .layoutPage(page))
+            : page
+    }
+
+    /// 沿物理 surface 前进/后退(Page1 previous → Library, Library next → Page1)。
+    func nextPage() {
+        guard !searchMode else { return }
+        if leadingSurfaceEnabled {
+            let target = min(physicalSurfaceCount - 1, physicalSurfaceIndex + 1)
+            navigate(toPhysical: target)
+        } else {
+            navigate(toPhysical: currentPage + 1)
+        }
+    }
+
+    func previousPage() {
+        guard !searchMode else { return }
+        if leadingSurfaceEnabled {
+            navigate(toPhysical: max(0, physicalSurfaceIndex - 1))
+        } else {
+            navigate(toPhysical: currentPage - 1)
+        }
+    }
+
+    /// 导航到物理 surface(经 paging 唯一 writer 的 settle)。
+    private func navigate(toPhysical physical: Int) {
+        if leadingSurfaceEnabled {
+            let index = LauncherSurfaceIndex(layoutPageCount: pageCount)
+            let surface = index.surface(forPhysicalIndex: physical)
+            setCurrentSurface(surface)
+            switch surface {
+            case .appLibrary:
+                currentPage = 0
+            case .layoutPage(let page):
+                currentPage = page
+            }
+            paging.startSettle(toPage: physical)
+        } else {
+            let clamped = Self.clampedPage(physical, pageCount: pageCount)
+            currentPage = clamped
+            setCurrentSurface(.layoutPage(clamped))
+            paging.startSettle(toPage: clamped)
+        }
+        updatePageDots()
+        prewarmAdjacentPages(currentPage)
+    }
+
+    /// paging settle 目标页(物理索引)落地: 更新物理状态/语义当前页/页点/预热。
+    private func applySettledPhysicalPage(_ physical: Int) {
+        if leadingSurfaceEnabled {
+            let index = LauncherSurfaceIndex(layoutPageCount: pageCount)
+            let surface = index.surface(forPhysicalIndex: physical)
+            setCurrentSurface(surface)
+            switch surface {
+            case .appLibrary:
+                currentPage = 0
+            case .layoutPage(let page):
+                currentPage = page
+            }
+        } else {
+            currentPage = Self.clampedPage(physical, pageCount: pageCount)
+            setCurrentSurface(.layoutPage(currentPage))
+        }
+        updatePageDots()
+        prewarmAdjacentPages(currentPage)
+    }
 
     /// 相邻页图标预热(v0.1.6 §36-37): 只维护 current±1 working set, 不全量预加载。
+    /// Library 是独立 surface, 不预热普通图标。
     private func prewarmAdjacentPages(_ page: Int) {
+        guard currentSurface != .appLibrary else { return }
         guard let iconProvider else { return }
         let display = store.displayModel()
         let scale = Int(view.window?.backingScaleFactor ?? 2)
@@ -561,10 +850,16 @@ final class GridViewController: NSViewController {
             return
         }
         switch item {
-        case .app(let id):
-            store.launch(id)
-        case .folder(let id):
-            onOpenFolder?(id)
+        case .appLibrary:
+            // Library host 是独立表面: 不启动应用、不隐藏启动器(点击由 Library 自身处理)。
+            break
+        case .layout(let layoutItem):
+            switch layoutItem {
+            case .app(let id):
+                store.launch(id)
+            case .folder(let id):
+                onOpenFolder?(id)
+            }
         }
     }
 
@@ -579,80 +874,85 @@ final class GridViewController: NSViewController {
         let menu = NSMenu()
 
         switch item {
-        case .app(let id):
-            let addItem = NSMenuItem(title: L10n.t(.addToFolder), action: nil, keyEquivalent: "")
-            let submenu = NSMenu()
-            let folders = store.folderNames()
-            if folders.isEmpty {
-                let empty = NSMenuItem(title: L10n.t(.noFolders), action: nil, keyEquivalent: "")
-                empty.isEnabled = false
-                submenu.addItem(empty)
-            } else {
-                for (folderID, name) in folders.sorted(by: { $0.value < $1.value }) {
-                    let item = NSMenuItem(title: name, action: #selector(addToFolder(_:)), keyEquivalent: "")
-                    item.representedObject = FolderMenuItemPayload(appID: id, folderID: folderID)
-                    item.target = self
-                    submenu.addItem(item)
+        case .appLibrary:
+            return nil
+        case .layout(let layoutItem):
+            switch layoutItem {
+            case .app(let id):
+                let addItem = NSMenuItem(title: L10n.t(.addToFolder), action: nil, keyEquivalent: "")
+                let submenu = NSMenu()
+                let folders = store.folderNames()
+                if folders.isEmpty {
+                    let empty = NSMenuItem(title: L10n.t(.noFolders), action: nil, keyEquivalent: "")
+                    empty.isEnabled = false
+                    submenu.addItem(empty)
+                } else {
+                    for (folderID, name) in folders.sorted(by: { $0.value < $1.value }) {
+                        let item = NSMenuItem(title: name, action: #selector(addToFolder(_:)), keyEquivalent: "")
+                        item.representedObject = FolderMenuItemPayload(appID: id, folderID: folderID)
+                        item.target = self
+                        submenu.addItem(item)
+                    }
                 }
+                addItem.submenu = submenu
+                menu.addItem(addItem)
+
+                menu.addItem(.separator())
+
+                let hide = NSMenuItem(
+                    title: L10n.t(store.isHidden(id) ? .unhideApp : .hideApp),
+                    action: #selector(toggleHidden(_:)), keyEquivalent: ""
+                )
+                hide.representedObject = id
+                hide.target = self
+                menu.addItem(hide)
+
+                let rename = NSMenuItem(
+                    title: L10n.t(.renameApp), action: #selector(renameApp(_:)), keyEquivalent: ""
+                )
+                rename.representedObject = id
+                rename.target = self
+                menu.addItem(rename)
+
+                menu.addItem(.separator())
+
+                let trash = NSMenuItem(
+                    title: L10n.t(.moveToTrash), action: #selector(moveToTrash(_:)), keyEquivalent: ""
+                )
+                trash.representedObject = id
+                trash.target = self
+                menu.addItem(trash)
+
+                menu.addItem(.separator())
+
+                let reveal = NSMenuItem(
+                    title: L10n.t(.revealInFinder), action: #selector(revealInFinder(_:)), keyEquivalent: ""
+                )
+                reveal.representedObject = id
+                reveal.target = self
+                menu.addItem(reveal)
+
+                let getInfo = NSMenuItem(
+                    title: L10n.t(.getInfo), action: #selector(getInfo(_:)), keyEquivalent: ""
+                )
+                getInfo.representedObject = id
+                getInfo.target = self
+                menu.addItem(getInfo)
+            case .folder(let id):
+                let rename = NSMenuItem(
+                    title: L10n.t(.rename), action: #selector(renameFolder(_:)), keyEquivalent: ""
+                )
+                rename.representedObject = id
+                rename.target = self
+                menu.addItem(rename)
+
+                let dissolve = NSMenuItem(
+                    title: L10n.t(.dissolveFolder), action: #selector(dissolveFolder(_:)), keyEquivalent: ""
+                )
+                dissolve.representedObject = id
+                dissolve.target = self
+                menu.addItem(dissolve)
             }
-            addItem.submenu = submenu
-            menu.addItem(addItem)
-
-            menu.addItem(.separator())
-
-            let hide = NSMenuItem(
-                title: L10n.t(store.isHidden(id) ? .unhideApp : .hideApp),
-                action: #selector(toggleHidden(_:)), keyEquivalent: ""
-            )
-            hide.representedObject = id
-            hide.target = self
-            menu.addItem(hide)
-
-            let rename = NSMenuItem(
-                title: L10n.t(.renameApp), action: #selector(renameApp(_:)), keyEquivalent: ""
-            )
-            rename.representedObject = id
-            rename.target = self
-            menu.addItem(rename)
-
-            menu.addItem(.separator())
-
-            let trash = NSMenuItem(
-                title: L10n.t(.moveToTrash), action: #selector(moveToTrash(_:)), keyEquivalent: ""
-            )
-            trash.representedObject = id
-            trash.target = self
-            menu.addItem(trash)
-
-            menu.addItem(.separator())
-
-            let reveal = NSMenuItem(
-                title: L10n.t(.revealInFinder), action: #selector(revealInFinder(_:)), keyEquivalent: ""
-            )
-            reveal.representedObject = id
-            reveal.target = self
-            menu.addItem(reveal)
-
-            let getInfo = NSMenuItem(
-                title: L10n.t(.getInfo), action: #selector(getInfo(_:)), keyEquivalent: ""
-            )
-            getInfo.representedObject = id
-            getInfo.target = self
-            menu.addItem(getInfo)
-        case .folder(let id):
-            let rename = NSMenuItem(
-                title: L10n.t(.rename), action: #selector(renameFolder(_:)), keyEquivalent: ""
-            )
-            rename.representedObject = id
-            rename.target = self
-            menu.addItem(rename)
-
-            let dissolve = NSMenuItem(
-                title: L10n.t(.dissolveFolder), action: #selector(dissolveFolder(_:)), keyEquivalent: ""
-            )
-            dissolve.representedObject = id
-            dissolve.target = self
-            menu.addItem(dissolve)
         }
         return menu
     }
@@ -773,7 +1073,8 @@ final class GridViewController: NSViewController {
             return clip?.bounds.width ?? self.collectionView.bounds.width
         }
         paging.onReadPageCount = { [weak self] in
-            self?.pageCount ?? 1
+            guard let self else { return 1 }
+            return self.physicalSurfaceCount
         }
         paging.onScroll = { [weak self] offset in
             guard let self, let scroll = self.collectionView.enclosingScrollView else { return }
@@ -781,9 +1082,13 @@ final class GridViewController: NSViewController {
         }
         paging.onSettleTargetPage = { [weak self] page in
             guard let self else { return }
-            self.currentPage = page
-            self.updatePageDots()
-            self.prewarmAdjacentPages(page)
+            self.applySettledPhysicalPage(page)
+        }
+        // E13: --pagingtelemetry 遥测开关接线。应用保持正常交互运行,
+        // 只开启分页帧间隔遥测(每手势写一行到 /tmp/lb-paging-telemetry.log)。
+        // 该 flag 不在 ActivationCoordinator 的 non-interactive 列表中。
+        if CommandLine.arguments.contains("--pagingtelemetry") {
+            paging.telemetryEnabled = true
         }
     }
 
@@ -796,6 +1101,18 @@ final class GridViewController: NSViewController {
     private func handlePageScroll(_ event: NSEvent) -> Bool {
         guard !searchMode else { return false }
         paging.isEnabled = true
+        return paging.handleWheel(event)
+    }
+
+    /// App Library 前景面的水平滚动路由(Stage E9b)。
+    ///
+    /// 复用外层 `PagingInteractionController`(唯一 settle/display-link 引擎),
+    /// 不创建第二套 horizontal 滚动 writer / 第二个 settle。仅当前 surface 为
+    /// `.appLibrary` 且非搜索模式时生效; category detail 已由 Library 的
+    /// `isScrollPaused` gate 在事件进入本方法前消费, 不重复门控。
+    /// 普通 Launcher page 输入路径(handlePageScroll)不改变。
+    func handleAppLibraryHorizontalScroll(_ event: NSEvent) -> Bool {
+        guard !searchMode, currentSurface == .appLibrary else { return false }
         return paging.handleWheel(event)
     }
 
@@ -819,7 +1136,8 @@ final class GridViewController: NSViewController {
             section = 0
         } else {
             guard collectionView.numberOfSections > 0 else { return nil }
-            section = min(currentPage, collectionView.numberOfSections - 1)
+            // 诊断取当前物理 surface 的 section(Library → 0, 普通页 → n + 1)。
+            section = min(physicalSurfaceIndex, collectionView.numberOfSections - 1)
         }
         guard section < collectionView.numberOfSections else { return nil }
         let itemCount = collectionView.numberOfItems(inSection: section)
@@ -880,18 +1198,26 @@ final class GridViewController: NSViewController {
         return "sections=\(snapshot.numberOfSections) items=\(snapshot.itemIdentifiers.count) pageCount=\(pageCount) search=\(searchMode)"
     }
 
+    /// 快照每 section item 数(测试/诊断)。
+    /// paged + leading 模式: section 0 = Library host(1), 普通页从 section 1 开始。
+    var snapshotSectionCountsForDiag: [Int] {
+        let snapshot = dataSource.snapshot()
+        return snapshot.sectionIdentifiers.map { snapshot.numberOfItems(inSection: $0) }
+    }
+
     var diagnosticSnapshotItemCount: Int {
         dataSource.snapshot().itemIdentifiers.count
     }
 
-    /// 更新页码指示点(搜索模式隐藏)。页点可点击, 复用 paging engine(Stage A8)。
+    /// 更新页码指示点(搜索模式与 Library active 时隐藏)。
+    /// 页点只对应普通 Layout page count(Library 不占 dot); 可点击, 复用 paging engine(Stage A8)。
     private func updatePageDots() {
         guard let pageDots else { return }
         for dot in pageDotViews {
             dot.removeFromSuperview()
         }
         pageDotViews = []
-        guard !searchMode, pageCount > 1 else { return }
+        guard !searchMode, currentSurface != .appLibrary, pageCount > 1 else { return }
         for index in 0..<pageCount {
             let dot = PageDotView()
             dot.translatesAutoresizingMaskIntoConstraints = false
@@ -900,14 +1226,19 @@ final class GridViewController: NSViewController {
             dot.setAccessibilityLabel(L10n.format(.pageOf, "\(index + 1)", "\(pageCount)"))
             let active = index == currentPage
             dot.setActive(active)
-            // 点击 → 现有 paging engine(startSettle), 不手动动画/不改 currentPage
+            // 点击 → 现有 paging engine(startSettle), 目标页经 physical 索引映射
+            // (普通页 n → 物理 n + 1), 不手动动画/不改 currentPage
             dot.onClick = { [weak self] in
-                self?.paging.startSettle(toPage: index)
+                guard let self else { return }
+                self.paging.startSettle(toPage: self.physicalIndex(forLayoutPage: index))
             }
             pageDots.addArrangedSubview(dot)
             pageDotViews.append(dot)
         }
     }
+
+    /// 当前页点数(测试/诊断): 只等于普通 Layout page count, Library 不占 dot。
+    var pageDotCountForDiag: Int { pageDotViews.count }
 
     // MARK: - 拖拽辅助
 
@@ -922,26 +1253,34 @@ final class GridViewController: NSViewController {
     }
 
     /// 扁平索引 → IndexPath。
+    /// paged + leading 模式: 普通页 page n → 物理 section n + 1(section 0 = Library host);
+    /// search / 未启用 leading: 普通 section。
     func indexPath(atFlatIndex index: Int) -> IndexPath? {
         guard index >= 0, cachedDisplayItems.indices.contains(index) else { return nil }
         var sectionStart = 0
         for (section, count) in cachedSectionCounts.enumerated() {
             if index < sectionStart + count {
-                return IndexPath(item: index - sectionStart, section: section)
+                return IndexPath(
+                    item: index - sectionStart,
+                    section: section + ordinarySectionOffset
+                )
             }
             sectionStart += count
         }
         return nil
     }
 
+    /// IndexPath(物理 section) → 普通扁平索引。
+    /// 物理 section 0(Library host)与越界 section 返回 nil: host 不产生 AppCell/Drag identity。
     private func flatIndex(for indexPath: IndexPath) -> Int? {
-        guard indexPath.section >= 0,
-              indexPath.section < cachedSectionCounts.count,
+        let section = indexPath.section - ordinarySectionOffset
+        guard section >= 0,
+              section < cachedSectionCounts.count,
               indexPath.item >= 0,
-              indexPath.item < cachedSectionCounts[indexPath.section] else {
+              indexPath.item < cachedSectionCounts[section] else {
             return nil
         }
-        return cachedSectionCounts.prefix(indexPath.section).reduce(0, +) + indexPath.item
+        return cachedSectionCounts.prefix(section).reduce(0, +) + indexPath.item
     }
 
     private func cachedItem(at indexPath: IndexPath) -> Item? {
@@ -953,8 +1292,10 @@ final class GridViewController: NSViewController {
     }
 
     /// 扁平索引 → 文档坐标 frame(二维拖拽预览用, Stage 1 §20-21)。
+    /// paged + leading 模式: 文档坐标含 leading `pageWidth`(Library 页)偏移,
+    /// 与 PagingGridLayout 的物理 section frame 对齐。
     func frame(atFlatIndex index: Int) -> CGRect {
-        geometry.frame(forFlatIndex: index)
+        geometry.frame(forFlatIndex: index).offsetBy(dx: leadingDocumentOffset, dy: 0)
     }
 
     /// 单元格(可见时)。
@@ -1102,13 +1443,42 @@ final class GridViewController: NSViewController {
     }
 
     /// 光标 → 拖拽目的地(显示空间 page/slot)。
-    /// 坐标系: 窗口点 → 文档坐标 → GridGeometry(页宽 = clip 可视宽, 非文档宽, Stage 1 §5)。
+    /// 坐标系: 窗口点 → 文档坐标 → 减去 leading `pageWidth` → GridGeometry
+    /// (普通 Layout page 数学, 页宽 = clip 可视宽, Stage 1 §5)。
+    ///
+    /// Library surface active 或指针位于 physical page 0(Library 区域)时返回
+    /// 源项自身槽位(自落点 no-op): LayoutTransaction 产生相同布局,
+    /// LayoutStore 对相同布局拒绝提交 → drop 被拒绝, 不写 Layout。
     func dragDestination(from point: NSPoint) -> LayoutTransaction.Destination {
         let local = collectionView.convert(point, from: nil)
         let g = geometry
         guard g.pageWidth > 0 else { return LayoutTransaction.Destination(page: 0, slot: 0) }
-        let (page, slot) = g.pageAndSlot(forDocumentPoint: local, pageCount: pageCount)
+        if leadingSurfaceEnabled, currentSurface == .appLibrary || local.x < leadingDocumentOffset {
+            return noOpDragDestination()
+        }
+        let documentPoint = CGPoint(x: local.x - leadingDocumentOffset, y: local.y)
+        let (page, slot) = g.pageAndSlot(forDocumentPoint: documentPoint, pageCount: pageCount)
         return LayoutTransaction.Destination(page: page, slot: slot)
+    }
+
+    /// Library 区域的明确 no-op 落点。
+    /// 有拖拽源身份 → 源项自身槽位(自落点, 视觉与布局都不变);
+    /// folder-exit 等无源身份 → 当前普通页首槽(确定性, 绝不落进 Library)。
+    private func noOpDragDestination() -> LayoutTransaction.Destination {
+        if let identity = activeDragSourceIdentity {
+            let item: Item
+            switch identity {
+            case .app(let id):
+                item = .app(id)
+            case .folder(let id):
+                item = .folder(id)
+            }
+            if let index = flatIndex(of: item) {
+                let (page, slot) = geometry.pageAndSlot(forFlatIndex: index)
+                return LayoutTransaction.Destination(page: page, slot: slot)
+            }
+        }
+        return LayoutTransaction.Destination(page: currentPage, slot: 0)
     }
 
     /// 将已计算好的主网格 page/slot 转成显示空间索引, 供 folder-exit drop 使用。
@@ -1129,9 +1499,15 @@ final class GridViewController: NSViewController {
     }
 
     /// 全部显示项(冒烟诊断)。
+    /// 只返回普通 `DisplayModel.DisplayItem`: 外层 wrapper 在此剥除,
+    /// LauncherWindowController diagnostics/folder-open 调用保持既有语义不变。
     func allItems() -> [Item] {
-        let snapshot = dataSource.snapshot()
-        return snapshot.itemIdentifiers
+        dataSource.snapshot().itemIdentifiers.compactMap { item in
+            if case .layout(let layoutItem) = item {
+                return layoutItem
+            }
+            return nil
+        }
     }
 
     /// 光标悬停的文件夹(移入文件夹目标)。
@@ -1165,9 +1541,12 @@ final class GridViewController: NSViewController {
     }
 
     /// 当前页内可见网格 rect(文档坐标, 边缘翻页判定用, Stage 1 §25)。
+    /// paged + leading 模式: 普通页 frame 包含 leading `pageWidth` 文档偏移;
+    /// Library active 时 drag edge path 不得把 Library 当普通页(edge 判定落在偏移后矩形)。
     var currentPageRect: CGRect {
         let g = geometry
-        return g.pageRect(page: min(max(0, currentPage), max(0, pageCount - 1)))
+        let page = min(max(0, currentPage), max(0, pageCount - 1))
+        return g.pageRect(page: page).offsetBy(dx: leadingDocumentOffset, dy: 0)
     }
 
     /// overlay 层级(拖拽图标)。

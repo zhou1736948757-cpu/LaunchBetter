@@ -103,6 +103,99 @@ struct L10nTests {
         }
     }
 
+    @Test("App Library keys are complete in all supported languages")
+    func libraryKeysAreComplete() {
+        let previous = L10n.currentLanguage
+        defer { L10n.configure(language: previous) }
+
+        let expected: [(AppLanguage, [L10n.Key: String])] = [
+            (
+                .english,
+                [
+                    .appLibrary: "App Library",
+                    .suggestions: "Suggestions",
+                    .recentlyAdded: "Recently Added",
+                    .libraryCardsHelp: "App Library section card",
+                    .categoryDetailHelp: "Browse apps in this category",
+                    .viewMoreApps: "View more apps",
+                    .categoryProductivity: "Productivity",
+                    .categorySocial: "Social",
+                    .categoryDeveloper: "Developer Tools",
+                    .categoryEntertainment: "Entertainment",
+                    .categoryGames: "Games",
+                    .categoryCreativity: "Creativity",
+                    .categoryUtilities: "Utilities",
+                    .categoryEducation: "Education",
+                    .categoryBusiness: "Business",
+                    .categoryFinance: "Finance",
+                    .categoryOther: "Other",
+                ]
+            ),
+            (
+                .simplifiedChinese,
+                [
+                    .appLibrary: "App 资料库",
+                    .suggestions: "建议",
+                    .recentlyAdded: "最近添加",
+                    .libraryCardsHelp: "App 资料库分区卡片",
+                    .categoryDetailHelp: "浏览此分类中的应用",
+                    .viewMoreApps: "查看更多应用",
+                    .categoryProductivity: "效率",
+                    .categorySocial: "社交",
+                    .categoryDeveloper: "开发工具",
+                    .categoryEntertainment: "娱乐",
+                    .categoryGames: "游戏",
+                    .categoryCreativity: "创意",
+                    .categoryUtilities: "实用工具",
+                    .categoryEducation: "教育",
+                    .categoryBusiness: "商务",
+                    .categoryFinance: "财务",
+                    .categoryOther: "其他",
+                ]
+            ),
+            (
+                .traditionalChinese,
+                [
+                    .appLibrary: "App 資料庫",
+                    .suggestions: "建議",
+                    .recentlyAdded: "最近加入",
+                    .libraryCardsHelp: "App 資料庫分區卡片",
+                    .categoryDetailHelp: "瀏覽此分類中的應用程式",
+                    .viewMoreApps: "查看更多應用程式",
+                    .categoryProductivity: "效率",
+                    .categorySocial: "社交",
+                    .categoryDeveloper: "開發工具",
+                    .categoryEntertainment: "娛樂",
+                    .categoryGames: "遊戲",
+                    .categoryCreativity: "創意",
+                    .categoryUtilities: "工具程式",
+                    .categoryEducation: "教育",
+                    .categoryBusiness: "商務",
+                    .categoryFinance: "財務",
+                    .categoryOther: "其他",
+                ]
+            ),
+        ]
+
+        for (language, translations) in expected {
+            L10n.configure(language: language)
+            for (key, value) in translations {
+                #expect(L10n.t(key) == value)
+                #expect(L10n.t(key) != key.rawValue)
+            }
+        }
+
+        L10n.configure(language: .english)
+        #expect(L10n.categoryTitle(for: .utilities) == "Utilities")
+        #expect(L10n.categoryTitle(for: .other) == "Other")
+        L10n.configure(language: .traditionalChinese)
+        #expect(L10n.categoryTitle(for: .developer) == "開發工具")
+        #expect(L10n.categoryTitle(for: .other) == "其他")
+        L10n.configure(language: .simplifiedChinese)
+        #expect(L10n.categoryTitle(for: .productivity) == "效率")
+        #expect(L10n.categoryTitle(for: .games) == "游戏")
+    }
+
     @Test("drag overlay target labels follow the live language")
     func dragOverlayTargetLabelsFollowLanguage() throws {
         let previous = L10n.currentLanguage

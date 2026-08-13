@@ -4,8 +4,16 @@ import AppKit
 ///
 /// 规则: 只有当前面可以响应用户输入。Settings 激活时底层 Grid 不得开始/更新/结束
 /// App 拖拽、三指拖拽、翻页、启动、右键菜单、空白点击隐藏或建夹。
+/// Stage E9a: `.appLibrary` / `.appLibraryCategory` 是 App Library 前景面的
+/// 唯一 input owner(Library 自身点击/滚动由其自有视图处理, 不经过 root Grid gate)。
 public enum LauncherInteractionSurface: Equatable, Sendable {
+    /// 普通 Launcher 网格(分页页面对应 `.layoutPage`, 或搜索模式)。
     case launcher
+    /// App Library 物理 section 0(分页仍可用, root drag/三指/建夹/普通 Grid 输入阻断)。
+    case appLibrary
+    /// App Library 分类 detail 打开中(outer paging / Library scroll / root drag /
+    /// 三指 / 普通 Grid 输入全部阻断; detail 负责 Escape/outside/click 完整序列)。
+    case appLibraryCategory
     case folder
     case settings
 }

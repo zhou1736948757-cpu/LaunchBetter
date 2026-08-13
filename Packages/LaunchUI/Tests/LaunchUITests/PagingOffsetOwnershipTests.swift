@@ -35,7 +35,8 @@ struct PagingOffsetOwnershipTests {
 
         #expect(!grid.contains("scrollToPage"))
         #expect(!grid.contains("private extension NSCollectionView"))
-        #expect(grid.contains("paging.jumpTo(page: currentPage)"))
+        #expect(grid.contains("paging.jumpTo(page: physicalSurfaceIndex)"))
+        #expect(grid.contains("physicalIndex(forLayoutPage"))
         #expect(grid.contains("paging.jumpTo(page: 0)"))
         #expect(grid.components(separatedBy: "contentView.scroll(to:").count - 1 == 1)
     }

@@ -10,7 +10,15 @@ enum DiagnosticRunner {
     // MARK: - 模式分派
 
     static func run(container: DependencyContainer) {
-        if let screenshotPath = screenshotArgument() {
+        if let shot = libraryShotArgument() {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                AppLibraryShotProbe.run(
+                    container: container,
+                    outputPath: shot.path,
+                    state: shot.state
+                )
+            }
+        } else if let screenshotPath = screenshotArgument() {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
                 captureScreenshot(to: screenshotPath, container: container)
             }
@@ -60,6 +68,10 @@ enum DiagnosticRunner {
         } else if CommandLine.arguments.contains("--pagingprobe") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
                 PagingProbe.run(container: container)
+            }
+        } else if CommandLine.arguments.contains("--pagingscrollprobe") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                PagingScrollProbe.run(container: container)
             }
         } else if CommandLine.arguments.contains("--layoutdiag") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
@@ -211,6 +223,21 @@ enum DiagnosticRunner {
             return nil
         }
         return args[index + 1]
+    }
+
+    /// E10: `--libraryshot <output.png>` + 可选 `--library-state top|mid|detail|search|settings`。
+    static func libraryShotArgument() -> (path: String, state: String)? {
+        let args = CommandLine.arguments
+        guard let index = args.firstIndex(of: "--libraryshot"),
+              args.indices.contains(index + 1) else {
+            return nil
+        }
+        var state = "top"
+        if let stateIndex = args.firstIndex(of: "--library-state"),
+           args.indices.contains(stateIndex + 1) {
+            state = args[stateIndex + 1]
+        }
+        return (args[index + 1], state)
     }
 
     /// 调试截图: 应用自渲染窗口内容(cacheDisplay, 无需屏幕录制权限)。

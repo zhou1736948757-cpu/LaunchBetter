@@ -231,6 +231,13 @@ final class AppCellView: NSCollectionViewItem {
         CATransaction.commit()
     }
 
+    /// E13: 图标遮罩按需开启。占位(色块 + 首字母)与建夹高亮期间保持圆角裁剪;
+    /// 真实图标(macOS ICNS 自带圆角 alpha)应用后关闭 masksToBounds,
+    /// 省掉每帧 offscreen mask。cornerRadius 始终保留(transitionSourceCornerRadius 语义)。
+    private func updateIconMasking() {
+        iconLayer.masksToBounds = createFolderTargetHighlight != .none || iconLayer.contents == nil
+    }
+
     /// App B 建夹目标高亮。只变换普通 App 的 iconLayer，避免与写入
     /// cell.view.layer.transform 的 reorder preview 相互覆盖。
     func setCreateFolderTargetHighlighted(_ highlighted: Bool, active: Bool) {
@@ -253,11 +260,15 @@ final class AppCellView: NSCollectionViewItem {
             iconLayer.transform = CATransform3DIdentity
             iconLayer.borderWidth = 0
             iconLayer.borderColor = nil
+            // 高亮退出: 按当前状态恢复(占位 → true, 真实图标 → false)。
+            updateIconMasking()
         case .waiting:
+            iconLayer.masksToBounds = true
             iconLayer.transform = CATransform3DMakeScale(1.05, 1.05, 1)
             iconLayer.borderWidth = 2
             iconLayer.borderColor = NSColor.white.withAlphaComponent(0.72).cgColor
         case .active:
+            iconLayer.masksToBounds = true
             iconLayer.transform = CATransform3DMakeScale(1.10, 1.10, 1)
             iconLayer.borderWidth = 3
             iconLayer.borderColor = NSColor.systemBlue.cgColor
@@ -378,6 +389,8 @@ final class AppCellView: NSCollectionViewItem {
         iconLayer.backgroundColor = nil
         iconLayer.isHidden = false
         letterLayer.isHidden = false
+        // E13: 复用回到占位状态, 恢复圆角裁剪。
+        updateIconMasking()
         // M3: 复用强制恢复 identity(防止拖拽预览变换污染)
         view.layer?.transform = CATransform3DIdentity
         pressContainerView.layer?.transform = CATransform3DIdentity
@@ -408,6 +421,8 @@ final class AppCellView: NSCollectionViewItem {
             hue: hue, saturation: 0.45, brightness: 0.55, alpha: 1
         ).cgColor
         iconLayer.contents = nil
+        // E13: 占位状态(色块 + 首字母)恢复圆角裁剪。
+        updateIconMasking()
 
         label.stringValue = displayName
         view.setAccessibilityElement(true)
@@ -462,6 +477,8 @@ final class AppCellView: NSCollectionViewItem {
         iconLayer.isHidden = true
         letterLayer.string = ""
         letterLayer.isHidden = true
+        // E13: 文件夹单元格不复用普通 App 图标层; 遮罩状态随占位信号恢复。
+        updateIconMasking()
 
         let visibleChildren = Array(children.prefix(Self.maxFolderIconCount))
         folderChildAppIDs = visibleChildren
@@ -620,6 +637,9 @@ final class AppCellView: NSCollectionViewItem {
             iconLayer.contents = nil
             letterLayer.isHidden = false
         }
+        // E13: 真实图标应用成功后关闭 masksToBounds(图标自带圆角 alpha);
+        // 无图标仍为占位, 保持圆角裁剪。
+        updateIconMasking()
         CATransaction.commit()
     }
 }

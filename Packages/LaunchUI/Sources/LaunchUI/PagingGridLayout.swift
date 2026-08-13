@@ -186,6 +186,18 @@ public final class PagingGridLayout: NSCollectionViewLayout {
         }
     }
 
+    /// 是否启用前置特殊 section(物理 section 0 = App Library host)。
+    /// 默认关闭: 物理 section 编号即普通 layout 页号, 行为与现有几何完全一致。
+    /// 开启后 paged 模式下 section 0 的 item 占整页矩形, 普通 layout 页从
+    /// 物理 section 1 开始(其局部几何 = 普通页 `p-1` 右移一页)。
+    /// search 模式不使用该 section, 保持单 section 垂直滚动语义。
+    public var leadingSurfaceEnabled = false {
+        didSet {
+            guard oldValue != leadingSurfaceEnabled else { return }
+            invalidateLayout()
+        }
+    }
+
     private var itemFrames: [IndexPath: CGRect] = [:]
     /// 分页模式的轻量 section 索引。逐帧 attributes 查询先用静态页几何
     /// 定位相交 section，再只访问这些页内的 itemFrames。
@@ -357,9 +369,31 @@ public final class PagingGridLayout: NSCollectionViewLayout {
             let itemCount = collectionView.numberOfItems(inSection: section)
             pagedSectionItemCounts.append(itemCount)
             for index in 0..<itemCount {
-                itemFrames[IndexPath(item: index, section: section)] = geometry.frame(
-                    forSlot: index, in: section
-                )
+                let frame: CGRect
+                if leadingSurfaceEnabled, section == 0 {
+                    // 物理 section 0 = App Library host: 占完整页矩形,
+                    // 不占普通 slot 几何。
+                    frame = CGRect(
+                        x: 0,
+                        y: 0,
+                        width: geometry.pageWidth,
+                        height: geometry.pageHeight
+                    )
+                } else if leadingSurfaceEnabled {
+                    // 物理 section p >= 1 对应普通 layout page p - 1,
+                    // 再整体右移一页, 不引入负 offset。
+                    let normalPage = section - 1
+                    let normalFrame = geometry.frame(forSlot: index, in: normalPage)
+                    frame = CGRect(
+                        x: normalFrame.minX + geometry.pageWidth,
+                        y: normalFrame.minY,
+                        width: normalFrame.width,
+                        height: normalFrame.height
+                    )
+                } else {
+                    frame = geometry.frame(forSlot: index, in: section)
+                }
+                itemFrames[IndexPath(item: index, section: section)] = frame
             }
         }
     }
@@ -482,15 +516,22 @@ public final class PagingGridLayout: NSCollectionViewLayout {
         let rawLast = ceil((rect.maxX - localMinX) / geometry.pageWidth) - 1
         let maximumSection = pagedSectionItemCounts.count - 1
         guard rawFirst.isFinite,
-              rawLast.isFinite,
-              rawLast >= 0,
-              rawFirst <= CGFloat(maximumSection) else {
+              rawLast.isFinite else {
             return nil
         }
 
-        let first = Int(max(0, rawFirst))
-        let last = Int(min(CGFloat(maximumSection), rawLast))
-        guard first <= last else { return nil }
+        var first = Int(max(0, rawFirst))
+        var last = Int(min(CGFloat(maximumSection), rawLast))
+        if leadingSurfaceEnabled,
+           maximumSection >= 0,
+           rect.minX < geometry.pageWidth,
+           rect.maxX > 0 {
+            // section 0 host 覆盖整页: 只要查询 rect 触及页 0(含网格
+            // 边距 gutter)就要纳入候选, 不受普通网格横向边界限制。
+            first = 0
+            last = max(last, 0)
+        }
+        guard last >= 0, first <= last else { return nil }
         return first...last
     }
 

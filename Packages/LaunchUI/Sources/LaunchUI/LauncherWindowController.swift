@@ -294,6 +294,11 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
     /// 当前输入所有者。Settings 激活时底层 Launcher 不得响应任何输入。
     private var interactionSurface: LauncherInteractionSurface = .launcher
 
+    /// Settings 打开前所在的前景面(默认 `.launcher`)。Settings 关闭/fallback
+    /// 完成后恢复该面, 而不是盲目写 `.launcher`: 从 Library 打开 Settings 后
+    /// 必须回到 Library。
+    private var settingsReturnSurface: LauncherInteractionSurface = .launcher
+
     /// Settings 激活时覆盖在 Launcher 内容上的输入屏蔽层。
     private var interactionShield: SettingsInteractionShield?
 
@@ -332,6 +337,14 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         // 取消进行中的瞬态操作; 关闭 folder overlay(其可能正持有拖拽); 暂停分页。
         dragController?.cancelDrag()
         closeFolderView(immediately: true)
+        // 从 App Library / category detail 打开 Settings: 先关闭 detail 并记录
+        // 返回面, Settings 关闭后恢复 Library 而不是盲目写 .launcher。
+        if interactionSurface == .appLibrary || interactionSurface == .appLibraryCategory {
+            gridViewController?.closeAppLibraryDetail()
+            settingsReturnSurface = .appLibrary
+        } else {
+            settingsReturnSurface = .launcher
+        }
         gridViewController?.suspendPagingForSurface()
         interactionSurface = .settings
         settingsOwnership.beginSession()
@@ -390,17 +403,56 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         endSettingsOwnership()
     }
 
-    /// 恢复 Launcher 交互(幂等): 移除 shield、释放所有权、恢复分页、确保拖拽空闲。
+    /// 恢复 Settings 打开前的交互面(幂等): 移除 shield、释放所有权、恢复分页、确保拖拽空闲。
     private func endSettingsOwnership(force: Bool = false) {
         guard interactionSurface == .settings,
               settingsOwnership.canRelease(force: force),
               force || interactionShield?.isConsumingClick != true,
               settingsOwnership.finishSession(force: force) else { return }
-        interactionSurface = .launcher
+        // 恢复记录的前景面(默认 .launcher; 从 Library 打开时回到 .appLibrary)。
+        let restoredSurface = settingsReturnSurface
+        settingsReturnSurface = .launcher
+        interactionSurface = restoredSurface
         interactionShield?.removeFromSuperview()
         interactionShield = nil
         gridViewController?.resumePagingForSurface()
         dragController?.cancelDrag()
+    }
+
+    /// 语义 surface 变更 → 输入 owner 同步(Stage E9a)。
+    ///
+    /// - `.appLibrary` → `.appLibrary`, 保留分页, 但 root drag 不得带过边界
+    ///   (取消在途拖拽, 防止晚到 update/end 落到 Library 区域)。
+    /// - `.layoutPage` → `.launcher`。
+    ///
+    /// Settings/Folder 激活期间忽略网格侧 surface 变更(数据刷新等), 不覆盖其 owner。
+    private func handleGridSurfaceChange(_ surface: LauncherSurface) {
+        guard interactionSurface == .launcher
+                || interactionSurface == .appLibrary
+                || interactionSurface == .appLibraryCategory else { return }
+        switch surface {
+        case .appLibrary:
+            interactionSurface = .appLibrary
+            dragController?.cancelDrag()
+        case .layoutPage:
+            interactionSurface = .launcher
+        }
+    }
+
+    /// Library category detail 打开/关闭 → `.appLibraryCategory` owner(Stage E9a)。
+    /// 幂等: 打开只从 `.appLibrary` 进入; 关闭只从 `.appLibraryCategory` 释放,
+    /// stale close completion 不会释放新 surface owner。
+    private func handleLibraryDetailChange(open: Bool) {
+        if open {
+            guard interactionSurface == .appLibrary else { return }
+            interactionSurface = .appLibraryCategory
+            gridViewController?.suspendPagingForSurface()
+            dragController?.cancelDrag()
+        } else {
+            guard interactionSurface == .appLibraryCategory else { return }
+            interactionSurface = .appLibrary
+            gridViewController?.resumePagingForSurface()
+        }
     }
 
     /// 有界恢复: 只接受当前 Settings session 的 close callback + consuming
@@ -547,6 +599,15 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         grid.onClickBlank = { [weak self] in
             guard let self, self.interactionSurface == .launcher else { return }
             self.hide()
+        }
+        // Stage E9a: 语义 surface / Library detail 状态 → 输入 owner 同步。
+        grid.onSurfaceChange = { [weak self] surface in
+            guard let self else { return }
+            self.handleGridSurfaceChange(surface)
+        }
+        grid.onAppLibraryCategoryDetailChange = { [weak self] open in
+            guard let self else { return }
+            self.handleLibraryDetailChange(open: open)
         }
         gridViewController = grid
 
@@ -816,9 +877,21 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         )
     }
 
+    /// 诊断: 当前 App Library 控制器(host 尚未挂载时为 nil)。
+    public var appLibraryControllerForDiag: AppLibraryViewController? {
+        gridViewController?.libraryControllerForDiag
+    }
+
+    /// 诊断: Settings 关闭后恢复的面(owner 状态机断言用)。
+    public var settingsReturnSurfaceForDiag: LauncherInteractionSurface {
+        settingsReturnSurface
+    }
+
     /// 诊断用: 打开当前主网格中的第一个文件夹, 验证 overlay 不改变主网格布局。
+    /// 与真实输入路径同一门控: 只有 `.launcher` 面可以打开 Folder。
     @discardableResult
     public func openFirstFolderForDiagnostic() -> Bool {
+        guard interactionSurface == .launcher else { return false }
         guard let folder = gridViewController?.allItems().compactMap({ item -> FolderID? in
             if case .folder(let id) = item { return id }
             return nil
@@ -968,6 +1041,8 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         onVisibilityChange?(false)
         // M4: 隐藏时终止拖拽(display link/overlay 清理)
         dragController?.shutdown()
+        // 隐藏时清理 Library category detail(幂等; 其关闭 completion 不释放新 owner)。
+        gridViewController?.closeAppLibraryDetail()
         // 文件夹是临时覆盖层；隐藏/Escape 后重开必须回到主网格。
         closeFolderView(immediately: true)
         iconProvider?.trimMemoryForHidden()
@@ -1271,15 +1346,51 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
         ) else { return }
         context.scaleBy(x: scale, y: scale)
-        // AppKit y 向上 → 位图 y 向下
-        context.translateBy(x: 0, y: contentView.bounds.height)
-        context.scaleBy(x: 1, y: -1)
+        // contentView 为 flipped: layer.render 天然 top-down, 不做 y 翻转
+        // (flip 会把顶部 chrome 渲到图像底部, E11 实证)。
         layer.render(in: context)
         guard let image = context.makeImage() else { return }
         let rep = NSBitmapImageRep(cgImage: image)
         guard let png = rep.representation(using: .png, properties: [:]) else { return }
         try? png.write(to: URL(fileURLWithPath: path))
         print("SCREENSHOT_WRITTEN \(path)")
+    }
+
+    // MARK: - E10 诊断 seam(App Library 视觉证据)
+
+    /// E10 诊断: 导航到 App Library surface(Page1 → previousPage 语义; 已在
+    /// Library 时 no-op)。leading surface 未启用时返回 false。
+    public func libraryShotNavigateToLibrary() -> Bool {
+        gridViewController?.libraryShotNavigateToLibrary() ?? false
+    }
+
+    /// E10 诊断: 分页 settle 是否已完成(驱动一帧; 未完成返回 false, 调用方轮询)。
+    public func libraryShotWaitSettled() -> Bool {
+        gridViewController?.libraryShotWaitSettled() ?? true
+    }
+
+    /// E10 诊断: Library 内部垂直滚动到内容约 55%; 内容不足一屏 → stable no-op。
+    public func libraryShotScrollMid() -> (scrolled: Bool, fraction: Double) {
+        gridViewController?.libraryShotScrollMid() ?? (false, 0)
+    }
+
+    /// E10 诊断: 打开第一个 category detail(无分类卡返回 false)。
+    public func libraryShotOpenFirstCategoryDetail() -> Bool {
+        gridViewController?.libraryShotOpenFirstCategoryDetail() ?? false
+    }
+
+    /// E10 诊断: interaction owner / surface / 搜索 / 卡片 / 可见 / detail 快照。
+    public func libraryShotState() -> String {
+        let surface: String
+        switch interactionSurface {
+        case .launcher: surface = "launcher"
+        case .appLibrary: surface = "appLibrary"
+        case .appLibraryCategory: surface = "appLibraryCategory"
+        case .folder: surface = "folder"
+        case .settings: surface = "settings"
+        }
+        let grid = gridViewController?.libraryShotState() ?? "nil"
+        return "interaction=\(surface) \(grid)"
     }
 
     /// 翻页测试 API(校验真实滚动位置)。
@@ -1366,16 +1477,21 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
     public func handleKeyDown(_ event: NSEvent) {
         switch event.keyCode {
         case 53: // Escape
+            // 顺序: Settings → Category detail → Folder → Library/Launcher hide。
+            // 每级独立消费: detail close 不让同一次按键继续触发 hide。
             if interactionSurface == .settings {
                 requestSettingsClose()
+            } else if interactionSurface == .appLibraryCategory {
+                gridViewController?.closeAppLibraryDetail()
             } else if folderViewController != nil {
                 closeFolderView()
             } else {
                 hide()
             }
         case 123, 33, 124, 34, 36: // Left/PageUp, Right/PageDown, Return
-            // 只有 launcher 面拥有键盘: Folder/Settings 激活时不得分页/启动底层。
-            guard interactionSurface == .launcher else { return }
+            // 只有 launcher / appLibrary 面拥有键盘: Folder/Settings/Category detail
+            // 激活时不得分页/启动底层。
+            guard interactionSurface == .launcher || interactionSurface == .appLibrary else { return }
             switch event.keyCode {
             case 123, 33: gridViewController.previousPage()
             case 124, 34: gridViewController.nextPage()

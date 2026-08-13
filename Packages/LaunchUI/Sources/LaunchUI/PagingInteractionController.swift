@@ -34,6 +34,9 @@ final class PagingInteractionController {
 
     private(set) var phase: Phase = .idle
 
+    /// E13 遥测开关(默认 false, 零开销路径不变: 仅一次布尔判断)。
+    var telemetryEnabled = false
+
     private var axisLock = PagingAxisLock()
     private var velocity = PagingVelocityEstimator()
     private var displacement: CGFloat = 0
@@ -69,7 +72,80 @@ final class PagingInteractionController {
     /// 创建 DisplayLink 所绑定的视图(macOS 14+ NSView.displayLink)。
     weak var linkView: NSView?
 
-    // 诊断计数(§63)
+    // MARK: - E13 真机帧耗时遥测(仅 telemetryEnabled 时启用)
+
+    /// 环形缓冲容量: 单次手势远超 512 帧时覆盖最旧样本。
+    private static let telemetryCapacity = 512
+    /// 相邻 displayTick 的 `CACurrentMediaTime()` 间隔(秒)。
+    private var telemetryIntervals = [CFTimeInterval](
+        repeating: 0,
+        count: PagingInteractionController.telemetryCapacity
+    )
+    /// 最旧样本下标(环形缓冲满后推进)。
+    private var telemetryStart = 0
+    /// 当前手势有效样本数。
+    private var telemetryCount = 0
+    /// 上一次 displayTick 时间戳; 0 = 无前帧(手势起点)。
+    private var lastDisplayTickTime: CFTimeInterval = 0
+
+    /// 一次手势结束后, 把当前环形缓冲写成一行追加到 `/tmp/lb-paging-telemetry.log`:
+    /// 帧数、avg/p95/max(ms)、phase。写后清空缓冲。
+    private func flushTelemetry(phase: String) {
+        guard telemetryEnabled, telemetryCount > 0 else { return }
+        let samples = (0..<telemetryCount).map {
+            telemetryIntervals[(telemetryStart + $0) % Self.telemetryCapacity]
+        }
+        let sorted = samples.sorted()
+        let avgMs = samples.reduce(0, +) / Double(samples.count) * 1000
+        let p95Index = min(sorted.count - 1, max(0, Int((Double(sorted.count) * 0.95).rounded(.up)) - 1))
+        let line = "telemetry frames=\(samples.count) "
+            + "avgMs=\(String(format: "%.2f", avgMs)) "
+            + "p95Ms=\(String(format: "%.2f", sorted[p95Index] * 1000)) "
+            + "maxMs=\(String(format: "%.2f", (sorted.last ?? 0) * 1000)) "
+            + "phase=\(phase)"
+        appendTelemetryLine(line)
+        resetTelemetry()
+    }
+
+    /// O(1) 环形缓冲追加。
+    private func recordTelemetryInterval() {
+        let now = CACurrentMediaTime()
+        guard lastDisplayTickTime > 0 else {
+            lastDisplayTickTime = now
+            return
+        }
+        let interval = now - lastDisplayTickTime
+        lastDisplayTickTime = now
+        guard interval >= 0, interval.isFinite else { return }
+        let index = (telemetryStart + telemetryCount) % Self.telemetryCapacity
+        telemetryIntervals[index] = interval
+        if telemetryCount < Self.telemetryCapacity {
+            telemetryCount += 1
+        } else {
+            telemetryStart = (telemetryStart + 1) % Self.telemetryCapacity
+        }
+    }
+
+    private func resetTelemetry() {
+        telemetryStart = 0
+        telemetryCount = 0
+        lastDisplayTickTime = 0
+    }
+
+    /// 追加一行到 /tmp/lb-paging-telemetry.log(不存在则创建)。诊断用途,
+    /// 每次手势一次写, 非热路径。
+    private func appendTelemetryLine(_ line: String) {
+        let path = "/tmp/lb-paging-telemetry.log"
+        if !FileManager.default.fileExists(atPath: path) {
+            FileManager.default.createFile(atPath: path, contents: nil)
+        }
+        guard let handle = FileHandle(forWritingAtPath: path) else { return }
+        defer { try? handle.close() }
+        _ = try? handle.seekToEnd()
+        try? handle.write(contentsOf: Data((line + "\n").utf8))
+    }
+
+    /// 诊断计数(§63)
     private(set) var inputEventCount = 0
     private(set) var displayFrameCount = 0
     private(set) var scrollWriteCount = 0
@@ -166,6 +242,8 @@ final class PagingInteractionController {
             // 打断旧 settle: 从当前实际位置重新跟手, 视觉 discontinuity ≈ 0(§29)
             animator.cancel()
             interruptionCount += 1
+            // E13: 被打断的 settle 也是一次手势结束, 收掉其缓冲。
+            flushTelemetry(phase: "settling")
         }
         // 未确认水平轴之前不需要 display link；若这里打断了旧 settle，
         // 也先移除旧 link，待新的水平位移真正到来时再创建。
@@ -177,6 +255,7 @@ final class PagingInteractionController {
         lastAppliedOffset = baseOffset
         latestDesiredOffset = baseOffset
         gestureStartTime = ProcessInfo.processInfo.systemUptime
+        resetTelemetry()
         phase = .tracking
     }
 
@@ -266,6 +345,8 @@ final class PagingInteractionController {
 
     private func finishSettle() {
         lastSettleDuration = ProcessInfo.processInfo.systemUptime - settleStartTime
+        // E13: settle 收敛 = 手势结束, 收掉本手势缓冲(phase 置 idle 前记录)。
+        flushTelemetry(phase: "settling")
         phase = .idle
         stopDisplayLinkIfIdle()
     }
@@ -275,6 +356,8 @@ final class PagingInteractionController {
         axisLock.ended()
         velocity.reset()
         displacement = 0
+        // E13: 无 settle 的手势结束, 收掉 tracking 段缓冲。
+        flushTelemetry(phase: "tracking")
         stopDisplayLinkIfIdle()
     }
 
@@ -305,6 +388,9 @@ final class PagingInteractionController {
     }
 
     private func displayTick() {
+        if telemetryEnabled {
+            recordTelemetryInterval()
+        }
         processDisplayFrame()
     }
 

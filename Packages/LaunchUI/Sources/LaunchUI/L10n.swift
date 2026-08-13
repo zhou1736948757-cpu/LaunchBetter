@@ -63,6 +63,23 @@ public enum L10n {
         case blurIntensityLabel
         case searchBarSection
         case searchBarSizeLabel
+        case appLibrary
+        case suggestions
+        case recentlyAdded
+        case libraryCardsHelp
+        case categoryDetailHelp
+        case viewMoreApps
+        case categoryProductivity
+        case categorySocial
+        case categoryDeveloper
+        case categoryEntertainment
+        case categoryGames
+        case categoryCreativity
+        case categoryUtilities
+        case categoryEducation
+        case categoryBusiness
+        case categoryFinance
+        case categoryOther
     }
 
     nonisolated(unsafe) private static let zhHans: [Key: String] = [
@@ -93,6 +110,23 @@ public enum L10n {
         .blurIntensityLabel: "模糊强度",
         .searchBarSection: "搜索栏",
         .searchBarSizeLabel: "尺寸百分比",
+        .appLibrary: "App 资料库",
+        .suggestions: "建议",
+        .recentlyAdded: "最近添加",
+        .libraryCardsHelp: "App 资料库分区卡片",
+        .categoryDetailHelp: "浏览此分类中的应用",
+        .viewMoreApps: "查看更多应用",
+        .categoryProductivity: "效率",
+        .categorySocial: "社交",
+        .categoryDeveloper: "开发工具",
+        .categoryEntertainment: "娱乐",
+        .categoryGames: "游戏",
+        .categoryCreativity: "创意",
+        .categoryUtilities: "实用工具",
+        .categoryEducation: "教育",
+        .categoryBusiness: "商务",
+        .categoryFinance: "财务",
+        .categoryOther: "其他",
     ]
 
     nonisolated(unsafe) private static let zhHant: [Key: String] = [
@@ -123,6 +157,23 @@ public enum L10n {
         .blurIntensityLabel: "模糊強度",
         .searchBarSection: "搜尋列",
         .searchBarSizeLabel: "尺寸百分比",
+        .appLibrary: "App 資料庫",
+        .suggestions: "建議",
+        .recentlyAdded: "最近加入",
+        .libraryCardsHelp: "App 資料庫分區卡片",
+        .categoryDetailHelp: "瀏覽此分類中的應用程式",
+        .viewMoreApps: "查看更多應用程式",
+        .categoryProductivity: "效率",
+        .categorySocial: "社交",
+        .categoryDeveloper: "開發工具",
+        .categoryEntertainment: "娛樂",
+        .categoryGames: "遊戲",
+        .categoryCreativity: "創意",
+        .categoryUtilities: "工具程式",
+        .categoryEducation: "教育",
+        .categoryBusiness: "商務",
+        .categoryFinance: "財務",
+        .categoryOther: "其他",
     ]
 
     nonisolated(unsafe) private static let english: [Key: String] = [
@@ -153,6 +204,23 @@ public enum L10n {
         .blurIntensityLabel: "Blur Intensity",
         .searchBarSection: "Search Bar",
         .searchBarSizeLabel: "Size Percentage",
+        .appLibrary: "App Library",
+        .suggestions: "Suggestions",
+        .recentlyAdded: "Recently Added",
+        .libraryCardsHelp: "App Library section card",
+        .categoryDetailHelp: "Browse apps in this category",
+        .viewMoreApps: "View more apps",
+        .categoryProductivity: "Productivity",
+        .categorySocial: "Social",
+        .categoryDeveloper: "Developer Tools",
+        .categoryEntertainment: "Entertainment",
+        .categoryGames: "Games",
+        .categoryCreativity: "Creativity",
+        .categoryUtilities: "Utilities",
+        .categoryEducation: "Education",
+        .categoryBusiness: "Business",
+        .categoryFinance: "Finance",
+        .categoryOther: "Other",
     ]
 
     nonisolated(unsafe) private static var language: AppLanguage = .system
@@ -194,5 +262,22 @@ public enum L10n {
     /// 取带参数翻译。格式字符串统一使用 Foundation 的 %@ 占位符。
     public static func format(_ key: Key, _ arguments: CVarArg...) -> String {
         String(format: t(key), arguments: arguments)
+    }
+
+    /// App Library 分类显示名(固定优先级, 见 AppLibraryCategory)。
+    public static func categoryTitle(for category: AppLibraryCategory) -> String {
+        switch category {
+        case .productivity: return t(.categoryProductivity)
+        case .social: return t(.categorySocial)
+        case .developer: return t(.categoryDeveloper)
+        case .entertainment: return t(.categoryEntertainment)
+        case .games: return t(.categoryGames)
+        case .creativity: return t(.categoryCreativity)
+        case .utilities: return t(.categoryUtilities)
+        case .education: return t(.categoryEducation)
+        case .business: return t(.categoryBusiness)
+        case .finance: return t(.categoryFinance)
+        case .other: return t(.categoryOther)
+        }
     }
 }

@@ -30,7 +30,7 @@ private final class LayoutMutationCompletionGate {
 /// 变更经 LayoutStore 应用并持久化,缓存同步后触发 onDataChange。
 /// 禁止: 每帧状态(拖拽/动画)进入本存储(§60)。
 @MainActor
-public final class LauncherStore: LauncherStoring, LayoutMutationCompleting, SettingsHandling {
+public final class LauncherStore: LauncherStoring, LayoutMutationCompleting, SettingsHandling, AppLibraryDataProviding {
     public var onDataChange: (() -> Void)?
     private var dataObservers: [UUID: () -> Void] = [:]
 
@@ -43,11 +43,16 @@ public final class LauncherStore: LauncherStoring, LayoutMutationCompleting, Set
     private let catalogActor: AppCatalogActor
     private let layoutStore: LayoutStore
     private let settingsStore: SettingsStore
+    private let metadataStore: AppLibraryMetadataStore
     private var catalogSnapshot: CatalogSnapshot
     private var catalogIndex: [AppID: AppRecord] = [:]
     private var layout: LayoutSnapshot
     public private(set) var config: AppConfiguration
     private var searchIndex = SearchIndex()
+    /// Library 元数据当前快照(actor 最新已确认状态,可能尚未落盘)。
+    private var metadataSnapshot: AppLibraryMetadataSnapshot
+    /// memory-only App Library model cache(仅随 Catalog/Config/Metadata 变化重建)。
+    private var libraryModelCache: AppLibraryModel
     /// 结构变更一次只允许一个 in-flight，避免旧 display 索引应用到更新后的 actor layout。
     private var layoutMutationInFlight = false
     /// FSEvents callbacks are coalesced into one generation-checked drain so
@@ -95,12 +100,13 @@ public final class LauncherStore: LauncherStoring, LayoutMutationCompleting, Set
         layoutStore: LayoutStore,
         initialSnapshot: CatalogSnapshot,
         initialLayout: LayoutSnapshot,
-        settingsStore: SettingsStore
+        settingsStore: SettingsStore,
+        metadataStore: AppLibraryMetadataStore,
+        initialMetadata: AppLibraryMetadataSnapshot
     ) {
         self.catalogActor = catalogActor
         self.layoutStore = layoutStore
         self.catalogSnapshot = initialSnapshot
-        rebuildCatalogIndex()
         self.layout = initialLayout
         do {
             self.config = try settingsStore.load() ?? AppConfiguration()
@@ -109,6 +115,17 @@ public final class LauncherStore: LauncherStoring, LayoutMutationCompleting, Set
             self.config = AppConfiguration()
         }
         self.settingsStore = settingsStore
+        self.metadataStore = metadataStore
+        self.metadataSnapshot = initialMetadata
+        // 首帧 Library model: initial Catalog/Layout/Config + metadata seed 纯内存构建
+        // (启动恢复, 非 show/Library 入口 IO; §E7)
+        self.libraryModelCache = Self.buildLibraryModel(
+            catalog: catalogSnapshot,
+            layout: layout,
+            config: config,
+            metadata: metadataSnapshot
+        )
+        rebuildCatalogIndex()
 
         // 首帧: 用已恢复的快照构建显示模型(同步, 快照加载 < 10ms 目标)
         layout = LayoutReconciler.reconcile(
@@ -116,6 +133,9 @@ public final class LauncherStore: LauncherStoring, LayoutMutationCompleting, Set
             layout: layout,
             now: Date()
         )
+        // reconcile 可能新增/移除页面内容(墓碑、孤儿槽位), 重建 Library model,
+        // 使 Page 1 fallback 使用对账后的 layout。
+        rebuildLibraryModel()
         rebuildSearchIndex()
 
         // 后台: 正式启动(含损坏恢复)+ 全量对账
@@ -126,9 +146,25 @@ public final class LauncherStore: LauncherStoring, LayoutMutationCompleting, Set
 
     private func bootstrap() async {
         _ = await layoutStore.start()
+        // Library 元数据: 磁盘权威快照(损坏已由 actor.start() 备份, 失败不阻断对账)
+        applyMetadataSnapshot(await metadataStore.start())
         let result = await catalogActor.start()
+        // bootstrap 使用 actor.start() 返回的完整 snapshot 作基线(此时 self.catalogSnapshot
+        // 仍是首帧初始快照, 可能不含后台恢复的存量 apps)。
+        await bootstrapLibraryMetadata(with: result.snapshot)
         applySnapshot(result.snapshot)
         await reconcileInBackground()
+    }
+
+    /// bootstrap 基线: 存量 Catalog apps 写入 firstSeen 基线, 不产生 Recently Added。
+    /// 基线时间戳落在 Recently Added 窗口外(builder 排除); 已 bootstrap 为 no-op。
+    private func bootstrapLibraryMetadata(with catalog: CatalogSnapshot) async {
+        applyMetadataSnapshot(
+            await metadataStore.bootstrap(
+                existingAppIDs: catalog.apps.map(\.id),
+                now: Date()
+            )
+        )
     }
 
     private func reconcileInBackground() async {
@@ -210,6 +246,61 @@ public final class LauncherStore: LauncherStoring, LayoutMutationCompleting, Set
         }
     }
 
+    // MARK: - Library model(§E7)
+
+    /// 纯内存构建 Library model: 当前 Catalog + 显示名配置 + metadata。
+    /// Page 1 fallback 从 DisplayModel 派生(cold start Suggestions)。
+    private static func buildLibraryModel(
+        catalog: CatalogSnapshot,
+        layout: LayoutSnapshot,
+        config: AppConfiguration,
+        metadata: AppLibraryMetadataSnapshot
+    ) -> AppLibraryModel {
+        let display = DisplayModel(catalog: catalog, layout: layout, config: config)
+        let page1Fallback = display.pages.first?.compactMap { item -> AppID? in
+            if case .app(let id) = item { return id }
+            return nil
+        } ?? []
+        return AppLibraryModelBuilder.build(
+            AppLibraryModelBuilder.Inputs(
+                catalog: catalog,
+                hiddenAppIDs: Set(config.hiddenAppIDs),
+                customDisplayNames: config.customDisplayNames,
+                language: config.language,
+                systemPreferredLanguages: Locale.preferredLanguages,
+                metadata: metadata,
+                page1FallbackAppIDs: page1Fallback,
+                now: Date()
+            )
+        )
+    }
+
+    /// 用当前 Catalog/Config/Metadata 重建 Library model cache。
+    private func rebuildLibraryModel() {
+        libraryModelCache = Self.buildLibraryModel(
+            catalog: catalogSnapshot,
+            layout: layout,
+            config: config,
+            metadata: metadataSnapshot
+        )
+    }
+
+    /// 应用 metadata 变更(actor 返回的最新已确认快照): 更新快照 → 重建 model → 通知。
+    /// 相同快照为 no-op(幂等); model 始终从当前 Catalog/Config 重建, 无陈旧覆盖。
+    private func applyMetadataSnapshot(_ snapshot: AppLibraryMetadataSnapshot) {
+        guard snapshot != metadataSnapshot else { return }
+        metadataSnapshot = snapshot
+        rebuildLibraryModel()
+        bumpRevision()
+        notifyDataChange()
+    }
+
+    // MARK: - AppLibraryDataProviding
+
+    public func appLibraryModel() -> AppLibraryModel {
+        libraryModelCache
+    }
+
     // MARK: - LauncherStoring
 
     @discardableResult
@@ -259,9 +350,16 @@ public final class LauncherStore: LauncherStoring, LayoutMutationCompleting, Set
         layout.folders[folderID]?.name ?? folderID.rawValue
     }
 
+    /// 启动应用。Library usage 唯一记录入口(§E7):
+    /// 仅 `NSWorkspace.open` 返回 true 才异步 `recordLaunch`; 不等待写盘、不阻塞启动。
+    /// Library UI 不另记一次(与主网格共用同一 launch 路径)。
     public func launch(_ appID: AppID) {
         guard let record = catalogIndex[appID] else { return }
-        NSWorkspace.shared.open(record.url)
+        guard NSWorkspace.shared.open(record.url) else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            applyMetadataSnapshot(await metadataStore.recordLaunch(appID, at: Date()))
+        }
     }
 
     // MARK: - 文件夹/布局(Phase 5)
@@ -457,6 +555,17 @@ public final class LauncherStore: LauncherStoring, LayoutMutationCompleting, Set
             rebuildSearchIndex()
             bumpRevision()
             notifyDataChange()
+            // 新提交 snapshot → 记录首次发现(actor 去重, 已存在不重置)并刷新 Library model;
+            // 陈旧 generation 已被上面的 ifGeneration 检查拦截, model 恒从最新状态重建。
+            Task { [weak self] in
+                guard let self else { return }
+                applyMetadataSnapshot(
+                    await metadataStore.recordDiscovered(
+                        appIDs: self.catalogSnapshot.apps.map(\.id),
+                        now: Date()
+                    )
+                )
+            }
         }
         externalCatalogRefreshTask = nil
         // No await occurs between the loop condition and clearing the task, but
@@ -476,6 +585,11 @@ public final class LauncherStore: LauncherStoring, LayoutMutationCompleting, Set
             || config.language != self.config.language
         let customSourcesChanged =
             config.customSourceDirectories != self.config.customSourceDirectories
+        // Library model 输入(custom names / language / hidden)变化时同步重建(纯内存, 不扫磁盘、不重建 Layout)。
+        let libraryInputsChanged =
+            config.customDisplayNames != self.config.customDisplayNames
+            || config.language != self.config.language
+            || config.hiddenAppIDs != self.config.hiddenAppIDs
         do {
             try settingsStore.save(config)
         } catch {
@@ -486,6 +600,9 @@ public final class LauncherStore: LauncherStoring, LayoutMutationCompleting, Set
         L10n.configure(language: config.language)
         if searchMetadataChanged {
             rebuildSearchIndex()
+        }
+        if libraryInputsChanged {
+            rebuildLibraryModel()
         }
         if customSourcesChanged {
             onCustomSourcesChange?(config.customSourceDirectories)

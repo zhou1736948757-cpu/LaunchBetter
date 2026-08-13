@@ -14,6 +14,10 @@ public struct AppRecord: Codable, Sendable, Identifiable, Hashable {
     /// 本地化显示名: locale 标识符 → 名称(在 catalog 扫描/对账时解析,非每次显示)。
     /// 键为 .lproj 目录名(如 "en" / "zh-Hans"),空表示无本地化名。
     public let localizedNames: [String: String]
+    /// 应用分类: 原始 `LSApplicationCategoryType` 值(如 "public.app-category.developer-tools")。
+    /// 在 catalog 扫描/对账时从 Info.plist 读取,非每次显示;nil 表示未知分类。
+    /// AppRecord 不定义 UI category enum,分类语义由上层解释。
+    public let categoryIdentifier: String?
 
     public init(
         id: AppID,
@@ -22,7 +26,8 @@ public struct AppRecord: Codable, Sendable, Identifiable, Hashable {
         displayName: String,
         infoPlistModificationDate: Date?,
         iconContentVersion: IconContentVersion,
-        localizedNames: [String: String] = [:]
+        localizedNames: [String: String] = [:],
+        categoryIdentifier: String? = nil
     ) {
         self.id = id
         self.url = url
@@ -31,6 +36,7 @@ public struct AppRecord: Codable, Sendable, Identifiable, Hashable {
         self.infoPlistModificationDate = infoPlistModificationDate
         self.iconContentVersion = iconContentVersion
         self.localizedNames = localizedNames
+        self.categoryIdentifier = categoryIdentifier
     }
 
     /// 向后兼容解码: 旧文件(无 localizedNames 字段)迁移为空字典,不抛错、不销毁旧数据。
@@ -49,6 +55,9 @@ public struct AppRecord: Codable, Sendable, Identifiable, Hashable {
         localizedNames = try container.decodeIfPresent(
             [String: String].self, forKey: .localizedNames
         ) ?? [:]
+        categoryIdentifier = try container.decodeIfPresent(
+            String.self, forKey: .categoryIdentifier
+        )
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -59,6 +68,7 @@ public struct AppRecord: Codable, Sendable, Identifiable, Hashable {
         case infoPlistModificationDate
         case iconContentVersion
         case localizedNames
+        case categoryIdentifier
     }
 
     /// 按语言偏好解析本地化显示名(纯逻辑,无文件系统访问)。

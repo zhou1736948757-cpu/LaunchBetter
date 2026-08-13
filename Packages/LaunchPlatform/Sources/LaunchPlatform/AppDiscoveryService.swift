@@ -82,8 +82,16 @@ public enum AppDiscoveryService {
             displayName: displayName,
             infoPlistModificationDate: plistDate,
             iconContentVersion: iconVersion,
-            localizedNames: localizedDisplayNames(from: url)
+            localizedNames: localizedDisplayNames(from: url),
+            categoryIdentifier: categoryIdentifier(from: plist)
         )
+    }
+
+    /// 从 Info.plist 读取 `LSApplicationCategoryType`;缺失或空字符串视为未知分类(nil)。
+    /// 与其它元数据同属 catalog 扫描 IO,不新增 Library/show 读取路径。
+    static func categoryIdentifier(from plist: [String: Any]) -> String? {
+        guard let raw = plist["LSApplicationCategoryType"] as? String else { return nil }
+        return raw.isEmpty ? nil : raw
     }
 
     /// 从 bundle 的 `Contents/Resources/*.lproj/InfoPlist.strings` 提取各本地化显示名。

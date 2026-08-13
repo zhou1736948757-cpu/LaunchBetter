@@ -3,7 +3,7 @@
 /// 不变式: `apps` 按 `id.rawValue` 排序,保证确定性遍历。
 /// 这是持久用户状态(Catalog),不是缓存;必须带 schemaVersion。
 public struct CatalogSnapshot: Codable, Sendable, Equatable {
-    public static let currentSchemaVersion = 2
+    public static let currentSchemaVersion = 3
 
     public let schemaVersion: Int
     public let apps: [AppRecord]

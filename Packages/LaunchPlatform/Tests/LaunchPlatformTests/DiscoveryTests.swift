@@ -16,7 +16,8 @@ func makeFakeApp(
     name: String,
     bundleID: String,
     version: String = "1.0",
-    displayName: String? = nil
+    displayName: String? = nil,
+    category: String? = nil
 ) throws -> URL {
     let appURL = parent.appendingPathComponent("\(name).app")
     let contents = appURL.appendingPathComponent("Contents")
@@ -28,6 +29,9 @@ func makeFakeApp(
     ]
     if let displayName {
         plist["CFBundleDisplayName"] = displayName
+    }
+    if let category {
+        plist["LSApplicationCategoryType"] = category
     }
     let data = try PropertyListSerialization.data(
         fromPropertyList: plist, format: .xml, options: 0
@@ -182,6 +186,34 @@ struct AppDiscoveryServiceTests {
         let canonicalPath = PathCanonicalizer.canonicalPath(from: appURL)
         #expect(record.id.rawValue == canonicalPath)
         #expect(record.url == URL(fileURLWithPath: canonicalPath))
+    }
+
+    @Test("categoryIdentifier: 已知/缺失/空/未知分类")
+    func categoryIdentifierParsing() throws {
+        let dir = try tempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try makeFakeApp(
+            in: dir, name: "Tools", bundleID: "com.test.Tools",
+            category: "public.app-category.developer-tools"
+        )
+        try makeFakeApp(in: dir, name: "NoKey", bundleID: "com.test.NoKey")
+        try makeFakeApp(in: dir, name: "EmptyKey", bundleID: "com.test.EmptyKey", category: "")
+        try makeFakeApp(in: dir, name: "Mystery", bundleID: "com.test.Mystery", category: "com.example.mystery")
+
+        let records = AppDiscoveryService.discover(sources: [dir])
+        #expect(records.count == 4)
+        #expect(
+            records.first { $0.bundleIdentifier == "com.test.Tools" }?
+                .categoryIdentifier == "public.app-category.developer-tools"
+        )
+        #expect(records.first { $0.bundleIdentifier == "com.test.NoKey" }?.categoryIdentifier == nil)
+        #expect(
+            records.first { $0.bundleIdentifier == "com.test.EmptyKey" }?.categoryIdentifier == nil
+        )
+        #expect(
+            records.first { $0.bundleIdentifier == "com.test.Mystery" }?
+                .categoryIdentifier == "com.example.mystery"
+        )
     }
 
     @Test("本地化名从 lproj InfoPlist.strings 提取(键为 locale)")

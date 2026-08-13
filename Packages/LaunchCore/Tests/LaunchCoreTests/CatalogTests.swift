@@ -47,6 +47,44 @@ struct CatalogTests {
         #expect(!snapshot.contains(try #require(AppID("/Applications/Nope.app"))))
     }
 
+    @Test("schema 3 初始化: currentSchemaVersion 与编码一致")
+    func schema3Init() throws {
+        let snapshot = CatalogSnapshot(apps: [try record("/Applications/A.app")])
+        #expect(CatalogSnapshot.currentSchemaVersion == 3)
+        #expect(snapshot.schemaVersion == 3)
+        let data = try JSONEncoder().encode(snapshot)
+        let json = try #require(String(data: data, encoding: .utf8))
+        #expect(json.contains("\"schemaVersion\":3"))
+        let decoded = try JSONDecoder().decode(CatalogSnapshot.self, from: data)
+        #expect(decoded == snapshot)
+    }
+
+    @Test("旧版 schema 2 快照解码迁移(category 缺失为 nil, 不丢数据)")
+    func decodesLegacySchema2Snapshot() throws {
+        let json = """
+        {
+          "schemaVersion": 2,
+          "apps": [
+            {
+              "id": "/Applications/A.app",
+              "url": "file:///Applications/A.app",
+              "bundleIdentifier": "com.example.A",
+              "displayName": "A",
+              "infoPlistModificationDate": null,
+              "iconContentVersion": {},
+              "localizedNames": {"en": "A"}
+            }
+          ]
+        }
+        """
+        let decoded = try JSONDecoder().decode(CatalogSnapshot.self, from: Data(json.utf8))
+        #expect(decoded.schemaVersion == 2)
+        #expect(decoded.apps.count == 1)
+        #expect(decoded.apps[0].localizedNames == ["en": "A"])
+        #expect(decoded.apps[0].categoryIdentifier == nil)
+        #expect(decoded.apps[0].displayName == "A")
+    }
+
     @Test("旧版 v1 快照解码迁移(无 localizedNames 字段)")
     func decodesLegacyV1Snapshot() throws {
         let json = """

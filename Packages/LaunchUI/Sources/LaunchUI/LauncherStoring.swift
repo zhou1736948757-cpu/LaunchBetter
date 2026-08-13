@@ -151,3 +151,14 @@ public protocol LayoutMutationCompleting: LauncherStoring {
         completion: @escaping (Bool) -> Void
     )
 }
+
+/// App Library 读模型提供能力(MainActor)。
+///
+/// 独立于 `LauncherStoring`: Library 表面按需向宿主查询最新模型,
+/// 不要求既有 LauncherStoring 测试替身实现额外方法。
+/// 由 LauncherStore 实现;LaunchUI 不依赖 LaunchPlatform。
+@MainActor
+public protocol AppLibraryDataProviding: AnyObject {
+    /// 最新 App Library 模型(Store 内存 cache,构建纯内存)。
+    func appLibraryModel() -> AppLibraryModel
+}

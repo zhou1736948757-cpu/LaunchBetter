@@ -7,7 +7,8 @@ struct AppRecordTests {
     private func makeRecord(
         path: String = "/Applications/Safari.app",
         bundleID: String? = "com.apple.Safari",
-        localizedNames: [String: String] = [:]
+        localizedNames: [String: String] = [:],
+        categoryIdentifier: String? = nil
     ) throws -> AppRecord {
         let id = try #require(AppID(path))
         return AppRecord(
@@ -20,7 +21,8 @@ struct AppRecordTests {
                 iconResourceModificationNanoseconds: 123,
                 iconResourceSizeBytes: 456
             ),
-            localizedNames: localizedNames
+            localizedNames: localizedNames,
+            categoryIdentifier: categoryIdentifier
         )
     }
 
@@ -65,6 +67,21 @@ struct AppRecordTests {
         #expect(decoded.localizedNames == record.localizedNames)
     }
 
+    @Test("categoryIdentifier Codable 往返保持(含 nil)")
+    func categoryRoundTrip() throws {
+        let known = try makeRecord(categoryIdentifier: "public.app-category.developer-tools")
+        let data = try JSONEncoder().encode(known)
+        let decoded = try JSONDecoder().decode(AppRecord.self, from: data)
+        #expect(decoded == known)
+        #expect(decoded.categoryIdentifier == "public.app-category.developer-tools")
+
+        let unknown = try makeRecord(categoryIdentifier: nil)
+        let dataNil = try JSONEncoder().encode(unknown)
+        let decodedNil = try JSONDecoder().decode(AppRecord.self, from: dataNil)
+        #expect(decodedNil == unknown)
+        #expect(decodedNil.categoryIdentifier == nil)
+    }
+
     @Test("旧版记录(无 localizedNames 字段)解码迁移为空字典")
     func decodesLegacyRecord() throws {
         let legacyJSON = """
@@ -84,6 +101,24 @@ struct AppRecordTests {
         #expect(record.localizedNames.isEmpty)
         #expect(record.displayName == "Safari")
         #expect(record.bundleIdentifier == "com.apple.Safari")
+        #expect(record.categoryIdentifier == nil)
+    }
+
+    @Test("显式 null categoryIdentifier 解码为 nil")
+    func explicitNullCategory() throws {
+        let json = """
+        {
+          "id": "/Applications/Safari.app",
+          "url": "file:///Applications/Safari.app",
+          "bundleIdentifier": null,
+          "displayName": "Safari",
+          "infoPlistModificationDate": null,
+          "iconContentVersion": {},
+          "categoryIdentifier": null
+        }
+        """
+        let record = try JSONDecoder().decode(AppRecord.self, from: Data(json.utf8))
+        #expect(record.categoryIdentifier == nil)
     }
 }
 

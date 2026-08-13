@@ -46,6 +46,46 @@
 - **Luna 设计门(M1-M5 已修)**: 键盘+三指 update/end 门控; shield 幂等 + 失活兜底; Folder 外点击同序列防护(ClickableCollectionView 无配对 mouseDown 的 mouseUp 忽略); Folder/Settings 进入暂停分页状态机。
 - 测试: LaunchCore 143 / LaunchUI 64(新增过渡生命周期 + mouse-session)/ LaunchPlatform 127; Debug build OK。
 
+## Stage E(App Library)成果(已验证, 未提交)
+
+- 默认打开 Page 1;physical surface 0 = App Library,1+ = Layout pages;
+  `LauncherSurfaceIndex` 映射;绝不写 LayoutStore 用户布局。
+- Catalog schema 3 + `categoryIdentifier`;`AppLibraryMetadataStore` usage/firstSeen
+  与 Layout 分离;`AppLibraryModel`(Suggestions ≤4、category primary ≤3/mini ≤4、
+  recently added 30 天 bootstrap、稳定 tie-break)。
+- Library UI: 独立垂直 NSScrollView + NSCollectionView;卡片/detail/lazy icon/
+  L10n/a11y;`AppLibraryAxisArbiter` + pending-began replay 复用唯一 paging
+  settle/display-link 引擎;Library/Category/Settings ownership、Search restore。
+- E10 visual evidence: `--libraryshot <png> --library-state top|mid|detail|search|settings`;
+  六状态 fresh PNG(top/mid/detail/search/settings+settings pair),2940×1912 @2x /
+  Settings 1520×1360 @2x;probe 内临时将内容 NSTextField layer
+  `isGeometryFlipped=false` 再恢复(全窗口 x 翻转方案被否决: 会把本来正确的
+  搜索图标/齿轮位置镜像)。
+- 测试: LaunchCore 166(Swift Testing)+97(XCTest)、LaunchPlatform 137、LaunchUI 266
+  全绿;Debug build OK;`DispatchQueue.main.sync = 0`。
+- 评审: mimo-v2.5-pro 阶段末评审 0 BLOCKER / 0 MAJOR(1 MINOR: detail 行 mouseUp
+  无位移门控 → 已修复为 6pt 阈值 + 2 新测试);Luna 最终验收 0 BLOCKER / 0 MAJOR /
+  0 MINOR, 通过。
+- 安装(2026-08-13, 用户指令): Release ad-hoc 构建已覆盖安装
+  `/Applications/LaunchBetter.app`(universal x86_64+arm64)并启动;旧 DerivedData
+  LaunchBetter-* 与 Packages/*/.build 已清空, 磁盘仅保留 /Applications 副本。
+- E11 视觉细化(用户实机反馈, 已完成并重装): 卡片改方形(height=width,
+  clamp [240,430]);水平 edge inset 24、spacing/rowSpacing 24→16;顶部保留带
+  接入(窗口 chrome topInset 经 AppLibraryHostItem→setContentInsets 传入
+  AppLibraryLayout.contentInsets.top, 首行 minY=topInset, 搜索栏/齿轮不再重叠;
+  pending insets 缓存覆盖 loadView 前调用)。截图管线修正: launcher
+  contentView 为 flipped, captureContentScreenshot 移除 y-flip(此前 PNG 与
+  屏幕上下颠倒, 搜索栏/齿轮在 PNG 底部);launcher 探针不再做 isGeometryFlipped
+  文本校正(y 方向修正后自然可读);Settings 窗口 y-flip 保留。LaunchUI 274 测试
+  全绿; OCR 验证: 搜索应用 ≈80pt 顶部居中, 首行卡片标题 ≈139pt, 无重叠。
+- 待办: AppLibraryModel.swift:322 有 1 个未使用 `record` 绑定编译警告(功能无影响,
+  下次实现任务顺手修); 用户实机手感验收进行中。
+- 已知限制: Settings 控件内部标题(弹出菜单/按钮)在 CALayer.render 下仍镜像
+  (与既有 `--settingsshot` 一致, 属捕获管线限制, 非 Stage E 回归);壁纸预览两
+  矩形区域 layer-render 为黑色;mid 内容不足一屏 → STABLE_NOOP(记录, 非缺陷);
+  探针曾观察一次 navigate→Library 的 settle 竞态(重跑成功, 待实机确认)。
+- 实机物理 gate 仍未验收: 真实触控板、120Hz 手感、物理时间连续性。
+
 ## 本阶段环境限制(已验证)
 
 - `AXIsProcessTrusted()=false` → 无法注入真实 CGEvent(需系统辅助功能权限), computer-use/orca 也看不到启动器窗口(AX 不可见)。

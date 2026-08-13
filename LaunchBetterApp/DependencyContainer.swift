@@ -36,12 +36,26 @@ public final class DependencyContainer {
         let initialLayout = (try? layoutStore.load()) ?? LayoutSnapshot()
         let layoutActor = LayoutStore(seed: initialLayout, persistence: layoutStore)
 
+        // App Library 元数据: 启动同步读盘 seed(启动恢复, 非 show/Library 入口 IO)。
+        // 损坏/缺失回退空 seed; 损坏文件由 actor.start() 后台备份处理(与 catalog 一致)。
+        let metadataStore = AppLibraryMetadataStore(directory: supportDir)
+        // 文件名与 AppLibraryMetadataStore.fileURL 保持一致,但不在 MainActor
+        // 同步访问 actor 隔离属性;URL 直接由 supportDir 派生。
+        let metadataFileURL = supportDir.appendingPathComponent("AppLibraryMetadata.json")
+        let initialMetadata =
+            (try? DurableFile.loadCodable(
+                AppLibraryMetadataSnapshot.self,
+                from: metadataFileURL
+            )) ?? .init()
+
         let store = LauncherStore(
             catalogActor: catalogActor,
             layoutStore: layoutActor,
             initialSnapshot: initialSnapshot,
             initialLayout: initialLayout,
-            settingsStore: settingsStore
+            settingsStore: settingsStore,
+            metadataStore: metadataStore,
+            initialMetadata: initialMetadata
         )
 
         // 图标管道: 磁盘缓存(可再生) + 内存 LRU + 实时提取
