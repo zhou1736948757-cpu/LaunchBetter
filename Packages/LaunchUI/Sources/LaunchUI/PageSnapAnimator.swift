@@ -52,4 +52,7 @@ final class PageSnapAnimator {
     }
 
     var isActive: Bool { spring != nil }
+
+    /// 当前弹簧目标位置(无活跃 spring 时为 nil)。诊断/trace 用, 行为无关。
+    var currentTarget: CGFloat? { spring?.target }
 }

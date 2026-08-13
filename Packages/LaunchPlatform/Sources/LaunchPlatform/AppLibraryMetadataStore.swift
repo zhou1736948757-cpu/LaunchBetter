@@ -1,13 +1,14 @@
 import Foundation
 import LaunchCore
 
-/// App Library 元数据持久存储(actor): usage / firstSeen 内存聚合 + 异步原子持久化。
+/// App Library 元数据持久存储(actor): usage / firstSeen / category overrides 内存聚合 + 异步原子持久化。
 ///
 /// 职责:
 /// - 启动加载 `AppLibraryMetadata.json`(损坏先备份后 seed,不静默清除证据)
 /// - bootstrap 基线: 首次把现有 AppID 写入 firstSeen 作为 baseline,
 ///   基线时间戳落在 Recently Added 窗口边界之外,不产生候选
 /// - 增量采集: recordDiscovered 只为不存在的 AppID 写 now;recordLaunch 只更新 count/lastLaunchedAt
+/// - 手动覆盖: setCategoryOverride / clearCategoryOverride(PA2,与 Layout 完全独立)
 /// - 持久化: 写盘在 detached 任务中执行(coalesced),不阻塞调用方;flush() 等待 pending write
 ///
 /// 完全独立于 LayoutStore/LayoutSnapshot;无 AppKit/SwiftUI 依赖。
@@ -72,7 +73,7 @@ public actor AppLibraryMetadataStore {
         for id in existingAppIDs where firstSeen[id] == nil {
             firstSeen[id] = baseline
         }
-        memory = AppLibraryMetadataSnapshot(
+        memory = makeSnapshot(
             usage: memory.usage,
             firstSeen: firstSeen,
             isBootstrapped: true
@@ -95,7 +96,7 @@ public actor AppLibraryMetadataStore {
             changed = true
         }
         guard changed else { return memory }
-        memory = AppLibraryMetadataSnapshot(
+        memory = makeSnapshot(
             usage: memory.usage,
             firstSeen: firstSeen,
             isBootstrapped: memory.isBootstrapped
@@ -112,10 +113,44 @@ public actor AppLibraryMetadataStore {
             launchCount: (previous?.launchCount ?? 0) + 1,
             lastLaunchedAt: date
         )
-        memory = AppLibraryMetadataSnapshot(
+        memory = makeSnapshot(
             usage: usage,
             firstSeen: memory.firstSeen,
             isBootstrapped: memory.isBootstrapped
+        )
+        noteMutation()
+        return memory
+    }
+
+    /// 设置手动分类覆盖(用户显式指定)。更新内存并调度持久化;返回最新快照。
+    /// 覆盖不进入 LayoutStore、不改 AppRecord.categoryIdentifier。
+    public func setCategoryOverride(
+        appID: AppID,
+        category: AppLibraryCategory
+    ) async -> AppLibraryMetadataSnapshot {
+        guard memory.categoryOverrides[appID] != category else { return memory }
+        var overrides = memory.categoryOverrides
+        overrides[appID] = category
+        memory = makeSnapshot(
+            usage: memory.usage,
+            firstSeen: memory.firstSeen,
+            isBootstrapped: memory.isBootstrapped,
+            categoryOverrides: overrides
+        )
+        noteMutation()
+        return memory
+    }
+
+    /// 移除手动分类覆盖(恢复自动分类)。更新内存并调度持久化;返回最新快照。
+    public func clearCategoryOverride(appID: AppID) async -> AppLibraryMetadataSnapshot {
+        guard memory.categoryOverrides[appID] != nil else { return memory }
+        var overrides = memory.categoryOverrides
+        overrides.removeValue(forKey: appID)
+        memory = makeSnapshot(
+            usage: memory.usage,
+            firstSeen: memory.firstSeen,
+            isBootstrapped: memory.isBootstrapped,
+            categoryOverrides: overrides
         )
         noteMutation()
         return memory
@@ -136,6 +171,23 @@ public actor AppLibraryMetadataStore {
         await flush()
         persistTask?.cancel()
         started = false
+    }
+
+    // MARK: - Snapshot 构造
+
+    /// 所有构造快照的唯一入口: 恒携带当前 `categoryOverrides`(PA2 保留约定)。
+    private func makeSnapshot(
+        usage: [AppID: AppLibraryUsageRecord],
+        firstSeen: [AppID: Date],
+        isBootstrapped: Bool,
+        categoryOverrides: [AppID: AppLibraryCategory]? = nil
+    ) -> AppLibraryMetadataSnapshot {
+        AppLibraryMetadataSnapshot(
+            usage: usage,
+            firstSeen: firstSeen,
+            isBootstrapped: isBootstrapped,
+            categoryOverrides: categoryOverrides ?? memory.categoryOverrides
+        )
     }
 
     // MARK: - Persistence (coalesced)

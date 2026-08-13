@@ -32,6 +32,10 @@ final class AppLibraryHostItem {
     /// PagingInteractionController, 不创建第二套 settle/display-link。
     var onAppLibraryHorizontalScroll: ((NSEvent) -> Bool)?
 
+    /// Library 真空白点击转发(宿主 Grid 注入, PA3): 复用外层 `onClickBlank`
+    /// (已 → window hide), 不新建第二套 hide 实现。
+    var onBlankClick: (() -> Void)?
+
     init(store: any LauncherStoring, iconProvider: (any IconImageProviding)?) {
         self.store = store
         self.iconProvider = iconProvider
@@ -60,7 +64,8 @@ final class AppLibraryHostItem {
             iconProvider: iconProvider,
             onLaunch: { [weak store] appID in
                 store?.launch(appID)
-            }
+            },
+            categoryOverriding: store as? any AppLibraryCategoryOverriding
         )
         if let cached = cachedContentInsets {
             controller.setContentInsets(top: cached.top, bottom: cached.bottom)
@@ -69,6 +74,9 @@ final class AppLibraryHostItem {
             self?.onDetailChange?(open)
         }
         controller.onHorizontalScroll = onAppLibraryHorizontalScroll
+        controller.onBlankClick = { [weak self] in
+            self?.onBlankClick?()
+        }
         controller.beginSession(model: model)
         sessionActive = true
         libraryController = controller
@@ -93,6 +101,17 @@ final class AppLibraryHostItem {
         guard sessionActive else { return }
         sessionActive = false
         libraryController?.endSession()
+    }
+
+    /// 数据变化时的 live 模型刷新(PA2 热更新): host 已 attach 且 session active
+    /// 时, 经 `updateModel` 绕过冻结 session 的 apply 屏蔽(复用 reloadCards 的
+    /// diffable 稳定身份, 不 endSession 重建)。未 attach / 已释放 session 为 no-op
+    /// (下次 makeController 会用最新 model 重新固定)。
+    func refreshModel() {
+        guard sessionActive,
+              let controller = libraryController,
+              let provider = store as? any AppLibraryDataProviding else { return }
+        controller.updateModel(provider.appLibraryModel())
     }
 
     /// 关闭当前 Library detail(幂等)。Settings 打开 / Launcher 隐藏 / 离开

@@ -11,17 +11,17 @@ public struct AppLibraryLayoutMetrics: Equatable, Sendable {
     public static let defaultSpacing: CGFloat = 16
     /// 行间默认间距。
     public static let defaultRowSpacing: CGFloat = 16
-    /// 网格模式内容区默认水平 edge inset(两侧各 24, 卡片不贴边)。
-    public static let defaultHorizontalInset: CGFloat = 24
+    /// 网格模式内容区默认水平 edge inset(两侧各 30, 卡片不贴边)。
+    public static let defaultHorizontalInset: CGFloat = 30
     /// 内容区默认垂直 inset(顶部留白 20; 底部默认小 padding 20)。
     /// 顶部保留带在宿主窗口层 chrome(搜索框)下由 `setContentInsets` 覆盖。
     public static let defaultContentInsets = NSEdgeInsets(top: 20, left: 0, bottom: 20, right: 0)
     /// card width 下界。
     public static let minCardWidth: CGFloat = 280
     /// 目标 card width(决定列数)。
-    public static let preferredCardWidth: CGFloat = 360
+    public static let preferredCardWidth: CGFloat = 330
     /// card width 上界。
-    public static let maxCardWidth: CGFloat = 430
+    public static let maxCardWidth: CGFloat = 370
     /// 列数上界。
     public static let maxColumnCount = 4
 

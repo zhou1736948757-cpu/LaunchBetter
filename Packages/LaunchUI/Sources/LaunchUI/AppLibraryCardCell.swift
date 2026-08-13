@@ -55,13 +55,16 @@ enum AppLibraryIconPlaceholder {
     }
 }
 
-/// App Library 卡片单元格: 轻玻璃卡 + 标题 + 最多 3 个大图标 + 最多 4 个
-/// mini 图标。
+/// App Library 卡片单元格: 轻玻璃卡 + 标题 + 2×2 象限内容。
+///
+/// 象限构成(普通分类/Recently Added): 左上/右上/左下 = 大图标 0/1/2,
+/// 右下 = mini 2×2 簇; Suggestions 卡为 2×2 四个大图标。标题 top-left 对齐,
+/// 卡片内不放 app 文本标签(无障碍保留全名)。
 ///
 /// 图标异步到达; 复用与新配置会取消旧请求并递增 generation, 迟到结果必须
 /// 仍代表同一 AppID 且 generation 未过期才能应用(防串图)。
 ///
-/// 点击路由: 大图标 → `.launch(AppID)`; 标题/mini 区 → `.openDetail`。
+/// 点击路由: 大图标 → `.launch(AppID)`; mini 区 / 标题 → `.openDetail`。
 /// mouseDown 有轻微即时 press feedback(Reduce Motion 下跳过)。
 @MainActor
 final class AppLibraryCardCell: NSCollectionViewItem {
@@ -72,9 +75,14 @@ final class AppLibraryCardCell: NSCollectionViewItem {
 
     static let reuseIdentifier = NSUserInterfaceItemIdentifier("AppLibraryCardCell")
 
-    static let maxPrimaryIcons = 3
+    static let maxPrimaryIcons = 4
     static let maxMiniIcons = 4
     private static let pressClickThreshold: CGFloat = 6
+    private static let cardPadding: CGFloat = 14
+    private static let cardTitleHeight: CGFloat = 18
+    private static let titleGap: CGFloat = 12
+    private static let quadrantGap: CGFloat = 12
+    private static let miniGap: CGFloat = 8
 
     private let cardView = NSVisualEffectView()
     private let titleLabel = NSTextField(labelWithString: "")
@@ -98,6 +106,10 @@ final class AppLibraryCardCell: NSCollectionViewItem {
     /// 点击路由(由 controller 在配置时设置)。
     var onAction: ((Action) -> Void)?
 
+    /// 右键分类菜单入口(PA2; 由 controller 在配置时设置)。
+    /// 参数: 命中的 AppID + 窗口坐标点(供 menu popUp)。
+    var onCategoryMenu: ((AppID, NSPoint) -> Void)?
+
     /// 当前配置的 card 身份(测试 seam)。
     private(set) var cardID: AppLibraryCardID?
 
@@ -105,6 +117,8 @@ final class AppLibraryCardCell: NSCollectionViewItem {
     private(set) var primaryFrames: [CGRect] = []
     private(set) var miniFrame: CGRect = .zero
     private(set) var titleFrame: CGRect = .zero
+    /// mini 2×2 簇内各 mini 图标 frame(根视图坐标, 测试 seam)。
+    private(set) var miniIconFrames: [CGRect] = []
 
     /// 已成功应用的 provider 图标(AppID → CGImage, 测试 seam)。
     private(set) var appliedImages: [AppID: CGImage] = [:]
@@ -117,6 +131,9 @@ final class AppLibraryCardCell: NSCollectionViewItem {
         }
         root.onMouseUp = { [weak self] point in
             self?.endPressAndDispatch(at: point)
+        }
+        root.onRightMouseDown = { [weak self] point in
+            self?.handleRightClick(at: point)
         }
 
         cardView.material = .hudWindow
@@ -135,18 +152,13 @@ final class AppLibraryCardCell: NSCollectionViewItem {
         ])
 
         titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
-        titleLabel.alignment = .center
+        titleLabel.alignment = .left
         titleLabel.lineBreakMode = .byTruncatingTail
         titleLabel.setAccessibilityRole(.button)
         cardView.addSubview(titleLabel)
 
         miniContainer.wantsLayer = true
         miniContainer.isHidden = true
-        miniContainer.layer?.cornerRadius = 8
-        miniContainer.layer?.masksToBounds = true
-        miniContainer.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.08).cgColor
-        miniContainer.layer?.borderColor = NSColor.white.withAlphaComponent(0.30).cgColor
-        miniContainer.layer?.borderWidth = 1
         miniContainer.setAccessibilityRole(.button)
         cardView.addSubview(miniContainer)
 
@@ -256,6 +268,16 @@ final class AppLibraryCardCell: NSCollectionViewItem {
         }
     }
 
+    /// 右键分发(PA2): 只命中卡片大图标; mini 簇/标题无右键入口。
+    /// 回调携带窗口坐标点(供 controller menu popUp)。
+    func handleRightClick(at point: NSPoint) {
+        guard let index = primaryFrames.firstIndex(where: { $0.contains(point) }),
+              representedPrimaryAppIDs.indices.contains(index) else { return }
+        let appID = representedPrimaryAppIDs[index]
+        let windowPoint = view.convert(point, to: nil)
+        onCategoryMenu?(appID, windowPoint)
+    }
+
     /// 测试 seam: 已应用的 provider 图标(AppID → image)。
     func appliedIconImage(for appID: AppID) -> CGImage? {
         appliedImages[appID]
@@ -306,21 +328,40 @@ final class AppLibraryCardCell: NSCollectionViewItem {
         Int(miniIconSize.rounded())
     }
 
+    /// 图标区 2×2 象限的单象限尺寸(与 `layoutContent` 共用同一几何)。
+    private var quadrantSize: CGSize {
+        let w = view.bounds.width
+        let h = view.bounds.height
+        guard w > 0, h > 0 else { return .zero }
+        let padding = Self.cardPadding
+        let contentW = max(0, w - padding * 2)
+        let contentH = max(
+            0,
+            (h - padding - Self.cardTitleHeight - Self.titleGap) - padding
+        )
+        return CGSize(
+            width: max(0, (contentW - Self.quadrantGap) / 2),
+            height: max(0, (contentH - Self.quadrantGap) / 2)
+        )
+    }
+
     private var primaryIconSize: CGFloat {
-        min(76, max(40, view.bounds.width * 0.20))
+        let q = quadrantSize
+        return min(76, max(40, min(q.width, q.height) * 0.70))
     }
 
     private var miniIconSize: CGFloat {
-        min(32, max(18, primaryIconSize * 0.42))
+        let q = quadrantSize
+        return min(32, max(18, (min(q.width, q.height) - Self.miniGap) / 2))
     }
 
     private func layoutContent() {
         let bounds = cardView.bounds
         guard bounds.width > 0, bounds.height > 0 else { return }
-        let padding: CGFloat = 14
-        let titleHeight: CGFloat = 18
-        let gap: CGFloat = 12
-        let iconGap: CGFloat = 12
+        let padding = Self.cardPadding
+        let titleHeight = Self.cardTitleHeight
+        let gap = Self.titleGap
+        let iconGap = Self.quadrantGap
 
         titleFrame = CGRect(
             x: padding,
@@ -330,15 +371,29 @@ final class AppLibraryCardCell: NSCollectionViewItem {
         )
         titleLabel.frame = titleFrame
 
+        let contentW = max(0, bounds.width - padding * 2)
+        let contentAreaTop = bounds.height - padding - titleHeight - gap
+        let contentAreaBottom = padding
+        let contentH = max(0, contentAreaTop - contentAreaBottom)
+        let colW = max(0, (contentW - iconGap) / 2)
+        let rowH = max(0, (contentH - iconGap) / 2)
+        let topRowY = contentAreaBottom + max(0, (contentH - 2 * rowH - iconGap) / 2)
+        let bottomRowY = topRowY + rowH + iconGap
+        let leftX = padding
+        let rightX = padding + colW + iconGap
+        let quadrants = [
+            CGRect(x: leftX, y: topRowY, width: colW, height: rowH),
+            CGRect(x: rightX, y: topRowY, width: colW, height: rowH),
+            CGRect(x: leftX, y: bottomRowY, width: colW, height: rowH),
+            CGRect(x: rightX, y: bottomRowY, width: colW, height: rowH),
+        ]
+
         let iconSize = primaryIconSize
-        let iconsY = bounds.height - padding - titleHeight - gap - iconSize
         let count = representedPrimaryAppIDs.count
-        let totalWidth = CGFloat(count) * iconSize + CGFloat(max(0, count - 1)) * iconGap
-        let startX = max(0, (bounds.width - totalWidth) / 2)
-        primaryFrames = (0..<count).map { index in
+        primaryFrames = quadrants.prefix(count).map { q in
             CGRect(
-                x: startX + CGFloat(index) * (iconSize + iconGap),
-                y: iconsY,
+                x: q.midX - iconSize / 2,
+                y: q.midY - iconSize / 2,
                 width: iconSize,
                 height: iconSize
             )
@@ -354,26 +409,32 @@ final class AppLibraryCardCell: NSCollectionViewItem {
 
         let miniCount = representedMiniAppIDs.count
         if miniCount > 0 {
+            let quadrant = quadrants[3]
             let miniSize = miniIconSize
-            let miniGap: CGFloat = 8
-            let miniPadding: CGFloat = 10
-            let miniTotal = CGFloat(miniCount) * miniSize + CGFloat(miniCount - 1) * miniGap
-                + miniPadding * 2
-            miniFrame = CGRect(
-                x: max(0, (bounds.width - miniTotal) / 2),
-                y: padding,
-                width: miniTotal,
-                height: miniSize + miniPadding * 2
-            )
+            let clusterSize = miniSize * 2 + Self.miniGap
+            let clusterX = quadrant.midX - clusterSize / 2
+            let clusterY = quadrant.midY - clusterSize / 2
+            miniFrame = quadrant
             miniContainer.isHidden = false
-            miniContainer.frame = miniFrame
+            miniContainer.frame = quadrant
+            miniIconFrames = []
             for (index, imageView) in miniImageViews.enumerated() {
-                let x = miniPadding + CGFloat(index) * (miniSize + miniGap)
-                imageView.frame = CGRect(x: x, y: miniPadding, width: miniSize, height: miniSize)
+                let row = index / 2
+                let column = index % 2
+                imageView.frame = CGRect(
+                    x: clusterX + CGFloat(column) * (miniSize + Self.miniGap),
+                    y: clusterY + CGFloat(row) * (miniSize + Self.miniGap),
+                    width: miniSize,
+                    height: miniSize
+                )
                 imageView.isHidden = index >= miniCount
+                if index < miniCount {
+                    miniIconFrames.append(imageView.frame)
+                }
             }
         } else {
             miniFrame = .zero
+            miniIconFrames = []
             miniContainer.isHidden = true
         }
     }
@@ -448,6 +509,7 @@ final class AppLibraryCardCell: NSCollectionViewItem {
         pressStartPoint = nil
         primaryFrames = []
         miniFrame = .zero
+        miniIconFrames = []
         titleFrame = .zero
         if isViewLoaded {
             titleLabel.stringValue = ""
@@ -474,10 +536,12 @@ final class AppLibraryCardCell: NSCollectionViewItem {
 }
 
 /// 卡片根视图: 捕获 mouseDown/mouseUp 序列, 转发给 cell(路由与按压反馈)。
+/// 右键(rightMouseDown)单独转发给 cell(分类菜单入口)。
 @MainActor
 private final class LibraryCardRootView: NSView {
     var onMouseDown: ((NSPoint) -> Void)?
     var onMouseUp: ((NSPoint) -> Void)?
+    var onRightMouseDown: ((NSPoint) -> Void)?
 
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
@@ -487,5 +551,10 @@ private final class LibraryCardRootView: NSView {
     override func mouseUp(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
         onMouseUp?(point)
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        onRightMouseDown?(point)
     }
 }

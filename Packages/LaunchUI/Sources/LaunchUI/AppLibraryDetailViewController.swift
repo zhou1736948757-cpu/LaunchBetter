@@ -24,6 +24,8 @@ public final class AppLibraryDetailViewController: NSViewController {
     private let iconProvider: (any IconImageProviding)?
     private let onSelect: (AppID) -> Void
     private let onClose: () -> Void
+    /// 行右键分类菜单入口(PA2; 宿主转发到 Library 控制器)。
+    private let onCategoryMenu: ((AppID, NSPoint) -> Void)?
 
     private let detailRootView = LibraryDetailRootView()
     private let panel = NSVisualEffectView()
@@ -38,7 +40,8 @@ public final class AppLibraryDetailViewController: NSViewController {
         displayName: @escaping (AppID) -> String,
         iconProvider: (any IconImageProviding)?,
         onSelect: @escaping (AppID) -> Void,
-        onClose: @escaping () -> Void
+        onClose: @escaping () -> Void,
+        onCategoryMenu: ((AppID, NSPoint) -> Void)? = nil
     ) {
         self.detailTitle = title
         self.appIDs = appIDs
@@ -46,6 +49,7 @@ public final class AppLibraryDetailViewController: NSViewController {
         self.iconProvider = iconProvider
         self.onSelect = onSelect
         self.onClose = onClose
+        self.onCategoryMenu = onCategoryMenu
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -110,6 +114,9 @@ public final class AppLibraryDetailViewController: NSViewController {
                 reducedMotion: MotionEnvironment.reduceMotion,
                 onSelect: { [weak self] selected in
                     self?.handleSelect(selected)
+                },
+                onCategoryMenu: { [weak self] menuAppID, windowPoint in
+                    self?.onCategoryMenu?(menuAppID, windowPoint)
                 }
             )
             return cell
@@ -215,6 +222,8 @@ final class AppLibraryDetailRowCell: NSCollectionViewItem {
     private let iconView = NSImageView()
     private let nameLabel = NSTextField(labelWithString: "")
     private var onSelect: ((AppID) -> Void)?
+    /// 右键分类菜单入口(PA2; 由 detail 控制器在配置时设置)。
+    private var onCategoryMenu: ((AppID, NSPoint) -> Void)?
     private var reducedMotion = false
 
     private var representedAppID: AppID?
@@ -233,6 +242,9 @@ final class AppLibraryDetailRowCell: NSCollectionViewItem {
         }
         rowRoot.onMouseUp = { [weak self] in
             self?.dispatchSelection()
+        }
+        rowRoot.onRightMouseDown = { [weak self] point in
+            self?.handleRightClick(at: point)
         }
 
         iconView.wantsLayer = true
@@ -272,13 +284,15 @@ final class AppLibraryDetailRowCell: NSCollectionViewItem {
         provider: (any IconImageProviding)?,
         backingScale: Int,
         reducedMotion: Bool,
-        onSelect: @escaping (AppID) -> Void
+        onSelect: @escaping (AppID) -> Void,
+        onCategoryMenu: ((AppID, NSPoint) -> Void)? = nil
     ) {
         reset()
         representedAppID = appID
         self.backingScale = max(1, backingScale)
         self.reducedMotion = reducedMotion
         self.onSelect = onSelect
+        self.onCategoryMenu = onCategoryMenu
         nameLabel.stringValue = name
         view.setAccessibilityElement(true)
         view.setAccessibilityRole(.button)
@@ -313,6 +327,13 @@ final class AppLibraryDetailRowCell: NSCollectionViewItem {
         onSelect?(appID)
     }
 
+    /// 右键分发(PA2): 回调携带窗口坐标点(供 controller menu popUp)。
+    func handleRightClick(at point: NSPoint) {
+        guard let appID = representedAppID else { return }
+        let windowPoint = view.convert(point, to: nil)
+        onCategoryMenu?(appID, windowPoint)
+    }
+
     // MARK: - 按压
 
     private func beginPress() {
@@ -342,6 +363,7 @@ final class AppLibraryDetailRowCell: NSCollectionViewItem {
         requestGeneration &+= 1
         representedAppID = nil
         onSelect = nil
+        onCategoryMenu = nil
         appliedCGImage = nil
         if isViewLoaded {
             iconView.image = nil
@@ -377,12 +399,14 @@ private final class LibraryDetailRootView: NSView {
 }
 
 /// detail 行根视图: 转发 mouseDown/mouseUp; 超过 6pt 位移的 mouseUp 不转发。
+/// 右键(rightMouseDown)单独转发给行 cell(分类菜单入口)。
 @MainActor
 private final class DetailRowRootView: NSView {
     private static let pressClickThreshold: CGFloat = 6
 
     var onMouseDown: (() -> Void)?
     var onMouseUp: (() -> Void)?
+    var onRightMouseDown: ((NSPoint) -> Void)?
     private var mouseDownPoint: NSPoint?
 
     override func mouseDown(with event: NSEvent) {
@@ -402,5 +426,10 @@ private final class DetailRowRootView: NSView {
         if dx * dx + dy * dy <= Self.pressClickThreshold * Self.pressClickThreshold {
             onMouseUp?()
         }
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        onRightMouseDown?(point)
     }
 }

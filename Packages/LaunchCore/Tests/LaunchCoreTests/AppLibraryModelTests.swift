@@ -10,13 +10,14 @@ struct AppLibraryModelTests {
         _ path: String,
         name: String,
         category: String? = nil,
+        bundle: String? = nil,
         localized: [String: String] = [:]
     ) throws -> AppRecord {
         let id = try #require(AppID(path))
         return AppRecord(
             id: id,
             url: URL(fileURLWithPath: path),
-            bundleIdentifier: nil,
+            bundleIdentifier: bundle,
             displayName: name,
             infoPlistModificationDate: nil,
             iconContentVersion: .empty,
@@ -30,6 +31,7 @@ struct AppLibraryModelTests {
         hidden: Set<AppID> = [],
         customNames: [AppID: String] = [:],
         metadata: AppLibraryMetadataSnapshot? = nil,
+        overrides: [AppID: AppLibraryCategory] = [:],
         fallback: [AppID] = [],
         now: Date = e3Now
     ) -> AppLibraryModel {
@@ -40,6 +42,7 @@ struct AppLibraryModelTests {
             language: .english,
             systemPreferredLanguages: ["en"],
             metadata: metadata,
+            categoryOverrides: overrides,
             page1FallbackAppIDs: fallback,
             now: now
         ))
@@ -76,6 +79,160 @@ struct AppLibraryModelTests {
 
         #expect(AppLibraryCategoryClassifier.classify("Public.App-Category.Games") == .games)
         #expect(AppLibraryCategoryClassifier.classify("  PUBLIC.APP-CATEGORY.UTILITIES ") == .utilities)
+    }
+
+    // MARK: - PA2 手动分类覆盖
+
+    /// QQ 合成记录: bundle=com.tencent.qq + 自报 developer-tools。
+    private func makeQQRecord() throws -> AppRecord {
+        try makeRecord(
+            "/Applications/QQ.app",
+            name: "QQ",
+            category: "public.app-category.developer-tools",
+            bundle: "com.tencent.qq"
+        )
+    }
+
+    /// WeChat 对照记录: bundle=com.tencent.xinWeChat + 正常自报 social。
+    private func makeWeChatRecord() throws -> AppRecord {
+        try makeRecord(
+            "/Applications/WeChat.app",
+            name: "WeChat",
+            category: "public.app-category.social-networking",
+            bundle: "com.tencent.xinWeChat"
+        )
+    }
+
+    private func effectiveCategory(of appID: AppID, in model: AppLibraryModel) -> AppLibraryCategory? {
+        for (category, ids) in model.categoryDetail where ids.contains(appID) {
+            return category
+        }
+        return nil
+    }
+
+    @Test("bundle 校正: QQ(自报 developer-tools)无覆盖时经 com.tencent.qq → social")
+    func bundleCorrectionQQ() throws {
+        let qq = try makeQQRecord()
+        let wechat = try makeWeChatRecord()
+        let model = build(catalog: CatalogSnapshot(apps: [qq, wechat]))
+
+        #expect(AppLibraryCategoryClassifier.classify("public.app-category.developer-tools") == .developer)
+        #expect(AppLibraryCategoryClassifier.bundleCategoryCorrections["com.tencent.qq"] == .social)
+        let socialCard = try #require(card(with: .category(.social), in: model))
+        // QQ 经校正进入 social(不进入 developer); stable tie: "QQ" < "WeChat"
+        #expect(socialCard.detailAppIDs == [qq.id, wechat.id])
+        #expect(card(with: .category(.developer), in: model) == nil)
+        #expect(effectiveCategory(of: qq.id, in: model) == .social)
+        // 记录本身未被改写
+        #expect(qq.categoryIdentifier == "public.app-category.developer-tools")
+        #expect(qq.bundleIdentifier == "com.tencent.qq")
+    }
+
+    @Test("覆盖优先: 手动覆盖 > bundle 校正 > 分类器; 移除覆盖恢复自动")
+    func overridePriorityAndClear() throws {
+        let qq = try makeQQRecord()
+        let wechat = try makeWeChatRecord()
+        let catalog = CatalogSnapshot(apps: [qq, wechat])
+
+        let overridden = build(catalog: catalog, overrides: [qq.id: .games])
+        #expect(effectiveCategory(of: qq.id, in: overridden) == .games)
+
+        let overriddenOther = build(catalog: catalog, overrides: [qq.id: .other])
+        #expect(effectiveCategory(of: qq.id, in: overriddenOther) == .other)
+
+        // 移除覆盖(空表)→ 恢复 bundle 校正 → social(与 WeChat 同卡)
+        let cleared = build(catalog: catalog, overrides: [:])
+        #expect(effectiveCategory(of: qq.id, in: cleared) == .social)
+        let socialCard = try #require(card(with: .category(.social), in: cleared))
+        #expect(socialCard.detailAppIDs == [qq.id, wechat.id])
+    }
+
+    @Test("覆盖到稀疏分类: < 2 个 app 且含手动覆盖 → 保留为独立卡, 不并入 Other")
+    func manualOverrideKeepsSparseCategoryCard() throws {
+        let utilities = try makeRecord(
+            "/Applications/OnlyUtils.app",
+            name: "Only Utils",
+            category: "public.app-category.developer-tools"
+        )
+        let games = try makeRecord(
+            "/Applications/LonelyGame.app",
+            name: "Lonely Game",
+            category: "public.app-category.games"
+        )
+        let catalog = CatalogSnapshot(apps: [utilities, games])
+
+        // 无覆盖: 两个单 app 分类都并入 Other
+        let without = build(catalog: catalog)
+        #expect(card(with: .category(.utilities), in: without) == nil)
+        #expect(card(with: .category(.games), in: without) == nil)
+        #expect(card(with: .category(.other), in: without) != nil)
+
+        // 覆盖到 utilities → utilities 保留为独立卡
+        let with = build(catalog: catalog, overrides: [utilities.id: .utilities])
+        let utilitiesCard = try #require(card(with: .category(.utilities), in: with))
+        #expect(utilitiesCard.detailAppIDs == [utilities.id])
+        // games(无覆盖, 稀疏)仍并入 Other
+        let other = try #require(card(with: .category(.other), in: with))
+        #expect(other.detailAppIDs == [games.id])
+        // 分区完整性: 每个可见 app 恰好一个分类
+        let covered = Set(with.categoryDetail.values.flatMap { $0 })
+        #expect(covered == [utilities.id, games.id])
+    }
+
+    @Test("覆盖进 Other: 保持可见(Other 恒不参与合并)")
+    func manualOverrideToOtherVisible() throws {
+        let qq = try makeQQRecord()
+        let model = build(catalog: CatalogSnapshot(apps: [qq]), overrides: [qq.id: .other])
+
+        let other = try #require(card(with: .category(.other), in: model))
+        #expect(other.detailAppIDs == [qq.id])
+    }
+
+    @Test("schema v2: categoryOverrides 编码往返一致 + schemaVersion=2")
+    func metadataV2OverrideRoundTrip() throws {
+        let qq = try #require(AppID("/Applications/QQ.app"))
+        let metadata = AppLibraryMetadataSnapshot(
+            usage: [qq: AppLibraryUsageRecord(launchCount: 2, lastLaunchedAt: e3Now)],
+            firstSeen: [qq: e3Now],
+            isBootstrapped: true,
+            categoryOverrides: [qq: .social]
+        )
+
+        let data = try JSONEncoder().encode(metadata)
+        let decoded = try JSONDecoder().decode(AppLibraryMetadataSnapshot.self, from: data)
+
+        #expect(decoded == metadata)
+        #expect(decoded.schemaVersion == 2)
+        #expect(decoded.categoryOverrides == [qq: .social])
+    }
+
+    @Test("旧 schema(无 categoryOverrides)迁移 → [], usage/firstSeen 保留")
+    func legacySchemaMigratesToEmptyOverrides() throws {
+        let qq = try #require(AppID("/Applications/QQ.app"))
+        // 自定义 key 字典在 JSON 中是交替数组形式(与既有持久化格式一致);
+        // Date 按 JSONDecoder 默认策略解码为 timeIntervalSinceReferenceDate。
+        let legacy = """
+        {"schemaVersion": 1, "usage": ["\(qq.rawValue)", {"launchCount": 3}], "firstSeen": ["\(qq.rawValue)", \(e3Now.timeIntervalSinceReferenceDate)], "isBootstrapped": true}
+        """
+        let migrated = try JSONDecoder().decode(
+            AppLibraryMetadataSnapshot.self,
+            from: Data(legacy.utf8)
+        )
+        #expect(migrated.categoryOverrides.isEmpty)
+        #expect(migrated.usage[qq] == AppLibraryUsageRecord(launchCount: 3, lastLaunchedAt: nil))
+        #expect(migrated.isBootstrapped)
+        #expect(migrated.firstSeen[qq] == e3Now)
+        #expect(migrated.schemaVersion == 1)
+    }
+
+    @Test("覆盖只影响展示分类: 同一输入 + 不同覆盖 → 仅分类位置不同, 记录不变")
+    func overrideDoesNotMutateRecord() throws {
+        let qq = try makeQQRecord()
+        let catalog = CatalogSnapshot(apps: [qq])
+        _ = build(catalog: catalog, overrides: [qq.id: .finance])
+        #expect(qq.categoryIdentifier == "public.app-category.developer-tools")
+        #expect(catalog.apps.first?.id == qq.id)
+        #expect(catalog.apps.first?.categoryIdentifier == "public.app-category.developer-tools")
     }
 
     // MARK: - 过滤与来源等价
@@ -434,7 +591,7 @@ struct AppLibraryModelTests {
         let decoded = try JSONDecoder().decode(AppLibraryMetadataSnapshot.self, from: data)
 
         #expect(decoded == metadata)
-        #expect(AppLibraryMetadataSnapshot.currentSchemaVersion == 1)
+        #expect(AppLibraryMetadataSnapshot.currentSchemaVersion == 2)
         #expect(decoded.schemaVersion == AppLibraryMetadataSnapshot.currentSchemaVersion)
 
         let legacy = """

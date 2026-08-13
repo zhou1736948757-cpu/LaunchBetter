@@ -37,12 +37,24 @@ final class PagingInteractionController {
     /// E13 遥测开关(默认 false, 零开销路径不变: 仅一次布尔判断)。
     var telemetryEnabled = false
 
+    /// PA4: 逐事件 trace(默认 false; 仅 `--pagingeventtrace` 时开启)。
+    /// 开启时每事件记录到共享 `PagingTraceLog`, 诊断用途不参与行为。
+    var traceEnabled = false
+
     private var axisLock = PagingAxisLock()
     private var velocity = PagingVelocityEstimator()
     private var displacement: CGFloat = 0
     private var baseOffset: CGFloat = 0
     private var latestDesiredOffset: CGFloat = 0
     private var lastAppliedOffset: CGFloat = 0
+
+    /// PA4 根因修复: 当前 settle 的目标页(经 clamp 后)。settle 启动时记录,
+    /// 收敛/打断/跳转/禁用时清理。
+    private var settleTargetPage: Int?
+    /// PA4 根因修复: beginGesture 打断在途 settle 时暂存的被打断目标页。
+    /// 新手势未锁定水平(垂直/微动)而走 finishTrackingWithoutSettle 时, 用它
+    /// 重启 settle 回到原目标, 防止停在页面中间。
+    private var interruptedSettleTarget: Int?
 
     private var displayLink: CADisplayLink?
     private var displayLinkTarget: DisplayLinkTarget?
@@ -55,18 +67,36 @@ final class PagingInteractionController {
             guard !isEnabled else { return }
             animator.cancel()
             phase = .idle
+            interruptedSettleTarget = nil
+            settleTargetPage = nil
             stopDisplayLinkIfIdle()
+            trace("disable isEnabled=false")
         }
     }
 
     /// 诊断/测试: display link 当前是否活动(§C4 生命周期验证)。
     var isDisplayLinkActive: Bool { displayLink != nil }
 
+    /// PA4 探针: 当前 phase 描述(idle/tracking/settling)。
+    var phaseDescription: String { "\(phase)" }
+
+    /// PA4 探针: 最后一次实际写入的 clip offset。
+    var currentAppliedOffset: CGFloat { lastAppliedOffset }
+
+    /// PA4 测试/诊断观察: 当前 settle 目标页。
+    var settleTargetPageForTest: Int? { settleTargetPage }
+
+    /// PA4 测试/诊断观察: 被打断 settle 目标页。
+    var interruptedSettleTargetForTest: Int? { interruptedSettleTarget }
+
     /// 显式生命周期收尾；可安全重复调用。
     func shutdown() {
         animator.cancel()
         phase = .idle
+        interruptedSettleTarget = nil
+        settleTargetPage = nil
         stopDisplayLink()
+        trace("shutdown")
     }
 
     /// 创建 DisplayLink 所绑定的视图(macOS 14+ NSView.displayLink)。
@@ -189,8 +219,28 @@ final class PagingInteractionController {
 
     // MARK: - 事件入口
 
+    /// PA4 trace 辅助: 汇总当前状态一行(调用方负责拼事件信息)。
+    private func trace(_ detail: String) {
+        guard traceEnabled else { return }
+        let offset = onReadCurrentOffset()
+        let pageCount = onReadPageCount()
+        let pageWidth = onReadPageWidth()
+        PagingTraceLog.record(
+            "paging \(detail) phase=\(phase) base=\(Int(baseOffset)) "
+                + "desired=\(Int(latestDesiredOffset)) clip=\(Int(offset)) "
+                + "settleTarget=\(settleTargetPage.map(String.init) ?? "-") "
+                + "interrupted=\(interruptedSettleTarget.map(String.init) ?? "-") "
+                + "animatorTarget=\(animator.currentTarget.map { Int($0) }.map(String.init) ?? "-") "
+                + "link=\(isDisplayLinkActive ? 1 : 0) pageWidth=\(Int(pageWidth)) pageCount=\(pageCount)"
+        )
+    }
+
     /// 处理 scrollWheel 事件。返回 true = 已处理(不再交给系统滚动)。
     func handleWheel(_ event: NSEvent) -> Bool {
+        trace(
+            "event phase=\(event.phase) momentum=\(event.momentumPhase) "
+                + "dx=\(Int(event.scrollingDeltaX)) dy=\(Int(event.scrollingDeltaY))"
+        )
         guard isEnabled else { return false }
 
         // momentum: 全拦截, 0 位移 0 snap 0 重结算(§20);
@@ -242,6 +292,11 @@ final class PagingInteractionController {
             // 打断旧 settle: 从当前实际位置重新跟手, 视觉 discontinuity ≈ 0(§29)
             animator.cancel()
             interruptionCount += 1
+            // PA4 根因修复: 记录被打断 settle 的目标页。若新手势从未锁定水平
+            // 位移(垂直/微动), endGesture 走 finishTrackingWithoutSettle 时
+            // 据此重启 settle, 避免停在中间偏移。
+            interruptedSettleTarget = settleTargetPage
+            trace("begin interruptSettle target=\(settleTargetPage.map(String.init) ?? "-")")
             // E13: 被打断的 settle 也是一次手势结束, 收掉其缓冲。
             flushTelemetry(phase: "settling")
         }
@@ -310,6 +365,7 @@ final class PagingInteractionController {
             displacement: displacement,
             releaseVelocity: -offsetVelocity
         )
+        trace("end horizontal displacement=\(Int(displacement)) target=\(targetPage)")
         startSettle(toPage: targetPage, fromOffset: onReadCurrentOffset(), velocity: offsetVelocity)
     }
 
@@ -324,10 +380,15 @@ final class PagingInteractionController {
             target: targetOffset,
             velocity: velocity
         )
+        // PA4: 记录本次 settle 目标(重 clamp 后); 新 settle 即新意图,
+        // 清除被打断目标(重启 settle / 正常手势都走这里)。
+        settleTargetPage = targetPage
+        interruptedSettleTarget = nil
         settleCount += 1
         settleStartTime = ProcessInfo.processInfo.systemUptime
         phase = .settling
         ensureDisplayLink()
+        trace("settleStart target=\(targetPage) start=\(Int(fromOffset ?? onReadCurrentOffset())) v=\(Int(velocity))")
     }
 
     /// 立即(无动画)跳到某页, 并停交互(初始化 / 测试)。
@@ -335,29 +396,47 @@ final class PagingInteractionController {
         animator.cancel()
         stopDisplayLink()
         phase = .idle
+        // PA4: jump 是权威目标, 清掉任何待重启目标。
+        interruptedSettleTarget = nil
+        settleTargetPage = nil
         let pageWidth = onReadPageWidth()
         let pageCount = onReadPageCount()
         let targetPage = min(max(0, page), max(0, pageCount - 1))
         let target = CGFloat(targetPage) * pageWidth
         // jump 也必须经过统一写入路径, 禁止绕过 clamp/计数直接调用 onScroll。
         applyScroll(target, allowSkip: false)
+        trace("jumpTo target=\(targetPage)")
     }
 
     private func finishSettle() {
         lastSettleDuration = ProcessInfo.processInfo.systemUptime - settleStartTime
+        settleTargetPage = nil
         // E13: settle 收敛 = 手势结束, 收掉本手势缓冲(phase 置 idle 前记录)。
         flushTelemetry(phase: "settling")
+        trace("settleEnd clip=\(Int(onReadCurrentOffset()))")
         phase = .idle
         stopDisplayLinkIfIdle()
     }
 
     private func finishTrackingWithoutSettle() {
+        // PA4 根因修复: 新手势未锁定水平位移就结束时, 若它打断了在途 settle,
+        // 重启 settle 回到被打断的目标(重 clamp), 而不是停在中间偏移。
+        // 覆盖两条路径: 纯垂直手势 + 零位移水平手势(axisLock 水平但 displacement == 0)。
+        if let target = interruptedSettleTarget {
+            trace("finishWithoutSettle resumeSettle target=\(target)")
+            axisLock.ended()
+            velocity.reset()
+            displacement = 0
+            startSettle(toPage: target)
+            return
+        }
         phase = .idle
         axisLock.ended()
         velocity.reset()
         displacement = 0
         // E13: 无 settle 的手势结束, 收掉 tracking 段缓冲。
         flushTelemetry(phase: "tracking")
+        trace("finishWithoutSettle idle")
         stopDisplayLinkIfIdle()
     }
 
@@ -374,6 +453,7 @@ final class PagingInteractionController {
         displayLinkTarget = target
         link.add(to: .main, forMode: .common)
         displayLink = link
+        trace("linkStart")
     }
 
     private func stopDisplayLinkIfIdle() {
@@ -382,9 +462,13 @@ final class PagingInteractionController {
     }
 
     private func stopDisplayLink() {
+        let wasActive = displayLink != nil
         displayLink?.invalidate()
         displayLink = nil
         displayLinkTarget = nil
+        if wasActive {
+            trace("linkStop")
+        }
     }
 
     private func displayTick() {

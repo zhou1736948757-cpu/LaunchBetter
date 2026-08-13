@@ -69,6 +69,17 @@ enum DiagnosticRunner {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
                 PagingProbe.run(container: container)
             }
+        } else if CommandLine.arguments.contains("--pagingeventtrace") {
+            // PA4: 逐事件 trace(写 /tmp/lb-paging-eventtrace.log; PagingTraceLog
+            // 开关在 GridViewController.setupPagingController 经 flag 联动开启)。
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                PagingEventTraceProbe.run(container: container)
+            }
+        } else if CommandLine.arguments.contains("--pagingstressprobe") {
+            // PA4: Library↔Page1 500 轮压力探针(不变式断言)。
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                PagingStressProbe.run(container: container)
+            }
         } else if CommandLine.arguments.contains("--pagingscrollprobe") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
                 PagingScrollProbe.run(container: container)

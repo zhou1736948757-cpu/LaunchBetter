@@ -9,12 +9,12 @@ struct AppLibraryLayoutTests {
 
     // MARK: - Metrics: 列数与 card width 确定性
 
-    @Test("metrics: 800pt width yields 2 bounded columns inside 24pt edge insets")
+    @Test("metrics: 800pt width yields 2 bounded columns inside 30pt edge insets")
     func metricsAt800() {
         let metrics = AppLibraryLayoutMetrics.metrics(availableWidth: 800)
         #expect(metrics.columnCount == 2)
-        #expect(metrics.cardWidth == 368)
-        #expect(metrics.contentWidth == 752)
+        #expect(metrics.cardWidth == 362)
+        #expect(metrics.contentWidth == 740)
         #expect(metrics.contentWidth <= 800 - 2 * AppLibraryLayoutMetrics.defaultHorizontalInset)
         #expect(metrics.cardWidth <= AppLibraryLayoutMetrics.maxCardWidth)
         #expect(metrics.cardWidth >= AppLibraryLayoutMetrics.minCardWidth)
@@ -24,17 +24,17 @@ struct AppLibraryLayoutTests {
     func metricsAt1200() {
         let metrics = AppLibraryLayoutMetrics.metrics(availableWidth: 1200)
         #expect(metrics.columnCount == 3)
-        #expect(almostEqual(metrics.cardWidth, 373.333, tolerance: 0.01))
-        #expect(almostEqual(metrics.contentWidth, 1152, tolerance: 0.01))
+        #expect(almostEqual(metrics.cardWidth, 369.333, tolerance: 0.01))
+        #expect(almostEqual(metrics.contentWidth, 1140, tolerance: 0.01))
         #expect(metrics.contentWidth <= 1200 - 2 * AppLibraryLayoutMetrics.defaultHorizontalInset)
     }
 
-    @Test("metrics: 1600pt width yields 4 bounded columns")
+    @Test("metrics: 1600pt width yields 4 bounded columns capped at max width")
     func metricsAt1600() {
         let metrics = AppLibraryLayoutMetrics.metrics(availableWidth: 1600)
         #expect(metrics.columnCount == 4)
-        #expect(metrics.cardWidth == 376)
-        #expect(metrics.contentWidth == 1552)
+        #expect(metrics.cardWidth == AppLibraryLayoutMetrics.maxCardWidth)
+        #expect(metrics.contentWidth == 1528)
         #expect(metrics.contentWidth <= 1600 - 2 * AppLibraryLayoutMetrics.defaultHorizontalInset)
     }
 
@@ -49,17 +49,19 @@ struct AppLibraryLayoutTests {
         )
     }
 
-    @Test("metrics: mid-wide width clamps multi-column card width to max for square cards")
-    func metricsClampsWidthToMax() {
+    @Test("metrics: 1470pt width yields 4 columns with square bounded cards")
+    func metricsAt1470() {
         let metrics = AppLibraryLayoutMetrics.metrics(availableWidth: 1470)
-        #expect(metrics.columnCount == 3)
-        #expect(metrics.cardWidth == AppLibraryLayoutMetrics.maxCardWidth)
-        #expect(metrics.contentWidth == 3 * 430 + 2 * AppLibraryLayoutMetrics.defaultSpacing)
+        #expect(metrics.columnCount == 4)
+        #expect(metrics.cardWidth == 340.5)
+        #expect(metrics.contentWidth == 1410)
+        #expect(metrics.contentWidth <= 1470 - 2 * AppLibraryLayoutMetrics.defaultHorizontalInset)
+        #expect(metrics.cardWidth <= AppLibraryLayoutMetrics.maxCardWidth)
         let height = AppLibraryLayoutMetrics.cardHeight(forWidth: metrics.cardWidth)
         #expect(height == metrics.cardWidth)
     }
 
-    @Test("metrics: extreme narrow widths stay finite and non-negative")
+    @Test("metrics: extreme narrow widths stay finite and non-negative with 1 column")
     func metricsExtremeNarrow() {
         for width: CGFloat in [-10, 0, 100] {
             let metrics = AppLibraryLayoutMetrics.metrics(availableWidth: width)
@@ -67,7 +69,7 @@ struct AppLibraryLayoutTests {
             #expect(metrics.cardWidth >= 0)
             #expect(metrics.contentWidth.isFinite)
             #expect(metrics.contentWidth >= 0)
-            #expect(metrics.columnCount >= 1)
+            #expect(metrics.columnCount == 1)
         }
         let nan = AppLibraryLayoutMetrics.metrics(availableWidth: .nan)
         #expect(nan.columnCount == 1)
@@ -243,7 +245,8 @@ struct AppLibraryLayoutTests {
         let viewportHeight: CGFloat = 956
 
         let metrics = AppLibraryLayoutMetrics.metrics(availableWidth: 1470)
-        #expect(metrics.cardWidth == AppLibraryLayoutMetrics.maxCardWidth)
+        #expect(metrics.columnCount == 4)
+        #expect(metrics.cardWidth == 340.5)
 
         let contentHeight = harness.layout.collectionViewContentSize.height
         // contentSize 必须为底部保留带预留空间。

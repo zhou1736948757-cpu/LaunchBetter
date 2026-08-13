@@ -1430,6 +1430,27 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         gridViewController?.pagingProbeFeed(event)
     }
 
+    /// PA4 探针: 沿真实 Library 轴仲裁/路由链路驱动 precise 手势(显式 phase)。
+    @discardableResult
+    public func libraryProbeFeed(phase: NSEvent.Phase, event: NSEvent) -> Bool {
+        gridViewController?.libraryProbeFeed(phase: phase, event: event) ?? false
+    }
+
+    /// PA4 探针: 沿真实 Library momentum 路由驱动 momentum 事件。
+    public func libraryProbeFeedMomentum(event: NSEvent) {
+        gridViewController?.libraryProbeFeedMomentum(event: event)
+    }
+
+    /// PA4 探针: paging phase 描述(idle/tracking/settling)。
+    public func pagingProbePhase() -> String {
+        gridViewController?.pagingProbePhase() ?? "nil"
+    }
+
+    /// PA4 探针: display link 是否活动。
+    public func pagingProbeDisplayLinkActive() -> Bool {
+        gridViewController?.pagingProbeDisplayLinkActive() ?? false
+    }
+
     public func pagingProbeGesture(deltaXs: [CGFloat]) {
         gridViewController?.pagingProbeGesture(deltaXs: deltaXs)
     }

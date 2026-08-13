@@ -162,3 +162,19 @@ public protocol AppLibraryDataProviding: AnyObject {
     /// 最新 App Library 模型(Store 内存 cache,构建纯内存)。
     func appLibraryModel() -> AppLibraryModel
 }
+
+/// App Library 手动分类覆盖能力(MainActor,PA2)。
+///
+/// 独立于 `AppLibraryDataProviding`(读模型): 写覆盖不触碰 LayoutStore /
+/// AppRecord.categoryIdentifier;实现方为 LauncherStore。测试替身按需实现。
+@MainActor
+public protocol AppLibraryCategoryOverriding: AnyObject {
+    /// 当前生效的手动覆盖表(menu 勾选态与"Automatic Classification"判定用)。
+    var categoryOverrides: [AppID: AppLibraryCategory] { get }
+
+    /// 设置手动分类覆盖(异步: 复用 metadata snapshot → rebuild model → notify 链路)。
+    func setCategoryOverride(appID: AppID, category: AppLibraryCategory) async
+
+    /// 移除手动分类覆盖, 恢复自动分类(异步)。
+    func clearCategoryOverride(appID: AppID) async
+}

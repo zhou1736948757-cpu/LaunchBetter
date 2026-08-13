@@ -210,6 +210,113 @@ struct AppLibraryMetadataStoreTests {
         #expect(loaded.usage[idA] == AppLibraryUsageRecord(launchCount: 1, lastLaunchedAt: t0))
     }
 
+    // MARK: - PA2 手动分类覆盖
+
+    @Test("setCategoryOverride: 写入并保留 usage/firstSeen; 同值幂等")
+    func setCategoryOverrideStoresAndPreserves() async throws {
+        let dir = try tempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = AppLibraryMetadataStore(directory: dir)
+        _ = await store.start()
+        _ = await store.bootstrap(existingAppIDs: [idA], now: t0)
+        _ = await store.recordLaunch(idA, at: t1)
+        let before = await store.snapshot()
+
+        let after = await store.setCategoryOverride(appID: idA, category: .social)
+        #expect(after.categoryOverrides == [idA: .social])
+        #expect(after.usage == before.usage)
+        #expect(after.firstSeen == before.firstSeen)
+        #expect(after.isBootstrapped == before.isBootstrapped)
+        #expect(after.schemaVersion == AppLibraryMetadataSnapshot.currentSchemaVersion)
+
+        // 同值 → no-op(快照相等)
+        let again = await store.setCategoryOverride(appID: idA, category: .social)
+        #expect(again == after)
+    }
+
+    @Test("clearCategoryOverride: 移除覆盖并保留其它字段; 无覆盖时 no-op")
+    func clearCategoryOverrideRemoves() async throws {
+        let dir = try tempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = AppLibraryMetadataStore(directory: dir)
+        _ = await store.start()
+        _ = await store.setCategoryOverride(appID: idA, category: .games)
+        _ = await store.setCategoryOverride(appID: idB, category: .social)
+
+        let cleared = await store.clearCategoryOverride(appID: idA)
+        #expect(cleared.categoryOverrides == [idB: .social])
+        #expect(cleared.usage.isEmpty)
+
+        let noop = await store.clearCategoryOverride(appID: idC)
+        #expect(noop == cleared)
+    }
+
+    @Test("覆盖持久化 round-trip: set/clear 后重启加载一致")
+    func overridesPersistAcrossRestart() async throws {
+        let dir = try tempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = AppLibraryMetadataStore(directory: dir)
+        _ = await store.start()
+        _ = await store.recordDiscovered(appIDs: [idA, idB], now: t0)
+        _ = await store.recordLaunch(idA, at: t1)
+        _ = await store.setCategoryOverride(appID: idA, category: .social)
+        _ = await store.setCategoryOverride(appID: idB, category: .developer)
+        await store.flush()
+
+        let restored = AppLibraryMetadataStore(directory: dir)
+        let loaded = await restored.start()
+        #expect(loaded.categoryOverrides == [idA: .social, idB: .developer])
+        #expect(loaded.usage[idA] == AppLibraryUsageRecord(launchCount: 1, lastLaunchedAt: t1))
+        // 未 bootstrap 的发现被 baseline 化(窗口边界之外), 与既有语义一致。
+        #expect(loaded.firstSeen[idB] == t0.addingTimeInterval(-AppLibraryTuning.recentlyAddedWindow))
+
+        // clear 后再次持久化 → 重启后移除生效
+        _ = await restored.clearCategoryOverride(appID: idA)
+        await restored.flush()
+        let restoredAgain = AppLibraryMetadataStore(directory: dir)
+        let loadedAgain = await restoredAgain.start()
+        #expect(loadedAgain.categoryOverrides == [idB: .developer])
+    }
+
+    @Test("bootstrap/recordDiscovered/recordLaunch 全部保留 categoryOverrides")
+    func snapshotMutationsPreserveOverrides() async throws {
+        let dir = try tempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = AppLibraryMetadataStore(directory: dir)
+        _ = await store.start()
+        _ = await store.setCategoryOverride(appID: idA, category: .social)
+
+        _ = await store.bootstrap(existingAppIDs: [idA, idB], now: t0)
+        #expect(await store.snapshot().categoryOverrides == [idA: .social])
+
+        _ = await store.recordDiscovered(appIDs: [idC], now: t1)
+        #expect(await store.snapshot().categoryOverrides == [idA: .social])
+
+        _ = await store.recordLaunch(idA, at: t2)
+        #expect(await store.snapshot().categoryOverrides == [idA: .social])
+    }
+
+    @Test("旧 schema 文件(无 categoryOverrides)迁移 → [], usage/firstSeen 保留")
+    func legacyFileMigratesToEmptyOverrides() async throws {
+        let dir = try tempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("AppLibraryMetadata.json")
+        // 自定义 key 字典在 JSON 中是交替数组形式(与既有持久化格式一致);
+        // Date 按 JSONDecoder 默认策略解码为 timeIntervalSinceReferenceDate。
+        let legacy = """
+        {"schemaVersion": 1, "usage": ["\(idA.rawValue)", {"launchCount": 2, "lastLaunchedAt": \(t1.timeIntervalSinceReferenceDate)}], "firstSeen": ["\(idB.rawValue)", \(t2.timeIntervalSinceReferenceDate)], "isBootstrapped": true}
+        """
+        try DurableFile.save(Data(legacy.utf8), to: file)
+
+        let store = AppLibraryMetadataStore(directory: dir)
+        let loaded = await store.start()
+        #expect(loaded.schemaVersion == 1)
+        #expect(loaded.categoryOverrides.isEmpty)
+        #expect(loaded.usage[idA] == AppLibraryUsageRecord(launchCount: 2, lastLaunchedAt: t1))
+        #expect(loaded.firstSeen[idB] == t2)
+        #expect(loaded.isBootstrapped)
+    }
+
     private func makeRecord(_ id: AppID) -> AppRecord {
         AppRecord(
             id: id,

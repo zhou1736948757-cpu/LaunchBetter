@@ -80,6 +80,8 @@ public enum L10n {
         case categoryBusiness
         case categoryFinance
         case categoryOther
+        case moveToCategory
+        case automaticClassification
     }
 
     nonisolated(unsafe) private static let zhHans: [Key: String] = [
@@ -127,6 +129,8 @@ public enum L10n {
         .categoryBusiness: "商务",
         .categoryFinance: "财务",
         .categoryOther: "其他",
+        .moveToCategory: "移到分类",
+        .automaticClassification: "自动分类",
     ]
 
     nonisolated(unsafe) private static let zhHant: [Key: String] = [
@@ -174,6 +178,8 @@ public enum L10n {
         .categoryBusiness: "商務",
         .categoryFinance: "財務",
         .categoryOther: "其他",
+        .moveToCategory: "移到分類",
+        .automaticClassification: "自動分類",
     ]
 
     nonisolated(unsafe) private static let english: [Key: String] = [
@@ -221,6 +227,8 @@ public enum L10n {
         .categoryBusiness: "Business",
         .categoryFinance: "Finance",
         .categoryOther: "Other",
+        .moveToCategory: "Move to Category",
+        .automaticClassification: "Automatic Classification",
     ]
 
     nonisolated(unsafe) private static var language: AppLanguage = .system

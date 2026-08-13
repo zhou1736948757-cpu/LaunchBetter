@@ -401,6 +401,11 @@ final class GridViewController: NSViewController {
         hostItem.onAppLibraryHorizontalScroll = { [weak self] event in
             self?.handleAppLibraryHorizontalScroll(event) ?? false
         }
+        // PA3: Library 真空白点击 → 复用既有 onClickBlank(已 → window hide),
+        // 不新建第二套 hide 实现。
+        hostItem.onBlankClick = { [weak self] in
+            self?.onClickBlank?()
+        }
     }
 
     /// 配置 App Library host cell: 挂载 Library 控制器视图(只挂一次)。
@@ -414,6 +419,10 @@ final class GridViewController: NSViewController {
         guard let controller = hostItem.makeController() else {
             cell.view.subviews.forEach { $0.removeFromSuperview() }
             return
+        }
+        // PA4: trace 开启时联动 Library 滚动容器 trace(挂载时统一开启)。
+        if PagingTraceLog.enabled {
+            controller.pagingTraceEnabled = true
         }
         guard controller.view.superview !== cell.view else { return }
         cell.view.subviews.forEach { $0.removeFromSuperview() }
@@ -505,6 +514,10 @@ final class GridViewController: NSViewController {
                 // revision must still rebuild labels and accessibility strings.
                 collectionView.reloadData()
             }
+            // App Library live 刷新(PA2): 数据变化时同步 Library 模型
+            // (host 已 attach 且 session active 才生效; 未 attach 由
+            // makeController 重新固定, 不 endSession 重建)。
+            hostItem.refreshModel()
         }
     }
 
@@ -1090,6 +1103,12 @@ final class GridViewController: NSViewController {
         if CommandLine.arguments.contains("--pagingtelemetry") {
             paging.telemetryEnabled = true
         }
+        // PA4: --pagingeventtrace 逐事件 trace(分页引擎侧; Library 滚动容器
+        // 侧在 configureHost 挂载控制器时经 PagingTraceLog.enabled 联动开启)。
+        if CommandLine.arguments.contains("--pagingeventtrace") {
+            PagingTraceLog.enabled = true
+            paging.traceEnabled = true
+        }
     }
 
     override func scrollWheel(with event: NSEvent) {
@@ -1176,6 +1195,28 @@ final class GridViewController: NSViewController {
             paging.resetCounters()
         }
         _ = paging.handleWheel(event)
+    }
+
+    /// PA4 探针: 沿真实 Library 轴仲裁/路由链路驱动 precise 手势
+    /// (显式 phase; 合成事件 phase 往返不可靠)。返回是否水平交付外层分页。
+    @discardableResult
+    func libraryProbeFeed(phase: NSEvent.Phase, event: NSEvent) -> Bool {
+        libraryControllerForDiag?.probeFeed(phase: phase, event: event) ?? false
+    }
+
+    /// PA4 探针: 沿真实 Library momentum 路由驱动 momentum 事件。
+    func libraryProbeFeedMomentum(event: NSEvent) {
+        libraryControllerForDiag?.probeFeedMomentum(event: event)
+    }
+
+    /// PA4 探针: paging phase 描述。
+    func pagingProbePhase() -> String {
+        paging.phaseDescription
+    }
+
+    /// PA4 探针: display link 是否活动。
+    func pagingProbeDisplayLinkActive() -> Bool {
+        paging.isDisplayLinkActive
     }
 
     func pagingProbeGesture(deltaXs: [CGFloat]) {

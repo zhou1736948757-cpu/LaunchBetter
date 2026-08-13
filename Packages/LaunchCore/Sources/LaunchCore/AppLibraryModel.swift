@@ -29,6 +29,15 @@ public enum AppLibraryCategoryClassifier {
         return mapping[key] ?? .other
     }
 
+    /// bundle-ID 校正表(极小, 证据充分的语义错误才允许加入)。
+    ///
+    /// QQ 自报 `developer-tools` 语义错误(实为即时通讯);分类器
+    /// `developer-tools → .developer` 正确, 是自报数据错误 → 按 bundle 校正到 `.social`。
+    /// 只允许此最小表;禁止名字启发式、无网络/AI。
+    public static let bundleCategoryCorrections: [String: AppLibraryCategory] = [
+        "com.tencent.qq": .social,
+    ]
+
     /// 原始 `LSApplicationCategoryType` → 归一分类(小写规范键)。
     static let mapping: [String: AppLibraryCategory] = [
         "public.app-category.productivity": .productivity,
@@ -70,12 +79,15 @@ public struct AppLibraryUsageRecord: Codable, Equatable, Sendable {
     }
 }
 
-/// App Library 元数据快照(usage / firstSeen / bootstrap marker)。
+/// App Library 元数据快照(usage / firstSeen / bootstrap marker / category overrides)。
 ///
 /// 独立于 Layout;属于持久化用户数据,必须带 schemaVersion。
 /// 迁移约定: 缺字段按默认值解码,不抛错、不销毁旧数据。
+///
+/// schema v2(PA2): 新增 `categoryOverrides`(手动分类覆盖)。旧文件缺该字段 →
+/// `decodeIfPresent ?? [:]`,不抛错、不销毁 usage/firstSeen。
 public struct AppLibraryMetadataSnapshot: Codable, Equatable, Sendable {
-    public static let currentSchemaVersion = 1
+    public static let currentSchemaVersion = 2
 
     public let schemaVersion: Int
 
@@ -90,15 +102,21 @@ public struct AppLibraryMetadataSnapshot: Codable, Equatable, Sendable {
     /// 仅 bootstrap 完成后新出现/更新的 firstSeen 才算 Recently Added 候选。
     public let isBootstrapped: Bool
 
+    /// AppID → 手动分类覆盖(用户显式指定;覆盖优先于 bundle 校正与分类器)。
+    /// 覆盖不进入 LayoutStore、不改 AppRecord.categoryIdentifier。
+    public let categoryOverrides: [AppID: AppLibraryCategory]
+
     public init(
         usage: [AppID: AppLibraryUsageRecord] = [:],
         firstSeen: [AppID: Date] = [:],
-        isBootstrapped: Bool = false
+        isBootstrapped: Bool = false,
+        categoryOverrides: [AppID: AppLibraryCategory] = [:]
     ) {
         self.schemaVersion = Self.currentSchemaVersion
         self.usage = usage
         self.firstSeen = firstSeen
         self.isBootstrapped = isBootstrapped
+        self.categoryOverrides = categoryOverrides
     }
 
     public init(from decoder: Decoder) throws {
@@ -107,6 +125,9 @@ public struct AppLibraryMetadataSnapshot: Codable, Equatable, Sendable {
         usage = try container.decodeIfPresent([AppID: AppLibraryUsageRecord].self, forKey: .usage) ?? [:]
         firstSeen = try container.decodeIfPresent([AppID: Date].self, forKey: .firstSeen) ?? [:]
         isBootstrapped = try container.decodeIfPresent(Bool.self, forKey: .isBootstrapped) ?? false
+        categoryOverrides = try container.decodeIfPresent(
+            [AppID: AppLibraryCategory].self, forKey: .categoryOverrides
+        ) ?? [:]
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -114,6 +135,7 @@ public struct AppLibraryMetadataSnapshot: Codable, Equatable, Sendable {
         case usage
         case firstSeen
         case isBootstrapped
+        case categoryOverrides
     }
 }
 
@@ -237,6 +259,8 @@ public struct AppLibraryModelBuilder: Sendable {
         public let language: AppLanguage
         public let systemPreferredLanguages: [String]
         public let metadata: AppLibraryMetadataSnapshot?
+        /// 手动分类覆盖(用户显式指定;优先级最高, 覆盖 bundle 校正与分类器)。
+        public let categoryOverrides: [AppID: AppLibraryCategory]
         /// 布局第 1 页可见 app IDs(cold start Suggestions fallback,调用方从 DisplayModel 派生)。
         public let page1FallbackAppIDs: [AppID]
         public let now: Date
@@ -248,6 +272,7 @@ public struct AppLibraryModelBuilder: Sendable {
             language: AppLanguage = .system,
             systemPreferredLanguages: [String] = [],
             metadata: AppLibraryMetadataSnapshot? = nil,
+            categoryOverrides: [AppID: AppLibraryCategory] = [:],
             page1FallbackAppIDs: [AppID] = [],
             now: Date = Date()
         ) {
@@ -257,6 +282,7 @@ public struct AppLibraryModelBuilder: Sendable {
             self.language = language
             self.systemPreferredLanguages = systemPreferredLanguages
             self.metadata = metadata
+            self.categoryOverrides = categoryOverrides
             self.page1FallbackAppIDs = page1FallbackAppIDs
             self.now = now
         }
@@ -289,16 +315,23 @@ public struct AppLibraryModelBuilder: Sendable {
         }
 
         var grouped: [AppLibraryCategory: [ResolvedApp]] = [:]
+        var hasManualOverride: [AppLibraryCategory: Bool] = [:]
         for record in visible {
             let resolved = resolve(record, inputs: inputs)
             grouped[resolved.app.category, default: []].append(resolved)
+            if inputs.categoryOverrides[record.id] != nil {
+                hasManualOverride[resolved.app.category, default: false] = true
+            }
         }
         for category in AppLibraryCategory.allCases {
             grouped[category]?.sort(by: isHigherRank)
         }
 
         // 单 app 普通分类合并到 Other(固定规则,与 Other 是否为空无关)。
+        // 含手动覆盖 app 的分类必须保留为独立卡,不得因稀疏被合并掉
+        // (覆盖进 Other 的 app 保持可见 —— Other 恒不参与合并)。
         for category in AppLibraryCategory.allCases where category != .other {
+            guard hasManualOverride[category] != true else { continue }
             guard let group = grouped[category],
                   group.count < AppLibraryTuning.categoryCardMinimumAppCount else { continue }
             grouped[.other, default: []].append(contentsOf: group)
@@ -319,8 +352,7 @@ public struct AppLibraryModelBuilder: Sendable {
             for id in inputs.page1FallbackAppIDs {
                 guard suggestions.count < AppLibraryTuning.suggestionsCardLimit else { break }
                 guard !picked.contains(id) else { continue }
-                guard let record = inputs.catalog.app(with: id),
-                      !inputs.hiddenAppIDs.contains(id) else { continue }
+                guard inputs.catalog.app(with: id) != nil, !inputs.hiddenAppIDs.contains(id) else { continue }
                 suggestions.append(id)
                 picked.insert(id)
             }
@@ -357,7 +389,11 @@ public struct AppLibraryModelBuilder: Sendable {
         var categoryDetail: [AppLibraryCategory: [AppID]] = [:]
         for category in AppLibraryCategory.allCases {
             guard let group = grouped[category], !group.isEmpty else { continue }
-            if category != .other && group.count < AppLibraryTuning.categoryCardMinimumAppCount {
+            // 合并规则(A11): 普通稀疏分类(无手动覆盖)已被并入 Other;
+            // 含手动覆盖的分类必须保留为独立卡(即使 < 2 个 app)。
+            if category != .other,
+               group.count < AppLibraryTuning.categoryCardMinimumAppCount,
+               hasManualOverride[category] != true {
                 continue
             }
             let ids = group.map(\.app.id)
@@ -393,10 +429,23 @@ public struct AppLibraryModelBuilder: Sendable {
                     language: inputs.language,
                     systemPreferredLanguages: inputs.systemPreferredLanguages
                 ),
-                category: AppLibraryCategoryClassifier.classify(record.categoryIdentifier)
+                category: effectiveCategory(for: record, inputs: inputs)
             ),
             usage: inputs.metadata?.usage[record.id]
         )
+    }
+
+    /// 生效分类优先级(PA2): 手动覆盖 > bundle 校正 > 分类器。
+    /// 覆盖/校正只影响展示分类, 不写 Layout、不改 AppRecord.categoryIdentifier。
+    private static func effectiveCategory(for record: AppRecord, inputs: Inputs) -> AppLibraryCategory {
+        if let override = inputs.categoryOverrides[record.id] {
+            return override
+        }
+        if let bundleID = record.bundleIdentifier,
+           let corrected = AppLibraryCategoryClassifier.bundleCategoryCorrections[bundleID] {
+            return corrected
+        }
+        return AppLibraryCategoryClassifier.classify(record.categoryIdentifier)
     }
 
     /// 确定性排名: lhs 是否排在 rhs 之前(更高 rank)。

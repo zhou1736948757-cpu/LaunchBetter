@@ -30,7 +30,7 @@ private final class LayoutMutationCompletionGate {
 /// 变更经 LayoutStore 应用并持久化,缓存同步后触发 onDataChange。
 /// 禁止: 每帧状态(拖拽/动画)进入本存储(§60)。
 @MainActor
-public final class LauncherStore: LauncherStoring, LayoutMutationCompleting, SettingsHandling, AppLibraryDataProviding {
+public final class LauncherStore: LauncherStoring, LayoutMutationCompleting, SettingsHandling, AppLibraryDataProviding, AppLibraryCategoryOverriding {
     public var onDataChange: (() -> Void)?
     private var dataObservers: [UUID: () -> Void] = [:]
 
@@ -269,6 +269,7 @@ public final class LauncherStore: LauncherStoring, LayoutMutationCompleting, Set
                 language: config.language,
                 systemPreferredLanguages: Locale.preferredLanguages,
                 metadata: metadata,
+                categoryOverrides: metadata.categoryOverrides,
                 page1FallbackAppIDs: page1Fallback,
                 now: Date()
             )
@@ -299,6 +300,28 @@ public final class LauncherStore: LauncherStoring, LayoutMutationCompleting, Set
 
     public func appLibraryModel() -> AppLibraryModel {
         libraryModelCache
+    }
+
+    // MARK: - AppLibraryCategoryOverriding (PA2)
+
+    public var categoryOverrides: [AppID: AppLibraryCategory] {
+        metadataSnapshot.categoryOverrides
+    }
+
+    /// 设置手动分类覆盖: 经 metadata actor 持久化 → 复用
+    /// `applyMetadataSnapshot → rebuildLibraryModel → notify` 链路。
+    /// 不写 LayoutStore、不重启、不重扫、无 Info.plist IO。
+    public func setCategoryOverride(appID: AppID, category: AppLibraryCategory) async {
+        applyMetadataSnapshot(
+            await metadataStore.setCategoryOverride(appID: appID, category: category)
+        )
+    }
+
+    /// 移除手动分类覆盖(恢复自动分类);链路与 set 相同。
+    public func clearCategoryOverride(appID: AppID) async {
+        applyMetadataSnapshot(
+            await metadataStore.clearCategoryOverride(appID: appID)
+        )
     }
 
     // MARK: - LauncherStoring
