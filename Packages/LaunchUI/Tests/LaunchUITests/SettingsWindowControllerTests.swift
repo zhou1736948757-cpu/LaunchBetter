@@ -472,6 +472,32 @@ struct SettingsWindowControllerTests {
         #expect(textValues(in: contentView).contains("Blur Intensity"))
     }
 
+    @Test("every row's value control shares one value column across all form sections, in three languages")
+    func valueColumnSharedAcrossSectionsInThreeLanguages() throws {
+        for language in [AppLanguage.english, .simplifiedChinese, .traditionalChinese] {
+            try assertSharedValueColumn(language: language)
+        }
+    }
+
+    @Test("showLabels and hotkey checkboxes start exactly at the shared value column")
+    func checkboxesAlignToValueColumn() throws {
+        try assertControlAlignment(language: .simplifiedChinese)
+        try assertControlAlignment(language: .english)
+    }
+
+    @Test("hot corner popups, icon size, language, blur and search bar values share one value column")
+    func popupsAndSlidersShareValueColumn() throws {
+        try assertControlAlignment(language: .traditionalChinese)
+        try assertControlAlignment(language: .english)
+    }
+
+    @Test("three-language labels fit their column and no control is pushed outside the window")
+    func threeLanguageLabelsFitWithoutOverflow() throws {
+        for language in [AppLanguage.english, .simplifiedChinese, .traditionalChinese] {
+            try assertLabelsFitAndNoOverflow(language: language)
+        }
+    }
+
     @Test("English and Traditional Chinese refresh in place without losing state")
     func languageRefreshesInPlace() throws {
         let previousLanguage = L10n.currentLanguage
@@ -566,6 +592,157 @@ struct SettingsWindowControllerTests {
             duplicatePath, duplicatePath, "/Users/test/Apps",
         ])
         #expect(try table(identifier: "settings.sources", in: window).selectedRow == 1)
+    }
+
+    private func assertSharedValueColumn(language: AppLanguage) throws {
+        let previousLanguage = L10n.currentLanguage
+        L10n.configure(language: language)
+        defer { L10n.configure(language: previousLanguage) }
+
+        let controller = SettingsWindowController(
+            handler: SettingsHandlerStub(config: AppConfiguration(language: language))
+        )
+        let window = try #require(controller.window)
+        let contentView = try #require(window.contentView)
+        window.layoutIfNeeded()
+        contentView.layoutSubtreeIfNeeded()
+
+        let grids = descendants(of: NSGridView.self, in: contentView)
+        #expect(grids.count >= 6)
+        #expect(grids.allSatisfy { $0.numberOfColumns == 2 && $0.numberOfRows >= 1 })
+
+        let referenceWidth = try #require(grids.first?.column(at: 0).width)
+        for grid in grids {
+            #expect(abs(grid.column(at: 0).width - referenceWidth) < 0.5)
+        }
+
+        let valueXs = grids.flatMap { grid in
+            (0..<grid.numberOfRows).compactMap { row in
+                grid.cell(atColumnIndex: 1, rowIndex: row).contentView.map {
+                    contentView.convert($0.bounds, from: $0).minX
+                }
+            }
+        }
+        let referenceX = try #require(valueXs.first)
+        for x in valueXs {
+            #expect(abs(x - referenceX) < 0.5, "language=\(language) value x \(x) vs \(referenceX)")
+        }
+    }
+
+    private func assertLabelsFitAndNoOverflow(language: AppLanguage) throws {
+        let previousLanguage = L10n.currentLanguage
+        L10n.configure(language: language)
+        defer { L10n.configure(language: previousLanguage) }
+
+        let controller = SettingsWindowController(
+            handler: SettingsHandlerStub(config: AppConfiguration(language: language))
+        )
+        let window = try #require(controller.window)
+        let contentView = try #require(window.contentView)
+        window.layoutIfNeeded()
+        contentView.layoutSubtreeIfNeeded()
+
+        let grids = descendants(of: NSGridView.self, in: contentView)
+        #expect(!grids.isEmpty)
+        for grid in grids {
+            let labelColumnWidth = grid.column(at: 0).width
+            for row in 0..<grid.numberOfRows {
+                let label = try #require(
+                    grid.cell(atColumnIndex: 0, rowIndex: row).contentView as? NSTextField
+                )
+                let value = try #require(grid.cell(atColumnIndex: 1, rowIndex: row).contentView)
+                #expect(label.intrinsicContentSize.width <= labelColumnWidth + 0.5)
+                let labelFrame = contentView.convert(label.bounds, from: label)
+                let valueFrame = contentView.convert(value.bounds, from: value)
+                #expect(labelFrame.maxX <= valueFrame.minX + 0.5)
+                #expect(valueFrame.maxX <= contentView.bounds.maxX)
+                #expect(valueFrame.minX >= contentView.bounds.minX)
+            }
+        }
+    }
+
+    private func assertControlAlignment(language: AppLanguage) throws {
+        let previousLanguage = L10n.currentLanguage
+        L10n.configure(language: language)
+        defer { L10n.configure(language: previousLanguage) }
+
+        let controller = SettingsWindowController(
+            handler: SettingsHandlerStub(config: AppConfiguration(language: language))
+        )
+        let window = try #require(controller.window)
+        let contentView = try #require(window.contentView)
+        window.layoutIfNeeded()
+        contentView.layoutSubtreeIfNeeded()
+        let sharedX = try sharedValueX(in: contentView)
+
+        let showLabels = try #require(descendant(
+            of: NSButton.self,
+            identifier: "settings.showLabels",
+            in: contentView
+        ))
+        #expect(abs(minX(of: showLabels, in: contentView) - sharedX) < 0.5)
+        let hotkeyEnabled = try #require(descendant(
+            of: NSButton.self,
+            identifier: "settings.hotkeyEnabled",
+            in: contentView
+        ))
+        #expect(abs(minX(of: hotkeyEnabled, in: contentView) - sharedX) < 0.5)
+        let hotkeyPopup = try #require(descendant(
+            of: NSPopUpButton.self,
+            identifier: "settings.hotkey",
+            in: contentView
+        ))
+        #expect(minX(of: hotkeyPopup, in: contentView) > sharedX)
+        let iconSize = try #require(descendant(
+            of: NSPopUpButton.self,
+            identifier: "settings.iconSize",
+            in: contentView
+        ))
+        #expect(abs(minX(of: iconSize, in: contentView) - sharedX) < 0.5)
+        let languagePopup = try #require(descendant(
+            of: NSPopUpButton.self,
+            identifier: "settings.language",
+            in: contentView
+        ))
+        #expect(abs(minX(of: languagePopup, in: contentView) - sharedX) < 0.5)
+        for index in 0..<4 {
+            let corner = try #require(descendant(
+                of: NSPopUpButton.self,
+                identifier: "settings.hotCorner.\(index)",
+                in: contentView
+            ))
+            #expect(abs(minX(of: corner, in: contentView) - sharedX) < 0.5)
+        }
+        let blurSlider = try #require(descendant(
+            of: NSSlider.self,
+            identifier: "settings.blur",
+            in: contentView
+        ))
+        let blurValueStack = try #require(blurSlider.superview)
+        #expect(abs(minX(of: blurValueStack, in: contentView) - sharedX) < 0.5)
+        let searchSlider = try #require(descendant(
+            of: NSSlider.self,
+            identifier: "settings.searchBarSize",
+            in: contentView
+        ))
+        let searchValueStack = try #require(searchSlider.superview)
+        #expect(abs(minX(of: searchValueStack, in: contentView) - sharedX) < 0.5)
+    }
+
+    private func sharedValueX(in contentView: NSView) throws -> CGFloat {
+        let grids = descendants(of: NSGridView.self, in: contentView)
+        let xs = grids.flatMap { grid in
+            (0..<grid.numberOfRows).compactMap { row in
+                grid.cell(atColumnIndex: 1, rowIndex: row).contentView.map {
+                    contentView.convert($0.bounds, from: $0).minX
+                }
+            }
+        }
+        return try #require(xs.first)
+    }
+
+    private func minX(of view: NSView, in contentView: NSView) -> CGFloat {
+        contentView.convert(view.bounds, from: view).minX
     }
 
     private func selectLanguage(at index: Int, in window: NSWindow) throws {

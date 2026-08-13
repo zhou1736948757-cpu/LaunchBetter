@@ -459,11 +459,6 @@ public final class SettingsWindowController: NSWindowController {
         }
 
         let root = effect
-        let grid = NSGridView(views: [])
-        grid.rowSpacing = 8
-        grid.columnSpacing = 12
-        grid.translatesAutoresizingMaskIntoConstraints = false
-        root.addSubview(grid)
 
         // 网格
         columnsStepper = NSStepper()
@@ -486,6 +481,7 @@ public final class SettingsWindowController: NSWindowController {
         rowsRow.spacing = 8
 
         iconSizePopup = NSPopUpButton()
+        iconSizePopup.identifier = NSUserInterfaceItemIdentifier("settings.iconSize")
         iconSizePopup.addItems(withTitles: ["48", "64", "80", "96"])
         iconSizePopup.selectItem(withTitle: "\(config.iconSize)")
         iconSizePopup.target = self
@@ -508,6 +504,7 @@ public final class SettingsWindowController: NSWindowController {
         hotkeyCheck.identifier = NSUserInterfaceItemIdentifier("settings.hotkeyEnabled")
         hotkeyCheck.state = config.hotkey.enabled ? .on : .off
         hotkeyPopup = NSPopUpButton()
+        hotkeyPopup.identifier = NSUserInterfaceItemIdentifier("settings.hotkey")
         hotkeyPopup.addItems(withTitles: ["⌘L", "⌘Space", "⌥Space", "⇧⌘L", "⌃⌥L"])
         hotkeyPopup.selectItem(at: hotkeyPresetIndex)
 
@@ -525,40 +522,41 @@ public final class SettingsWindowController: NSWindowController {
             popup.selectItem(at: index(for: action))
         }
 
-        // 布局: 分两列 section
-        let sectionLabel = { (text: String) -> NSTextField in
-            let label = NSTextField(labelWithString: text)
-            label.font = .boldSystemFont(ofSize: 15)
-            return label
+        // 布局: 左侧两列表单 section(共享标签列宽), 右侧独立 section
+        let gridRows = [
+            SettingsFormRow(title: L10n.t(.columnsLabel), value: colsRow),
+            SettingsFormRow(title: L10n.t(.rowsLabel), value: rowsRow),
+            SettingsFormRow(title: L10n.t(.iconSizeLabel), value: iconSizePopup),
+            SettingsFormRow(title: L10n.t(.showLabelsLabel), value: showLabelsCheck),
+        ]
+        let languageRow = SettingsFormRow(
+            title: L10n.t(.languageLabel),
+            value: languagePopup
+        )
+        let hotkeyRow = SettingsFormRow(
+            title: L10n.t(.hotkeyLabel),
+            value: NSStackView(views: [hotkeyCheck, hotkeyPopup])
+        )
+        let cornerRows = (0..<4).map { index in
+            SettingsFormRow(
+                title: ["↖", "↗", "↙", "↘"][index],
+                value: hotCornerPopups[index]
+            )
         }
 
+        // 布局: 分两列 section
         let left = NSStackView()
         left.orientation = .vertical
         left.alignment = .leading
         left.spacing = 10
-        left.addArrangedSubview(sectionLabel(L10n.t(.gridSection)))
-        left.addArrangedSubview(row(L10n.t(.columnsLabel), colsRow))
-        left.addArrangedSubview(row(L10n.t(.rowsLabel), rowsRow))
-        left.addArrangedSubview(row(L10n.t(.iconSizeLabel), iconSizePopup))
-        left.addArrangedSubview(row(L10n.t(.showLabelsLabel), showLabelsCheck))
-        left.addArrangedSubview(sectionLabel(L10n.t(.languageLabel)))
-        left.addArrangedSubview(languagePopup)
-        left.addArrangedSubview(sectionLabel(L10n.t(.hotkeyLabel)))
-        left.addArrangedSubview(row("", NSStackView(views: [hotkeyCheck, hotkeyPopup])))
-        left.addArrangedSubview(sectionLabel(L10n.t(.hotCornerLabel)))
-        left.addArrangedSubview(row("↖", hotCornerPopups[0]))
-        left.addArrangedSubview(row("↗", hotCornerPopups[1]))
-        left.addArrangedSubview(row("↙", hotCornerPopups[2]))
-        left.addArrangedSubview(row("↘", hotCornerPopups[3]))
-        left.addArrangedSubview(sectionLabel(L10n.t(.wallpaperLabel)))
+
         let blurSlider = NSSlider(value: Double(config.wallpaperBlurRadius), minValue: 0, maxValue: 60, target: self, action: #selector(valueChanged))
         blurSlider.isContinuous = true
+        blurSlider.identifier = NSUserInterfaceItemIdentifier("settings.blur")
         self.blurSlider = blurSlider
         let blurLabel = NSTextField(labelWithString: "\(config.wallpaperBlurRadius)")
         self.blurLabel = blurLabel
-        left.addArrangedSubview(row(L10n.t(.blurIntensityLabel), NSStackView(views: [blurLabel, blurSlider])))
 
-        left.addArrangedSubview(sectionLabel(L10n.t(.searchBarSection)))
         let searchBarPercent = SearchBarSizing.percent(
             forPersistedWidth: config.searchBarWidth
         )
@@ -577,23 +575,63 @@ public final class SettingsWindowController: NSWindowController {
         )
         searchBarLabel.identifier = NSUserInterfaceItemIdentifier("settings.searchBarSizeLabel")
         self.searchBarLabel = searchBarLabel
-        left.addArrangedSubview(row(
-            L10n.t(.searchBarSizeLabel),
-            NSStackView(views: [searchBarLabel, searchBarSlider])
+
+        let wallpaperRow = SettingsFormRow(
+            title: L10n.t(.blurIntensityLabel),
+            value: NSStackView(views: [blurLabel, blurSlider])
+        )
+        let searchRow = SettingsFormRow(
+            title: L10n.t(.searchBarSizeLabel),
+            value: NSStackView(views: [searchBarLabel, searchBarSlider])
+        )
+
+        let allRows = gridRows + [languageRow, hotkeyRow] + cornerRows
+            + [wallpaperRow, searchRow]
+        let sharedLabelWidth = allRows.map(\.labelIntrinsicWidth).max() ?? 0
+
+        left.addArrangedSubview(makeFormSection(
+            title: L10n.t(.gridSection),
+            rows: gridRows,
+            labelColumnWidth: sharedLabelWidth
+        ))
+        left.addArrangedSubview(makeFormSection(
+            title: L10n.t(.languageLabel),
+            rows: [languageRow],
+            labelColumnWidth: sharedLabelWidth
+        ))
+        left.addArrangedSubview(makeFormSection(
+            title: L10n.t(.hotkeyLabel),
+            rows: [hotkeyRow],
+            labelColumnWidth: sharedLabelWidth
+        ))
+        left.addArrangedSubview(makeFormSection(
+            title: L10n.t(.hotCornerLabel),
+            rows: cornerRows,
+            labelColumnWidth: sharedLabelWidth
+        ))
+        left.addArrangedSubview(makeFormSection(
+            title: L10n.t(.wallpaperLabel),
+            rows: [wallpaperRow],
+            labelColumnWidth: sharedLabelWidth
+        ))
+        left.addArrangedSubview(makeFormSection(
+            title: L10n.t(.searchBarSection),
+            rows: [searchRow],
+            labelColumnWidth: sharedLabelWidth
         ))
 
         // 关于(Stage B5): 版本 + 来源链接
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
-        left.addArrangedSubview(sectionLabel(L10n.t(.aboutLabel)))
+        left.addArrangedSubview(sectionHeader(L10n.t(.aboutLabel)))
         left.addArrangedSubview(NSTextField(labelWithString: "LaunchBetter v\(version)"))
 
         let right = NSStackView()
         right.orientation = .vertical
         right.alignment = .leading
         right.spacing = 10
-        right.addArrangedSubview(sectionLabel(L10n.t(.customSourcesLabel)))
+        right.addArrangedSubview(sectionHeader(L10n.t(.customSourcesLabel)))
         right.addArrangedSubview(buildSourcesSection())
-        right.addArrangedSubview(sectionLabel(L10n.t(.hiddenAppsLabel)))
+        right.addArrangedSubview(sectionHeader(L10n.t(.hiddenAppsLabel)))
         right.addArrangedSubview(buildHiddenSection())
 
         let content = NSStackView(views: [left, right])
@@ -665,12 +703,28 @@ public final class SettingsWindowController: NSWindowController {
         )
     }
 
-    private func row(_ title: String, _ view: NSView) -> NSStackView {
-        let label = NSTextField(labelWithString: title)
-        label.font = .systemFont(ofSize: 13)
-        let stack = NSStackView(views: [label, view])
-        stack.spacing = 8
+    /// 两列表单 section: header + 行网格(标签列 + 值列)。
+    /// 标签列宽由调用方统一传入(全表单共享), 值列因此跨 section 对齐。
+    private func makeFormSection(
+        title: String,
+        rows: [SettingsFormRow],
+        labelColumnWidth: CGFloat
+    ) -> NSStackView {
+        let grid = NSGridView(views: rows.map { [$0.label, $0.value] })
+        grid.rowSpacing = 8
+        grid.columnSpacing = 12
+        grid.column(at: 0).width = labelColumnWidth
+        let stack = NSStackView(views: [sectionHeader(title), grid])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 6
         return stack
+    }
+
+    private func sectionHeader(_ title: String) -> NSTextField {
+        let label = NSTextField(labelWithString: title)
+        label.font = .boldSystemFont(ofSize: 15)
+        return label
     }
 
     private func buildSourcesSection() -> NSStackView {
