@@ -1,7 +1,7 @@
 ---
-description: 独立代码与架构评审代理 (MiMo V2.5 Pro),只读。Phase Gate/架构/并发边界评审。
+description: 独立代码与架构评审代理 (Qwen 3.7 Plus),只读。Phase Gate/架构/并发边界评审。
 mode: all
-model: opencode-go/mimo-v2.5-pro
+model: opencode-go/qwen3.7-plus
 permission:
   edit: deny
   read: allow

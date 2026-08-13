@@ -78,7 +78,7 @@ xcodebuild -project LaunchBetter.xcodeproj -scheme LaunchBetter test
   implementer 返回(改动清单/假设清单/测试结果/偏差/进度 `[PROGRESS]`);
   总控收到后必须独立验证(build/测试/探针),不盲信。
   **主对话禁止在同一会话里改生产文件**;只有总控的验证/提交/评审属例外。
-- **方案门 + 阶段评审**: opencode-go/mimo-v2.5-pro,经 `.opencode/agents/reviewer.md`
+- **方案门 + 阶段评审**: opencode-go/qwen3.7-plus,经 `.opencode/agents/reviewer.md`
   独立窗口 —— 高风险任务(几何/手势/并发/性能)动手前先评审执行计划;阶段末评审
   0 BLOCKER 0 MAJOR 才能完成
 - **视觉评审**: opencode-go/mimo-v2.5,经 `.opencode/agents/visual-reviewer.md` —— 仅截图证据场景;

@@ -33,7 +33,7 @@
 - 提交: `(最新)` motion tokens + reduce-motion + launcher transition lifecycle
 - 提交: `(最新)` interaction: gate keyboard/three-finger, paging suspend, shield idempotency (Luna M1-M5)
 - **模型路由(用户指令 2026-08-11)**: 总控 = opencode-go/gpt-5.6-luna (variant: max, 主对话);
-  实现 = opencode-go/deepseek-v4-flash (variant: max); 评审 reviewer = opencode-go/mimo-v2.5-pro;
+   实现 = opencode-go/deepseek-v4-flash (variant: max); 评审 reviewer = opencode-go/qwen-3-7-plus;
   视觉 = opencode-go/mimo-v2.5; 仲裁 = opencode-go/qwen3.8-max。已写入 opencode.json / AGENTS.md / .opencode/agents/reviewer.md。
 
 ## 本阶段已完成(已验证)
