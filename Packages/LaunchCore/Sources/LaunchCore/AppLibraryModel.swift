@@ -233,7 +233,7 @@ public enum AppLibraryTuning {
     /// Recently Added 默认窗口天数。
     public static let recentlyAddedWindowDays = 30
 
-    /// ranking "recent" 桶天数(最近使用 > 旧使用,见 Builder)。
+    /// SuggestionRanker "recent" 桶天数(最近使用 > 旧使用,仅 Suggestions 卡)。
     public static let recentUsageWindowDays = 30
 
     public static let secondsPerDay: TimeInterval = 86_400
@@ -310,8 +310,16 @@ public struct AppLibraryModelBuilder: Sendable {
 
     public static func build(_ inputs: Inputs) -> AppLibraryModel {
         let visible = inputs.catalog.apps.filter { !inputs.hiddenAppIDs.contains($0.id) }
-        let isHigherRank: (ResolvedApp, ResolvedApp) -> Bool = { lhs, rhs in
-            rankComparator(lhs: lhs, rhs: rhs, now: inputs.now)
+        // Page1 顺序作为冷启动熟悉度先验的 ranking 输入(只读, 不改 Layout)。
+        let page1Order: [AppID: Int] = Dictionary(
+            inputs.page1FallbackAppIDs.enumerated().map { ($0.element, $0.offset) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let isCategoryHigherRank: (ResolvedApp, ResolvedApp) -> Bool = { lhs, rhs in
+            CategoryCommonRanker.less(lhs: lhs, rhs: rhs, inputs: inputs, page1Order: page1Order)
+        }
+        let isSuggestionHigherRank: (ResolvedApp, ResolvedApp) -> Bool = { lhs, rhs in
+            SuggestionRanker.less(lhs: lhs, rhs: rhs, now: inputs.now)
         }
 
         var grouped: [AppLibraryCategory: [ResolvedApp]] = [:]
@@ -324,7 +332,7 @@ public struct AppLibraryModelBuilder: Sendable {
             }
         }
         for category in AppLibraryCategory.allCases {
-            grouped[category]?.sort(by: isHigherRank)
+            grouped[category]?.sort(by: isCategoryHigherRank)
         }
 
         // 单 app 普通分类合并到 Other(固定规则,与 Other 是否为空无关)。
@@ -337,9 +345,9 @@ public struct AppLibraryModelBuilder: Sendable {
             grouped[.other, default: []].append(contentsOf: group)
             grouped[category] = nil
         }
-        grouped[.other]?.sort(by: isHigherRank)
+        grouped[.other]?.sort(by: isCategoryHigherRank)
 
-        let allRanked = grouped.values.flatMap { $0 }.sorted(by: isHigherRank)
+        let allRanked = grouped.values.flatMap { $0 }.sorted(by: isSuggestionHigherRank)
 
         var cards: [AppLibraryCard] = []
         var picked = Set<AppID>()
@@ -450,36 +458,89 @@ public struct AppLibraryModelBuilder: Sendable {
 
     /// 确定性排名: lhs 是否排在 rhs 之前(更高 rank)。
     ///
-    /// 1. 有 usage > 无 usage
-    /// 2. 最近使用桶(recentUsageWindow 内)> 旧桶
-    /// 3. launchCount 降序
-    /// 4. lastLaunchedAt 降序(nil 最后)
-    /// 5. displayName 升序(稳定 tie-break)
-    /// 6. AppID rawValue 升序(最终稳定 tie-break)
-    private static func rankComparator(
-        lhs: ResolvedApp,
-        rhs: ResolvedApp,
-        now: Date
-    ) -> Bool {
-        if lhs.usage != nil && rhs.usage == nil { return true }
-        if lhs.usage == nil && rhs.usage != nil { return false }
-        guard let lhsUsage = lhs.usage, let rhsUsage = rhs.usage else {
+    /// 分类卡与 Suggestions 卡使用不同 ranker(Suggestions 保留 recency 桶语义;
+    /// 分类卡 frequency-first, 永不 recency-over-frequency), 相互独立。
+    private enum SuggestionRanker {
+        /// Suggestions 卡专用 ranking(保留现有 recency/usage 语义;不污染分类卡)。
+        ///
+        /// 1. 有 usage > 无 usage
+        /// 2. 最近使用桶(recentUsageWindow 内)> 旧桶
+        /// 3. launchCount 降序
+        /// 4. lastLaunchedAt 降序(nil 最后)
+        /// 5. displayName 升序(稳定 tie-break)
+        /// 6. AppID rawValue 升序(最终稳定 tie-break)
+        static func less(lhs: ResolvedApp, rhs: ResolvedApp, now: Date) -> Bool {
+            if lhs.usage != nil && rhs.usage == nil { return true }
+            if lhs.usage == nil && rhs.usage != nil { return false }
+            guard let lhsUsage = lhs.usage, let rhsUsage = rhs.usage else {
+                return stableLess(lhs: lhs, rhs: rhs)
+            }
+            let lhsRecent = isRecent(lhsUsage, now: now)
+            let rhsRecent = isRecent(rhsUsage, now: now)
+            if lhsRecent != rhsRecent { return lhsRecent }
+            if lhsUsage.launchCount != rhsUsage.launchCount {
+                return lhsUsage.launchCount > rhsUsage.launchCount
+            }
+            if let lhsDate = lhsUsage.lastLaunchedAt,
+               let rhsDate = rhsUsage.lastLaunchedAt,
+               lhsDate != rhsDate {
+                return lhsDate > rhsDate
+            }
+            if lhsUsage.lastLaunchedAt == nil && rhsUsage.lastLaunchedAt != nil { return false }
+            if lhsUsage.lastLaunchedAt != nil && rhsUsage.lastLaunchedAt == nil { return true }
             return stableLess(lhs: lhs, rhs: rhs)
         }
-        let lhsRecent = isRecent(lhsUsage, now: now)
-        let rhsRecent = isRecent(rhsUsage, now: now)
-        if lhsRecent != rhsRecent { return lhsRecent }
-        if lhsUsage.launchCount != rhsUsage.launchCount {
-            return lhsUsage.launchCount > rhsUsage.launchCount
+    }
+
+    /// 分类卡专用 ranking(frequency-first, 永不 recency-over-frequency)。
+    ///
+    /// 1. 显式手动覆盖/分配到本分类的 app 置顶(多个手动 app 之间按频率)
+    /// 2. launchCount 降序(频率优先; 最近未用不降权)
+    /// 3. 冷启动熟悉度先验: 无 usage 的 app 按 Page1 顺序(分类内)
+    /// 4. lastLaunchedAt 仅作 tie-break(used 组内; nil 最后)
+    /// 5. displayName / AppID 稳定 tie-break
+    private enum CategoryCommonRanker {
+        static func less(lhs: ResolvedApp, rhs: ResolvedApp, inputs: Inputs, page1Order: [AppID: Int]) -> Bool {
+            let lhsManual = inputs.categoryOverrides[lhs.app.id] != nil
+            let rhsManual = inputs.categoryOverrides[rhs.app.id] != nil
+            if lhsManual != rhsManual { return lhsManual }
+
+            let lhsCount = lhs.usage?.launchCount ?? 0
+            let rhsCount = rhs.usage?.launchCount ?? 0
+            if lhsCount != rhsCount { return lhsCount > rhsCount }
+
+            if lhsCount > 0 {
+                switch (lhs.usage?.lastLaunchedAt, rhs.usage?.lastLaunchedAt) {
+                case (nil, nil): return stableLess(lhs: lhs, rhs: rhs)
+                case (nil, _?): return false
+                case (_?, nil): return true
+                case (let lhsDate?, let rhsDate?):
+                    if lhsDate != rhsDate { return lhsDate > rhsDate }
+                    return stableLess(lhs: lhs, rhs: rhs)
+                }
+            }
+
+            switch (page1Order[lhs.app.id], page1Order[rhs.app.id]) {
+            case (nil, nil): return stableLess(lhs: lhs, rhs: rhs)
+            case (nil, _?): return false
+            case (_?, nil): return true
+            case (let lhsIndex?, let rhsIndex?):
+                if lhsIndex != rhsIndex { return lhsIndex < rhsIndex }
+                return stableLess(lhs: lhs, rhs: rhs)
+            }
         }
-        if let lhsDate = lhsUsage.lastLaunchedAt,
-           let rhsDate = rhsUsage.lastLaunchedAt,
-           lhsDate != rhsDate {
-            return lhsDate > rhsDate
+    }
+
+    /// Recently Added 卡专用 ranking(firstSeen 降序; 现逻辑保留)。
+    private enum RecentlyAddedRanker {
+        static func less(
+            lhs: (firstSeen: Date, displayName: String, id: AppID),
+            rhs: (firstSeen: Date, displayName: String, id: AppID)
+        ) -> Bool {
+            if lhs.firstSeen != rhs.firstSeen { return lhs.firstSeen > rhs.firstSeen }
+            if lhs.displayName != rhs.displayName { return lhs.displayName < rhs.displayName }
+            return lhs.id.rawValue < rhs.id.rawValue
         }
-        if lhsUsage.lastLaunchedAt == nil && rhsUsage.lastLaunchedAt != nil { return false }
-        if lhsUsage.lastLaunchedAt != nil && rhsUsage.lastLaunchedAt == nil { return true }
-        return stableLess(lhs: lhs, rhs: rhs)
     }
 
     private static func isRecent(_ usage: AppLibraryUsageRecord, now: Date) -> Bool {
@@ -518,11 +579,7 @@ public struct AppLibraryModelBuilder: Sendable {
             ))
         }
         guard !candidates.isEmpty else { return [] }
-        candidates.sort { lhs, rhs in
-            if lhs.firstSeen != rhs.firstSeen { return lhs.firstSeen > rhs.firstSeen }
-            if lhs.displayName != rhs.displayName { return lhs.displayName < rhs.displayName }
-            return lhs.id.rawValue < rhs.id.rawValue
-        }
+        candidates.sort { RecentlyAddedRanker.less(lhs: $0, rhs: $1) }
         return candidates.map(\.id)
     }
 }

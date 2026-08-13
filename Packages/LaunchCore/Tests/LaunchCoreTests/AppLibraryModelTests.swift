@@ -346,8 +346,8 @@ struct AppLibraryModelTests {
 
     // MARK: - Ranking
 
-    @Test("最近高频 > 旧高频; 最近低频(decay) > 旧高频; 同桶内 count 决定")
-    func rankingRecencyAndDecay() throws {
+    @Test("分类卡 frequency-first: 同 count 用 lastLaunchedAt tie-break; 最近低频不压高频; Suggestions 保留 recency 语义")
+    func rankingFrequencyFirst() throws {
         let a = try makeRecord("/Applications/A.app", name: "A", category: "public.app-category.productivity")
         let b = try makeRecord("/Applications/B.app", name: "B", category: "public.app-category.productivity")
         let c = try makeRecord("/Applications/C.app", name: "C", category: "public.app-category.productivity")
@@ -362,8 +362,13 @@ struct AppLibraryModelTests {
 
         let found = card(with: .category(.productivity), in: model)
         let appCard = try #require(found)
-        // a(近,5) > c(近,3) > b(旧,5): recency 桶优先,桶内 count 降序,decay 使 c > b
-        #expect(appCard.detailAppIDs == [a.id, c.id, b.id])
+        // count 降序: a(5) > b(5) > c(3); a/b 同 count → lastLaunchedAt tie-break → a > b
+        // (旧语义 recency 桶已从分类卡移除: c 最近用 1 次不压过 b 高频最近未用)
+        #expect(appCard.detailAppIDs == [a.id, b.id, c.id])
+
+        // Suggestions 卡保留 recency 桶语义: a、c(近) > b(旧), 桶内 count 降序
+        let suggestions = try #require(card(with: .suggestions, in: model))
+        #expect(suggestions.detailAppIDs == [a.id, c.id, b.id])
     }
 
     @Test("frequent > never-used")
@@ -403,6 +408,161 @@ struct AppLibraryModelTests {
         let found = card(with: .category(.productivity), in: model)
         let appCard = try #require(found)
         #expect(appCard.detailAppIDs == [alpha.id, beta.id, sameX.id, sameY.id])
+    }
+
+    @Test("高频但最近未用 > 低频最近用(分类卡内, 永不 recency-over-frequency)")
+    func frequentOldBeatsRecentOnce() throws {
+        let frequent = try makeRecord("/Applications/Frequent.app", name: "Frequent", category: "public.app-category.productivity")
+        let once = try makeRecord("/Applications/Once.app", name: "Once", category: "public.app-category.productivity")
+        let catalog = CatalogSnapshot(apps: [frequent, once])
+        let metadata = AppLibraryMetadataSnapshot(usage: [
+            frequent.id: AppLibraryUsageRecord(launchCount: 10, lastLaunchedAt: e3Now.addingTimeInterval(-90 * 86_400)),
+            once.id: AppLibraryUsageRecord(launchCount: 1, lastLaunchedAt: e3Now.addingTimeInterval(-86_400)),
+        ])
+
+        let model = build(catalog: catalog, metadata: metadata)
+
+        let found = card(with: .category(.productivity), in: model)
+        let appCard = try #require(found)
+        // "昨天用一次"不压过"用过 100 次但最近未开"
+        #expect(appCard.detailAppIDs == [frequent.id, once.id])
+    }
+
+    @Test("lastLaunchedAt 仅作 tie-break: count 相同才比较最近使用")
+    func lastLaunchedAtTieBreakOnly() throws {
+        let x = try makeRecord("/Applications/X.app", name: "X", category: "public.app-category.productivity")
+        let y = try makeRecord("/Applications/Y.app", name: "Y", category: "public.app-category.productivity")
+        let z = try makeRecord("/Applications/Z.app", name: "Z", category: "public.app-category.productivity")
+        let catalog = CatalogSnapshot(apps: [x, y, z])
+        let metadata = AppLibraryMetadataSnapshot(usage: [
+            x.id: AppLibraryUsageRecord(launchCount: 2, lastLaunchedAt: e3Now.addingTimeInterval(-86_400)),
+            y.id: AppLibraryUsageRecord(launchCount: 2, lastLaunchedAt: e3Now.addingTimeInterval(-40 * 86_400)),
+            z.id: AppLibraryUsageRecord(launchCount: 3, lastLaunchedAt: e3Now.addingTimeInterval(-86_400)),
+        ])
+
+        let model = build(catalog: catalog, metadata: metadata)
+
+        let found = card(with: .category(.productivity), in: model)
+        let appCard = try #require(found)
+        // count: z(3) > x(2)=y(2); x/y 同 count → lastLaunchedAt: x(近) > y(旧)
+        #expect(appCard.detailAppIDs == [z.id, x.id, y.id])
+    }
+
+    @Test("手动覆盖 app 置顶(即使频率低); 多个手动 app 之间按频率")
+    func manualOverridePinnedTop() throws {
+        let qq = try makeQQRecord()
+        let wechat = try makeWeChatRecord()
+        let msgs = try makeRecord(
+            "/Applications/Messages.app",
+            name: "Messages",
+            category: "public.app-category.social-networking",
+            bundle: "com.apple.MobileSMS"
+        )
+        let catalog = CatalogSnapshot(apps: [qq, wechat, msgs])
+        let metadata = AppLibraryMetadataSnapshot(usage: [
+            qq.id: AppLibraryUsageRecord(launchCount: 1, lastLaunchedAt: e3Now.addingTimeInterval(-2 * 86_400)),
+            wechat.id: AppLibraryUsageRecord(launchCount: 100, lastLaunchedAt: e3Now.addingTimeInterval(-86_400)),
+            msgs.id: AppLibraryUsageRecord(launchCount: 50, lastLaunchedAt: e3Now.addingTimeInterval(-86_400)),
+        ])
+
+        // QQ 与 Messages 被手动覆盖到 social(即使频率低); WeChat 自动进 social
+        let model = build(
+            catalog: catalog,
+            metadata: metadata,
+            overrides: [qq.id: .social, msgs.id: .social]
+        )
+        let social = try #require(card(with: .category(.social), in: model))
+        // 手动组(被 override 进 social)整体置顶, 组内按频率: msgs(50) > qq(1);
+        // 自动的 wechat(100)频率最高也排在手动组之后
+        #expect(social.detailAppIDs == [msgs.id, qq.id, wechat.id])
+        #expect(social.primaryAppIDs == [msgs.id, qq.id, wechat.id])
+    }
+
+    @Test("冷启动无 usage: 分类内按 Page1 顺序(先验), 不在 Page1 的按稳定顺序")
+    func coldStartPage1PriorOrdersCategory() throws {
+        let p1 = try makeRecord("/Applications/P1.app", name: "P1", category: "public.app-category.productivity")
+        let p2 = try makeRecord("/Applications/P2.app", name: "P2", category: "public.app-category.productivity")
+        let p3 = try makeRecord("/Applications/P3.app", name: "P3", category: "public.app-category.productivity")
+        let p4 = try makeRecord("/Applications/P4.app", name: "P4", category: "public.app-category.productivity")
+        let catalog = CatalogSnapshot(apps: [p1, p2, p3, p4])
+
+        let model = build(catalog: catalog, fallback: [p4.id, p1.id, p3.id])
+
+        let productivity = try #require(card(with: .category(.productivity), in: model))
+        // Page1 顺序 [p4, p1, p3] 优先; p2 不在 Page1 → 最后
+        #expect(productivity.detailAppIDs == [p4.id, p1.id, p3.id, p2.id])
+    }
+
+    @Test("有 usage 后频率优先于 Page1 先验(launchCount>0 不受 Page1 顺序影响)")
+    func frequencyBeatsPage1Prior() throws {
+        let p1 = try makeRecord("/Applications/P1.app", name: "P1", category: "public.app-category.productivity")
+        let p2 = try makeRecord("/Applications/P2.app", name: "P2", category: "public.app-category.productivity")
+        let p3 = try makeRecord("/Applications/P3.app", name: "P3", category: "public.app-category.productivity")
+        let catalog = CatalogSnapshot(apps: [p1, p2, p3])
+        let metadata = AppLibraryMetadataSnapshot(usage: [
+            p1.id: AppLibraryUsageRecord(launchCount: 10, lastLaunchedAt: e3Now.addingTimeInterval(-60 * 86_400)),
+            p2.id: AppLibraryUsageRecord(launchCount: 1, lastLaunchedAt: e3Now.addingTimeInterval(-86_400)),
+        ])
+
+        // Page1 先验 [p3, p2, p1]; 但频率优先: p1(10) > p2(1) > p3(无 usage)
+        let model = build(catalog: catalog, metadata: metadata, fallback: [p3.id, p2.id, p1.id])
+
+        let productivity = try #require(card(with: .category(.productivity), in: model))
+        #expect(productivity.detailAppIDs == [p1.id, p2.id, p3.id])
+    }
+
+    @Test("Suggestions 配置变化不改变分类卡顺序(各自独立 ranking 上下文)")
+    func suggestionsDoNotAffectCategoryOrder() throws {
+        let a = try makeRecord("/Applications/A.app", name: "A", category: "public.app-category.productivity")
+        let b = try makeRecord("/Applications/B.app", name: "B", category: "public.app-category.productivity")
+        let c = try makeRecord("/Applications/C.app", name: "C", category: "public.app-category.productivity")
+        let catalog = CatalogSnapshot(apps: [a, b, c])
+        let metadata = AppLibraryMetadataSnapshot(usage: [
+            a.id: AppLibraryUsageRecord(launchCount: 9, lastLaunchedAt: e3Now.addingTimeInterval(-2 * 86_400)),
+            b.id: AppLibraryUsageRecord(launchCount: 4, lastLaunchedAt: e3Now.addingTimeInterval(-86_400)),
+            c.id: AppLibraryUsageRecord(launchCount: 4, lastLaunchedAt: e3Now.addingTimeInterval(-3 * 86_400)),
+        ])
+
+        // 不同 fallback/now → Suggestions 输入不同; 分类卡顺序必须完全一致
+        let withFallback = build(catalog: catalog, metadata: metadata, fallback: [c.id, b.id, a.id], now: e3Now)
+        let withoutFallback = build(catalog: catalog, metadata: metadata, fallback: [], now: e3Now.addingTimeInterval(3600))
+        #expect(withFallback.categoryDetail[.productivity] == withoutFallback.categoryDetail[.productivity])
+
+        // 频率优先: a(9) > b(4, 最近) > c(4, 较旧, lastLaunchedAt tie-break)
+        let expected: [AppID] = [a.id, b.id, c.id]
+        #expect(withFallback.categoryDetail[.productivity] == expected)
+        let productivity = try #require(card(with: .category(.productivity), in: withFallback))
+        #expect(productivity.primaryAppIDs == expected)
+    }
+
+    @Test("QQ/WeChat 合成: 冷启动按稳定顺序; 有 usage 后频率驱动 social 排序")
+    func qqWechatFrequencyOrdering() throws {
+        let qq = try makeQQRecord()
+        let wechat = try makeWeChatRecord()
+        let catalog = CatalogSnapshot(apps: [qq, wechat])
+
+        // 冷启动(无 usage): 稳定 tie-break "QQ" < "WeChat"
+        let cold = build(catalog: catalog)
+        let coldSocial = try #require(card(with: .category(.social), in: cold))
+        #expect(coldSocial.detailAppIDs == [qq.id, wechat.id])
+
+        // QQ 更高频: qq > wechat
+        let qqFrequent = AppLibraryMetadataSnapshot(usage: [
+            qq.id: AppLibraryUsageRecord(launchCount: 5, lastLaunchedAt: e3Now.addingTimeInterval(-86_400)),
+            wechat.id: AppLibraryUsageRecord(launchCount: 2, lastLaunchedAt: e3Now.addingTimeInterval(-86_400)),
+        ])
+        let qqFirst = build(catalog: catalog, metadata: qqFrequent)
+        let qqCard = try #require(card(with: .category(.social), in: qqFirst))
+        #expect(qqCard.detailAppIDs == [qq.id, wechat.id])
+
+        // WeChat 更高频: wechat > qq(频率优先, 不受名字影响)
+        let wechatFrequent = AppLibraryMetadataSnapshot(usage: [
+            qq.id: AppLibraryUsageRecord(launchCount: 2, lastLaunchedAt: e3Now.addingTimeInterval(-86_400)),
+            wechat.id: AppLibraryUsageRecord(launchCount: 8, lastLaunchedAt: e3Now.addingTimeInterval(-86_400)),
+        ])
+        let wechatFirst = build(catalog: catalog, metadata: wechatFrequent)
+        let wechatCard = try #require(card(with: .category(.social), in: wechatFirst))
+        #expect(wechatCard.detailAppIDs == [wechat.id, qq.id])
     }
 
     // MARK: - Suggestions
