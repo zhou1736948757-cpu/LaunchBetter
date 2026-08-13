@@ -329,6 +329,8 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 0.4.0;
+				CURRENT_PROJECT_VERSION = 1;
 				PRODUCT_BUNDLE_IDENTIFIER = dev.launchbetter.LaunchBetter;
 				SDKROOT = macosx;
 				SWIFT_VERSION = 6.0;
@@ -415,6 +417,8 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 0.4.0;
+				CURRENT_PROJECT_VERSION = 1;
 				PRODUCT_BUNDLE_IDENTIFIER = dev.launchbetter.LaunchBetter;
 				SDKROOT = macosx;
 				SWIFT_VERSION = 6.0;
