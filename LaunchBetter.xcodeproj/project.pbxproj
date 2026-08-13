@@ -26,6 +26,7 @@
 		97CAF62410D849C74D1ED8FE /* LaunchUI in Frameworks */ = {isa = PBXBuildFile; productRef = BFBADDC8868444DA8FEB4241 /* LaunchUI */; };
 		A6AA30F397E682609E5C3255 /* PagingProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B4157109522440A6D3DE67B /* PagingProbe.swift */; };
 		B7E21D5A8C4F09A31D6E5F72 /* PagingScrollProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C3D8E27F6B4A5180E7C2D91 /* PagingScrollProbe.swift */; };
+		AA11BB22CC33DD44EE55FF01 /* PageCompositorProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11BB22CC33DD44EE55FF02 /* PageCompositorProbe.swift */; };
 		A1B2C3D4E5F60718A9B0C1D2 /* PagingEventTraceProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9E7B3A1D2F40485A6B7C8D9 /* PagingEventTraceProbe.swift */; };
 		E2F3A4B5C6D70819E0F1A2B3 /* PagingStressProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1F2A3B4C5D60789E0F1A2B3 /* PagingStressProbe.swift */; };
 		BB5EC826ACB1AF62EE21847B /* IconImageAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E4FB7BAF0189E406E0361FE /* IconImageAdapter.swift */; };
@@ -67,6 +68,7 @@
 		E330AC7D7E44DC67CC602785 /* PageTestProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PageTestProbe.swift; sourceTree = "<group>"; };
 		F2B7C15B26E035D2F86D16C6 /* DiagnosticRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticRunner.swift; sourceTree = "<group>"; };
 		9C3D8E27F6B4A5180E7C2D91 /* PagingScrollProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PagingScrollProbe.swift; sourceTree = "<group>"; };
+		AA11BB22CC33DD44EE55FF02 /* PageCompositorProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PageCompositorProbe.swift; sourceTree = "<group>"; };
 		C9E7B3A1D2F40485A6B7C8D9 /* PagingEventTraceProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PagingEventTraceProbe.swift; sourceTree = "<group>"; };
 		D1F2A3B4C5D60789E0F1A2B3 /* PagingStressProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PagingStressProbe.swift; sourceTree = "<group>"; };
 		FE7E4CA496431AA25E487527 /* LayoutProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayoutProbe.swift; sourceTree = "<group>"; };
@@ -134,6 +136,7 @@
 				FE7E4CA496431AA25E487527 /* LayoutProbe.swift */,
 				E330AC7D7E44DC67CC602785 /* PageTestProbe.swift */,
 				1B4157109522440A6D3DE67B /* PagingProbe.swift */,
+				AA11BB22CC33DD44EE55FF02 /* PageCompositorProbe.swift */,
 				9C3D8E27F6B4A5180E7C2D91 /* PagingScrollProbe.swift */,
 				C9E7B3A1D2F40485A6B7C8D9 /* PagingEventTraceProbe.swift */,
 				D1F2A3B4C5D60789E0F1A2B3 /* PagingStressProbe.swift */,
@@ -239,6 +242,7 @@
 				EB542672D892D265B3724B18 /* LayoutProbe.swift in Sources */,
 				0B378C547F12199B13A4441B /* PageTestProbe.swift in Sources */,
 				A6AA30F397E682609E5C3255 /* PagingProbe.swift in Sources */,
+				AA11BB22CC33DD44EE55FF01 /* PageCompositorProbe.swift in Sources */,
 				B7E21D5A8C4F09A31D6E5F72 /* PagingScrollProbe.swift in Sources */,
 				A1B2C3D4E5F60718A9B0C1D2 /* PagingEventTraceProbe.swift in Sources */,
 				E2F3A4B5C6D70819E0F1A2B3 /* PagingStressProbe.swift in Sources */,

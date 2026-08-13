@@ -151,6 +151,24 @@ final class GridViewController: NSViewController {
     /// 分页交互控制器(v0.1.6): 手势状态 + 唯一 offset writer。
     private let paging = PagingInteractionController()
 
+    // MARK: - P2 Page Compositor(实验, 默认关)
+
+    /// 页面视觉缓存(working set ≤ 3)与渲染器(纯内存, idle 准备)。
+    private let pageVisualCache = PageVisualCache()
+    private let pageVisualRenderer = PageVisualRenderer()
+    /// presentation-only 合成器: PagingInteractionController 仍是唯一运动引擎。
+    let pageCompositor = PageCompositor()
+
+    /// 实验开关: 仅 `--pagecompositor` 启用(A/B; 默认关, 可回退 checkpoint)。
+    /// 测试可直接置 true 驱动确定性场景。
+    var pageVisualCompositorEnabled = CommandLine.arguments.contains("--pagecompositor")
+
+    /// prepare 代际: 每次调度递增, 过期 prepare 不得插入缓存(结构已变)。
+    private var pageVisualPrepareGeneration = 0
+
+    /// 最近一次观察到的 backing scale(换屏 → 收掉/重建视觉)。
+    private var lastCompositorBackingScale = -1
+
     /// 当前几何(拖拽/槽位计算用; 未 prepare 时用实时参数推算)。
     var geometry: GridGeometry {
         let layout = collectionView.collectionViewLayout as? PagingGridLayout
@@ -179,16 +197,20 @@ final class GridViewController: NSViewController {
         )
         updateFolderTransitionGeometryRevision()
         refreshCellsIfEffectivePointSizeChanged()
+        schedulePageVisualPrepare()
     }
 
-    /// 进入 Folder/Settings 覆盖层: 暂停分页状态机, 停止在途 settle/display link。
+    /// 进入 Folder/Settings 覆盖层: 暂停分页状态机, 停止在途 settle/display link,
+    /// 并收掉 compositor(同步收尾, 无僵尸 layer)。
     func suspendPagingForSurface() {
+        shutdownPageCompositor()
         paging.isEnabled = false
     }
 
-    /// 离开覆盖层恢复分页; 搜索模式保持禁用。
+    /// 离开覆盖层恢复分页; 搜索模式保持禁用。重新准备相邻页视觉。
     func resumePagingForSurface() {
         paging.isEnabled = !searchMode
+        schedulePageVisualPrepare()
     }
 
     /// 当前保留区(布局诊断)。
@@ -356,6 +378,14 @@ final class GridViewController: NSViewController {
         updateDocumentFrame()
         refreshCellsIfEffectivePointSizeChanged()
         updateFolderTransitionGeometryRevision()
+        // P2: backing scale 变化(换屏)→ 收掉 compositor + purge + 按新 scale 重建。
+        let scale = currentBackingScale
+        if scale != lastCompositorBackingScale {
+            lastCompositorBackingScale = scale
+            shutdownPageCompositor()
+            purgePageVisuals()
+            schedulePageVisualPrepare()
+        }
     }
 
     /// 同步集合视图 frame 到布局 contentSize(分页滚动的前提; 搜索模式高度也跟随)。
@@ -480,6 +510,7 @@ final class GridViewController: NSViewController {
         guard lastConfiguredEffectivePointSize != pointSize else { return }
         lastConfiguredEffectivePointSize = pointSize
         collectionView.reloadData()
+        schedulePageVisualPrepare()
     }
 
     /// 只在有效几何真的变化时失效已捕获的 Folder source。
@@ -519,6 +550,7 @@ final class GridViewController: NSViewController {
             // makeController 重新固定, 不 endSession 重建)。
             hostItem.refreshModel()
         }
+        schedulePageVisualPrepare()
     }
 
     /// 强制刷新(忽略修订; 结构参数已变时由调用方使用)。
@@ -561,6 +593,9 @@ final class GridViewController: NSViewController {
     private func enterSearchMode(with results: [Item]) {
         let wasPagedMode = !searchMode
         searchMode = true
+        // P2: 结构变更 → 收掉 compositor 并 purge 视觉缓存(搜索态视觉无效)。
+        shutdownPageCompositor()
+        purgePageVisuals()
         paging.isEnabled = false
         if wasPagedMode {
             // 保存语义 surface(Library 或普通页), 不是 raw page number(Stage E8)。
@@ -654,6 +689,8 @@ final class GridViewController: NSViewController {
     /// Settings 结构参数变更: 重建布局几何并重新分页(Stage 1 §14/§15)。
     func applyGeometryConfig(columns: Int, rows: Int, iconSize: Int) {
         dragController?.invalidateActiveSessionForDisplayChange()
+        // P2: 几何/结构变更 → 收掉 compositor, 视觉缓存键自然失效。
+        shutdownPageCompositor()
         let gridLayout = gridLayout
         gridLayout.update(
             columns: columns, rows: rows, iconSize: CGFloat(iconSize),
@@ -1078,7 +1115,7 @@ final class GridViewController: NSViewController {
         paging.linkView = view
         paging.onReadCurrentOffset = { [weak self] in
             guard let self else { return 0 }
-            return self.collectionView.enclosingScrollView?.contentView.bounds.origin.x ?? 0
+            return self.readPagingOffset()
         }
         paging.onReadPageWidth = { [weak self] in
             guard let self else { return 0 }
@@ -1090,13 +1127,32 @@ final class GridViewController: NSViewController {
             return self.physicalSurfaceCount
         }
         paging.onScroll = { [weak self] offset in
-            guard let self, let scroll = self.collectionView.enclosingScrollView else { return }
-            scroll.contentView.scroll(to: NSPoint(x: offset, y: 0))
+            guard let self else { return }
+            self.routeScroll(offset)
         }
         paging.onSettleTargetPage = { [weak self] page in
             guard let self else { return }
             self.applySettledPhysicalPage(page)
         }
+        // P2: 手势起点激活 compositor(在 baseOffset 读取前; 零跳变)。
+        paging.onWillBeginGesture = { [weak self] in
+            self?.tryActivatePageCompositor()
+        }
+        // P2: 运动停止(idle)→ 收掉 compositor(同步 clip → reveal)。
+        paging.onPhaseIdle = { [weak self] in
+            self?.finalizePageCompositor()
+        }
+        // P2: settle 收敛 → idle 准备相邻页视觉。
+        paging.onSettleComplete = { [weak self] in
+            self?.schedulePageVisualPrepare()
+        }
+        pageCompositor.onSyncClip = { [weak self] offset in
+            guard let self else { return }
+            self.collectionView.enclosingScrollView?.contentView.scroll(
+                to: NSPoint(x: offset, y: 0)
+            )
+        }
+        pageCompositor.metrics.enabled = pageVisualCompositorEnabled
         // E13: --pagingtelemetry 遥测开关接线。应用保持正常交互运行,
         // 只开启分页帧间隔遥测(每手势写一行到 /tmp/lb-paging-telemetry.log)。
         // 该 flag 不在 ActivationCoordinator 的 non-interactive 列表中。
@@ -1109,6 +1165,266 @@ final class GridViewController: NSViewController {
             PagingTraceLog.enabled = true
             paging.traceEnabled = true
         }
+    }
+
+    // MARK: - P2 偏移抽象与滚动路由
+
+    /// 当前水平偏移唯一读取: compositor active → compositor.currentOffset;
+    /// 否则真实 clip。PagingInteractionController 经 onReadCurrentOffset 接这里,
+    /// 不得散射到其它来源。
+    func readPagingOffset() -> CGFloat {
+        if pageCompositor.isActive {
+            return pageCompositor.currentOffset
+        }
+        return collectionView.enclosingScrollView?.contentView.bounds.origin.x ?? 0
+    }
+
+    /// 唯一 offset writer 路由: compositor active → 只移动合成层(不写 clip);
+    /// 否则写真实 clip。
+    private func routeScroll(_ offset: CGFloat) {
+        if pageCompositor.isActive {
+            pageCompositor.applyOffset(offset)
+            return
+        }
+        collectionView.enclosingScrollView?.contentView.scroll(
+            to: NSPoint(x: offset, y: 0)
+        )
+    }
+
+    /// 当前真实 clip 水平偏移(compositor 未激活时的权威值)。
+    private func realClipOffset() -> CGFloat {
+        collectionView.enclosingScrollView?.contentView.bounds.origin.x ?? 0
+    }
+
+    // MARK: - P2 Page Compositor(激活 / 收口 / 准备)
+
+    /// 激活条件: paged + 普通 Layout surface + 无 drag/Folder/Settings/Search/
+    /// Category detail + 非 Library 边界 + 相邻页视觉齐备。
+    /// 未满足 → 本次手势 live 分页(降级, 绝不阻塞手势起点)。
+    private func compositorCanActivate() -> Bool {
+        guard pageVisualCompositorEnabled,
+              !pageCompositor.isActive,
+              paging.isEnabled,
+              !searchMode,
+              currentSurface != .appLibrary,
+              !(dragController?.isDragging ?? false),
+              // 边界规则: 上一表面必须是普通 layout 页。leading 未启用时页 0
+              // 无 previous;leading 启用时 layout page 0 的 previous 是 Library。
+              // working set 就绪检查(键数必须 = 3)天然排除这两种边界。
+              currentPage >= 1 else {
+            return false
+        }
+        return pageVisualCache.isWorkingSetReadyIgnoringIconEpoch(
+            centerPage: currentPage,
+            pageCount: pageCount,
+            displayRevision: store.displayRevision,
+            geometry: PageVisualGeometrySignature(geometry: geometry),
+            backingScale: currentBackingScale,
+            languageRevision: Self.languageRevision()
+        )
+    }
+
+    /// 手势起点尝试激活(仅 idle 准备, 零同步渲染)。
+    private func tryActivatePageCompositor() {
+        guard pageVisualCompositorEnabled, !pageCompositor.isActive else { return }
+        guard compositorCanActivate() else {
+            // 表面状态允许但视觉未齐备 → 降级计数(排除 Library 边界常态)。
+            if !searchMode, currentSurface != .appLibrary, currentPage >= 1 {
+                pageCompositor.metrics.recordFallbackLive()
+            }
+            return
+        }
+        let scale = currentBackingScale
+        let g = geometry
+        let visuals = pageVisualCache.workingSetVisualsIgnoringIconEpoch(
+            centerPage: currentPage,
+            pageCount: pageCount,
+            displayRevision: store.displayRevision,
+            geometry: PageVisualGeometrySignature(geometry: g),
+            backingScale: scale,
+            languageRevision: Self.languageRevision()
+        )
+        guard visuals.count == 3 else { return }
+        if view.layer == nil { view.wantsLayer = true }
+        if collectionView.layer == nil { collectionView.wantsLayer = true }
+        guard let hostLayer = view.layer, let liveLayer = collectionView.layer else { return }
+
+        let placements = visuals.map { item in
+            let bounds = item.visual.logicalBounds
+            let documentPoint = CGPoint(
+                x: CGFloat(item.page) * g.pageWidth + bounds.minX,
+                y: bounds.minY
+            )
+            // convert 走真实视图链(含 clip 滚动偏移): 激活帧位置 == live 位置。
+            let inHost = collectionView.convert(documentPoint, to: view)
+            return PageCompositor.Placement(
+                page: item.page,
+                baseFrame: CGRect(origin: inHost, size: bounds.size),
+                visual: item.visual
+            )
+        }
+        pageCompositor.activate(
+            placements: placements,
+            pageWidth: g.pageWidth,
+            startOffset: realClipOffset(),
+            hostLayer: hostLayer,
+            liveLayer: liveLayer
+        )
+    }
+
+    /// 运动停止(idle)→ 收掉 compositor: 同步真实 clip 到精确偏移 → reveal live。
+    /// 幂等: compositor 未激活时 no-op。
+    private func finalizePageCompositor() {
+        guard pageCompositor.isActive else { return }
+        pageCompositor.finishSettle()
+    }
+
+    /// 显式 shutdown(search/folder/settings/hide/drag 开始/配置/scale/结构变更)。
+    /// 同步收尾: 捕获当前 visual offset → 真实 clip 同步 → reveal → 移除, 无僵尸 layer。
+    func shutdownPageCompositor() {
+        pageCompositor.shutdown()
+    }
+
+    /// purge 页面视觉缓存(hide / 内存压力 / scale 变更)。
+    func purgePageVisuals() {
+        pageVisualCache.removeAll()
+    }
+
+    /// 调度 idle 视觉准备(防抖 100ms; 仅 idle 时执行, 绝不阻塞手势起点)。
+    /// 触发: settle 完成 / show 稳定 / 数据与几何变化 / 图标安静。
+    func schedulePageVisualPrepare() {
+        guard pageVisualCompositorEnabled, isViewLoaded, collectionView != nil else { return }
+        pageVisualPrepareGeneration &+= 1
+        let generation = pageVisualPrepareGeneration
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            guard let self,
+                  generation == self.pageVisualPrepareGeneration,
+                  self.paging.phase == .idle,
+                  self.paging.isEnabled,
+                  !self.searchMode,
+                  self.currentSurface != .appLibrary else { return }
+            await self.prepareWorkingSetVisuals()
+        }
+    }
+
+    /// 为当前 working set(previous/current/next)准备/复用页面视觉。
+    ///
+    /// 两阶段(idle):
+    /// 1. 整体解析 working set 图标 → 单一 iconEpoch(可用集合的稳定哈希)。
+    /// 2. 逐页冻结请求 → 后台光栅化 → 键复验后插入缓存。
+    /// 图标集合变化(迟到图标)→ 新 epoch → 旧键失效, 下次 idle 重建。
+    func prepareWorkingSetVisuals() async {
+        guard pageVisualCompositorEnabled, isViewLoaded, collectionView != nil else { return }
+        let display = store.displayModel()
+        guard currentPage >= 1, currentPage < display.pages.count else { return }
+        let g = geometry
+        guard g.pageWidth > 0, g.gridWidth > 0, g.gridHeight > 0 else { return }
+        let scale = currentBackingScale
+
+        // 阶段 1: 解析 working set 全部图标 → 单一 epoch。
+        let pages = [currentPage - 1, currentPage, currentPage + 1].filter {
+            $0 >= 0 && $0 < display.pages.count
+        }
+        let iconSet = await pageVisualRenderer.resolveIcons(
+            pages: pages.map { ($0, display.pages[$0]) },
+            folderChildrenPayload: display.folderChildrenPayload,
+            geometry: g,
+            scale: scale,
+            iconProvider: iconProvider
+        )
+        let iconEpoch = pageVisualRenderer.epoch(for: iconSet)
+
+        // 阶段 2: 逐页渲染(缓存命中跳过)。
+        for page in pages {
+            let key = pageVisualRenderer.makeKey(
+                page: page,
+                displayRevision: store.displayRevision,
+                geometry: g,
+                scale: scale,
+                languageRevision: Self.languageRevision(),
+                iconEpoch: iconEpoch
+            )
+            if pageVisualCache.contains(key) { continue }
+            let start = CACurrentMediaTime()
+            let visual = await pageVisualRenderer.prepare(
+                page: page,
+                items: display.pages[page],
+                displayName: { [weak self] id in self?.store.displayName(for: id) ?? "" },
+                folderName: { [weak self] id in self?.store.folderName(for: id) ?? "" },
+                geometry: g,
+                scale: scale,
+                displayRevision: store.displayRevision,
+                languageRevision: Self.languageRevision(),
+                icons: iconSet,
+                iconEpoch: iconEpoch
+            )
+            pageCompositor.metrics.recordVisualBuild(
+                durationMs: (CACurrentMediaTime() - start) * 1000
+            )
+            if let visual {
+                // 复验: 渲染期间数据/几何已变 → 键不匹配, 丢弃(下次重建)。
+                let currentKey = pageVisualRenderer.makeKey(
+                    page: page,
+                    displayRevision: store.displayRevision,
+                    geometry: self.geometry,
+                    scale: scale,
+                    languageRevision: Self.languageRevision(),
+                    iconEpoch: iconEpoch
+                )
+                if currentKey == visual.key {
+                    pageVisualCache.insert(visual)
+                }
+            }
+        }
+    }
+
+    private var currentBackingScale: Int {
+        let scale = view.window?.backingScaleFactor
+            ?? NSScreen.main?.backingScaleFactor
+            ?? 2
+        return max(1, Int(scale.rounded()))
+    }
+
+    /// 语言代数(缓存键组成部分; 会话内稳定)。
+    private static func languageRevision() -> UInt64 {
+        switch L10n.currentLanguage {
+        case .system: return 0
+        case .english: return 1
+        case .simplifiedChinese: return 2
+        case .traditionalChinese: return 3
+        }
+    }
+
+    // MARK: - P2 诊断 seam
+
+    /// 遥测汇总(仅 enabled 时记录数值)。
+    func pageCompositorMetricsSummary() -> String {
+        pageCompositor.metrics.summary(
+            cacheHits: pageVisualCache.hitCount,
+            cacheMisses: pageVisualCache.missCount,
+            cacheBytes: pageVisualCache.totalBytes
+        )
+    }
+
+    var pageCompositorActiveForDiag: Bool { pageCompositor.isActive }
+    var pageCompositorEligibleForDiag: Bool { compositorCanActivate() }
+    var pageCompositorCurrentOffsetForDiag: CGFloat { pageCompositor.currentOffset }
+    var pageCompositorLayerFramesForDiag: [CGRect] { pageCompositor.layerFramesForDiag }
+    var pageCompositorPageIndicesForDiag: [Int] { pageCompositor.pageIndicesForDiag }
+    var pageCompositorLiveOpacityForDiag: Float? { pageCompositor.liveLayerOpacityForDiag }
+    var pageCompositorEventsForDiag: [PageCompositor.Event] { pageCompositor.eventsForDiag }
+    var pageVisualCacheCountForDiag: Int { pageVisualCache.visualCount }
+    var pageVisualCacheTotalBytesForDiag: Int { pageVisualCache.totalBytes }
+
+    /// 真实 clip 水平偏移(测试/诊断)。
+    var clipOffsetXForDiag: CGFloat {
+        collectionView.enclosingScrollView?.contentView.bounds.origin.x ?? -1
+    }
+
+    /// 测试 seam: 直接驱动一轮 working set 准备(await 后台渲染完成)。
+    func waitForPageVisualPrepareForDiag() async {
+        await prepareWorkingSetVisuals()
     }
 
     override func scrollWheel(with event: NSEvent) {

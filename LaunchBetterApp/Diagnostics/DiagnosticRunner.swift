@@ -75,6 +75,11 @@ enum DiagnosticRunner {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
                 PagingEventTraceProbe.run(container: container)
             }
+        } else if CommandLine.arguments.contains("--pagecompositor") {
+            // P2: Page Compositor 实验(默认关; flag 开启组合器 + 遥测, A/B 对比)。
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                PageCompositorProbe.run(container: container)
+            }
         } else if CommandLine.arguments.contains("--pagingstressprobe") {
             // PA4: Library↔Page1 500 轮压力探针(不变式断言)。
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
