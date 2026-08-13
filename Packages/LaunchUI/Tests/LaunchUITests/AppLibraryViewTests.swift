@@ -510,6 +510,233 @@ struct AppLibraryViewTests {
         #expect(blanks == 2)
     }
 
+    // MARK: - V1 空白点击修复(文档外容器空白 + hitTest 接管)
+
+    @Test("gap between two cards in a row hides once (V1)")
+    func gapBetweenCardsHidesOnce() throws {
+        var blanks = 0
+        let controller = AppLibraryViewController(
+            model: makeModel(),
+            displayName: { $0.rawValue },
+            iconProvider: nil,
+            onLaunch: { _ in }
+        )
+        controller.onBlankClick = { blanks += 1 }
+        let window = host(controller)
+        defer { window.orderOut(nil); window.contentView = nil }
+        controller.collectionView.layoutSubtreeIfNeeded()
+
+        // 同一行相邻两卡之间的水平间隙: 网格背景空白(indexPathForItem == nil)。
+        let layout = try #require(controller.collectionView.collectionViewLayout)
+        let first = try #require(
+            layout.layoutAttributesForItem(at: IndexPath(item: 0, section: 0))
+        )
+        let second = try #require(
+            layout.layoutAttributesForItem(at: IndexPath(item: 1, section: 0))
+        )
+        #expect(abs(first.frame.midY - second.frame.midY) < 0.5)
+        let gapLocal = CGPoint(
+            x: (first.frame.maxX + second.frame.minX) / 2,
+            y: first.frame.midY
+        )
+        let point = controller.collectionView.convert(gapLocal, to: nil)
+
+        controller.collectionView.mouseDown(
+            with: mouseEvent(.leftMouseDown, at: point, window: window)
+        )
+        controller.collectionView.mouseUp(
+            with: mouseEvent(.leftMouseUp, at: point, window: window)
+        )
+        #expect(blanks == 1)
+    }
+
+    @Test("bottom blank below document hides once via scroll container (V1)")
+    func bottomBlankHidesOnceViaScrollContainer() throws {
+        var blanks = 0
+        let controller = AppLibraryViewController(
+            model: makeModel(),
+            displayName: { $0.rawValue },
+            iconProvider: nil,
+            onLaunch: { _ in }
+        )
+        controller.onBlankClick = { blanks += 1 }
+        // 窗口加高: 文档高度 < 视口 → 底部留白属于 scroll 容器(NSClipView 区域)。
+        let window = host(controller, size: NSSize(width: 1200, height: 1000))
+        defer { window.orderOut(nil); window.contentView = nil }
+        controller.collectionView.layoutSubtreeIfNeeded()
+
+        let scroll = try #require(
+            controller.verticalScrollView as? PausableLibraryScrollView
+        )
+        let point = try scrollContainerBlankPoint(in: controller)
+        let local = scroll.convert(point, from: nil)
+        // 断言点确实在文档 frame 之外(scroll 容器空白), 会话会 arm。
+        #expect(scroll.bounds.contains(local))
+
+        scroll.mouseDown(with: mouseEvent(.leftMouseDown, at: point, window: window))
+        scroll.mouseUp(with: mouseEvent(.leftMouseUp, at: point, window: window))
+        #expect(blanks == 1)
+    }
+
+    @Test("card whitespace opens detail, never hides (V1)")
+    func cardWhitespaceOpensDetailNotHide() throws {
+        var blanks = 0
+        let controller = AppLibraryViewController(
+            model: makeModel(),
+            displayName: { $0.rawValue },
+            iconProvider: nil,
+            onLaunch: { _ in }
+        )
+        controller.onBlankClick = { blanks += 1 }
+        let window = host(controller)
+        defer { window.orderOut(nil); window.contentView = nil }
+        controller.collectionView.layoutSubtreeIfNeeded()
+
+        let cell = try #require(cardCells(controller).first { $0.cardID == .category(.productivity) })
+        // 标题左上角外侧 padding 区: 不在 primary/mini/title 任何热区。
+        let whitespace = CGPoint(x: 7, y: cell.view.bounds.height - 7)
+        #expect(cell.primaryFrames.allSatisfy { !$0.contains(whitespace) })
+        #expect(!cell.miniFrame.contains(whitespace))
+        #expect(!cell.titleFrame.contains(whitespace))
+
+        cell.handleClick(at: whitespace)
+        #expect(controller.presentedDetail != nil)
+        #expect(blanks == 0)
+        controller.presentedDetail?.handleEscape()
+        #expect(controller.presentedDetail == nil)
+    }
+
+    @Test("settings shield consumes blank clicks; ownership restored after (V1)")
+    func settingsShieldConsumesBlankClicksOwnershipUnchanged() throws {
+        var blanks = 0
+        let controller = AppLibraryViewController(
+            model: makeModel(),
+            displayName: { $0.rawValue },
+            iconProvider: nil,
+            onLaunch: { _ in }
+        )
+        controller.onBlankClick = { blanks += 1 }
+        let window = host(controller, size: NSSize(width: 1200, height: 1000))
+        defer { window.orderOut(nil); window.contentView = nil }
+        controller.collectionView.layoutSubtreeIfNeeded()
+
+        let scroll = try #require(
+            controller.verticalScrollView as? PausableLibraryScrollView
+        )
+        let point = try scrollContainerBlankPoint(in: controller)
+        let local = controller.view.convert(point, from: nil)
+
+        // Settings 打开: 屏蔽层覆盖整个内容 → 空白命中 shield, 不是 scroll view。
+        let shield = SettingsInteractionShield(frame: controller.view.bounds)
+        var shieldDowns = 0
+        var shieldUps = 0
+        shield.onShieldMouseDown = { shieldDowns += 1 }
+        shield.onShieldMouseUp = { shieldUps += 1 }
+        controller.view.addSubview(shield)
+        // 屏蔽层在最上层, 命中优先于 scroll 内容(离屏宿主下 scroll 自身
+        // hitTest 结果不可靠, 这里断言"shield 存在时命中 shield"这一契约)。
+        #expect(controller.view.hitTest(local) === shield)
+
+        // AppKit 把事件交给 shield(消费完整序列): 不 arm 空白会话, 不隐藏。
+        shield.mouseDown(with: mouseEvent(.leftMouseDown, at: point, window: window))
+        shield.mouseUp(with: mouseEvent(.leftMouseUp, at: point, window: window))
+        #expect(shieldDowns == 1)
+        #expect(shieldUps == 1)
+        #expect(blanks == 0)
+        #expect(controller.presentedDetail == nil)
+
+        // 关闭 Settings → 移除 shield → 空白所有权恢复, 点击再次触发隐藏。
+        shield.removeFromSuperview()
+        scroll.mouseDown(with: mouseEvent(.leftMouseDown, at: point, window: window))
+        scroll.mouseUp(with: mouseEvent(.leftMouseUp, at: point, window: window))
+        #expect(blanks == 1)
+    }
+
+    @Test("scroll container blank mouseDown then mouseUp far outside does not blank (V1)")
+    func scrollBlankDragOutDoesNotBlank() throws {
+        var blanks = 0
+        let controller = AppLibraryViewController(
+            model: makeModel(),
+            displayName: { $0.rawValue },
+            iconProvider: nil,
+            onLaunch: { _ in }
+        )
+        controller.onBlankClick = { blanks += 1 }
+        let window = host(controller, size: NSSize(width: 1200, height: 1000))
+        defer { window.orderOut(nil); window.contentView = nil }
+        controller.collectionView.layoutSubtreeIfNeeded()
+
+        let scroll = try #require(
+            controller.verticalScrollView as? PausableLibraryScrollView
+        )
+        let down = try scrollContainerBlankPoint(in: controller)
+        let up = CGPoint(x: down.x + 100, y: down.y)
+        scroll.mouseDown(with: mouseEvent(.leftMouseDown, at: down, window: window))
+        scroll.mouseUp(with: mouseEvent(.leftMouseUp, at: up, window: window))
+        #expect(blanks == 0)
+
+        // 拖出作废的会话不污染下一次: 随后的正常空白点击仍触发一次。
+        scroll.mouseDown(with: mouseEvent(.leftMouseDown, at: down, window: window))
+        scroll.mouseUp(with: mouseEvent(.leftMouseUp, at: down, window: window))
+        #expect(blanks == 1)
+    }
+
+    @Test("scroll container unpaired mouseUp does not blank (V1)")
+    func scrollBlankUnpairedMouseUpDoesNotBlank() throws {
+        var blanks = 0
+        let controller = AppLibraryViewController(
+            model: makeModel(),
+            displayName: { $0.rawValue },
+            iconProvider: nil,
+            onLaunch: { _ in }
+        )
+        controller.onBlankClick = { blanks += 1 }
+        let window = host(controller, size: NSSize(width: 1200, height: 1000))
+        defer { window.orderOut(nil); window.contentView = nil }
+        controller.collectionView.layoutSubtreeIfNeeded()
+
+        let scroll = try #require(
+            controller.verticalScrollView as? PausableLibraryScrollView
+        )
+        let point = try scrollContainerBlankPoint(in: controller)
+
+        // 无配对 mouseDown 的 mouseUp: 会话未 arm, 不触发。
+        scroll.mouseUp(with: mouseEvent(.leftMouseUp, at: point, window: window))
+        #expect(blanks == 0)
+
+        // 正常会话仍触发一次。
+        scroll.mouseDown(with: mouseEvent(.leftMouseDown, at: point, window: window))
+        scroll.mouseUp(with: mouseEvent(.leftMouseUp, at: point, window: window))
+        #expect(blanks == 1)
+    }
+
+    @Test("two scroll container blank clicks fire twice as independent sessions (V1)")
+    func twoScrollBlanksFireTwice() throws {
+        var blanks = 0
+        let controller = AppLibraryViewController(
+            model: makeModel(),
+            displayName: { $0.rawValue },
+            iconProvider: nil,
+            onLaunch: { _ in }
+        )
+        controller.onBlankClick = { blanks += 1 }
+        let window = host(controller, size: NSSize(width: 1200, height: 1000))
+        defer { window.orderOut(nil); window.contentView = nil }
+        controller.collectionView.layoutSubtreeIfNeeded()
+
+        let scroll = try #require(
+            controller.verticalScrollView as? PausableLibraryScrollView
+        )
+        let point = try scrollContainerBlankPoint(in: controller)
+        scroll.mouseDown(with: mouseEvent(.leftMouseDown, at: point, window: window))
+        scroll.mouseUp(with: mouseEvent(.leftMouseUp, at: point, window: window))
+        #expect(blanks == 1)
+
+        scroll.mouseDown(with: mouseEvent(.leftMouseDown, at: point, window: window))
+        scroll.mouseUp(with: mouseEvent(.leftMouseUp, at: point, window: window))
+        #expect(blanks == 2)
+    }
+
     // MARK: - 卡片象限布局
 
     @Test("suggestions card renders 2×2 four large icons, no mini area")
@@ -1230,6 +1457,34 @@ struct AppLibraryViewTests {
                 ? candidate : nil
         )
         return collectionView.convert(point, to: nil)
+    }
+
+    /// V1: 返回 scroll 容器"文档外底部空白"的窗口坐标点(在 scroll bounds 内、
+    /// 文档 frame 外)。需要窗口足够高(文档高度 < 视口), 底部留白才存在。
+    /// 离屏测试宿主不会自动触发 `viewDidLayout`(文档 frame 保持 clip 全尺寸),
+    /// 先显式调用让文档 frame 收缩到 contentSize。
+    private func scrollContainerBlankPoint(in controller: AppLibraryViewController) throws -> NSPoint {
+        controller.viewDidLayout()
+        let scroll = try #require(
+            controller.verticalScrollView as? PausableLibraryScrollView
+        )
+        let document = try #require(scroll.documentView)
+        let docFrame = scroll.convert(document.frame, from: document.superview)
+        // 优先取文档下沿之外(flipped: maxY 为视觉底部); 若不在 bounds 内,
+        // 回退文档上沿之外。两者都必须是 scroll 可视区内且非文档区域。
+        let below = CGPoint(x: scroll.bounds.midX, y: docFrame.maxY + 20)
+        let above = CGPoint(x: scroll.bounds.midX, y: docFrame.minY - 20)
+        let local: CGPoint? = {
+            if scroll.bounds.contains(below), !docFrame.contains(below) {
+                return below
+            }
+            if scroll.bounds.contains(above), !docFrame.contains(above) {
+                return above
+            }
+            return nil
+        }()
+        let point = try #require(local)
+        return scroll.convert(point, to: nil)
     }
 
     private func descendants(of view: NSView) -> [NSView] {

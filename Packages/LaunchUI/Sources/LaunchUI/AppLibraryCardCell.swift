@@ -83,6 +83,9 @@ final class AppLibraryCardCell: NSCollectionViewItem {
     private static let titleGap: CGFloat = 12
     private static let quadrantGap: CGFloat = 12
     private static let miniGap: CGFloat = 8
+    /// 重分类悬停高亮幅度(克制; 计时经 MotionTokens.pressFeedback)。
+    private static let reclassificationHoverScale: CGFloat = 1.02
+    private static let reclassificationHoverBorderWidth: CGFloat = 1.5
 
     private let cardView = NSVisualEffectView()
     private let titleLabel = NSTextField(labelWithString: "")
@@ -122,6 +125,12 @@ final class AppLibraryCardCell: NSCollectionViewItem {
 
     /// 已成功应用的 provider 图标(AppID → CGImage, 测试 seam)。
     private(set) var appliedImages: [AppID: CGImage] = [:]
+
+    /// 主区大图标身份(顺序与 `primaryFrames` 一一对应; 重分类源命中/测试 seam)。
+    var primaryAppIDs: [AppID] { representedPrimaryAppIDs }
+
+    /// 当前是否处于重分类悬停高亮(测试 seam)。
+    private(set) var reclassificationHoverActive = false
 
     override func loadView() {
         let root = LibraryCardRootView()
@@ -262,8 +271,24 @@ final class AppLibraryCardCell: NSCollectionViewItem {
         guard representedCardID != nil else { return }
         if let index = primaryFrames.firstIndex(where: { $0.contains(point) }),
            representedPrimaryAppIDs.indices.contains(index) {
+            LibraryBlankTraceLog.record(
+                "card click point=\(LibraryBlankTraceLog.fmt(point)) "
+                    + "cardHit=primary[\(index)] action=launch"
+            )
             onAction?(.launch(representedPrimaryAppIDs[index]))
         } else if miniFrame.contains(point) || titleFrame.contains(point) {
+            LibraryBlankTraceLog.record(
+                "card click point=\(LibraryBlankTraceLog.fmt(point)) "
+                    + "cardHit=\(miniFrame.contains(point) ? "mini" : "title") action=openDetail"
+            )
+            onAction?(.openDetail)
+        } else {
+            // V1: 卡内空白(图标/mini/标题之外的 padding/间隙)→ 打开分类 detail,
+            // 与卡片交互对象语义一致(不触发空白隐藏)。
+            LibraryBlankTraceLog.record(
+                "card click point=\(LibraryBlankTraceLog.fmt(point)) "
+                    + "cardHit=cardWhitespace action=openDetail"
+            )
             onAction?(.openDetail)
         }
     }
@@ -281,6 +306,40 @@ final class AppLibraryCardCell: NSCollectionViewItem {
     /// 测试 seam: 已应用的 provider 图标(AppID → image)。
     func appliedIconImage(for appID: AppID) -> CGImage? {
         appliedImages[appID]
+    }
+
+    /// 重分类源视觉: 主区图标当前显示的图像(已应用 provider 图标或内存占位)。
+    /// 复用已渲染内容, 零磁盘 / 零 Info.plist / 零新图标请求。
+    func sourceVisualImage(at index: Int) -> NSImage? {
+        guard primaryImageViews.indices.contains(index) else { return nil }
+        return primaryImageViews[index].image
+    }
+
+    /// 重分类悬停高亮(仅"有效目标分类卡"): MotionTokens 约束的轻微 scale +
+    /// border 强调; 离开立即恢复(临界阻尼, 无大弹跳/常亮)。Reduce Motion 下
+    /// 状态即时应用(高亮本身是状态, 不是瞬态动效)。
+    func setReclassificationHoverHighlighted(_ active: Bool) {
+        guard reclassificationHoverActive != active, isViewLoaded else { return }
+        reclassificationHoverActive = active
+        let transform = active
+            ? CATransform3DMakeScale(
+                Self.reclassificationHoverScale,
+                Self.reclassificationHoverScale,
+                1
+            )
+            : CATransform3DIdentity
+        let duration = reducedMotion ? 0 : MotionTokens.pressFeedback.response
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = duration
+            context.allowsImplicitAnimation = !reducedMotion
+            view.layer?.transform = transform
+            if let cardLayer = cardView.layer {
+                cardLayer.borderWidth = active ? Self.reclassificationHoverBorderWidth : 0
+                cardLayer.borderColor = active
+                    ? NSColor.white.withAlphaComponent(0.5).cgColor
+                    : nil
+            }
+        }
     }
 
     // MARK: - 按压反馈
@@ -512,6 +571,7 @@ final class AppLibraryCardCell: NSCollectionViewItem {
         miniIconFrames = []
         titleFrame = .zero
         if isViewLoaded {
+            reclassificationHoverActive = false
             titleLabel.stringValue = ""
             for imageView in primaryImageViews {
                 imageView.image = nil
@@ -520,6 +580,8 @@ final class AppLibraryCardCell: NSCollectionViewItem {
                 imageView.image = nil
             }
             view.layer?.transform = CATransform3DIdentity
+            cardView.layer?.borderWidth = 0
+            cardView.layer?.borderColor = nil
         }
     }
 

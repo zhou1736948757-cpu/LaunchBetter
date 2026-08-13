@@ -222,6 +222,26 @@ enum SettingsPresentationRoute: Equatable, Sendable {
     }
 }
 
+/// 三指拖拽路由(A11): 按当前输入面决定三指拖拽实现。
+///
+/// - `.launcher` → 既有 DragController(结构拖拽, 不变)
+/// - `.appLibrary` → App Library 重分类拖拽(V3)
+/// - `.settings` / `.appLibraryCategory` → 阻塞(本阶段不支持)
+/// - `.folder` → 既有行为不变(该入口不路由; 文件夹拖拽走自身鼠标路径)
+enum ThreeFingerDragRoute: Equatable, Sendable {
+    case gridDrag
+    case libraryReclassification
+    case blocked
+
+    static func make(for surface: LauncherInteractionSurface) -> Self {
+        switch surface {
+        case .launcher: return .gridDrag
+        case .appLibrary: return .libraryReclassification
+        case .settings, .appLibraryCategory, .folder: return .blocked
+        }
+    }
+}
+
 /// Idempotent child-window attachment used by both initial and repeated
 /// Settings presentation. A stale parent must release the Settings window
 /// before the launcher adopts it.
@@ -434,6 +454,7 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         case .appLibrary:
             interactionSurface = .appLibrary
             dragController?.cancelDrag()
+            appLibraryControllerForDiag?.cancelReclassificationDrag()
         case .layoutPage:
             interactionSurface = .launcher
         }
@@ -597,7 +618,12 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
             self.openFolder(folderID)
         }
         grid.onClickBlank = { [weak self] in
-            guard let self, self.interactionSurface == .launcher else { return }
+            // V1: Library 空白点击也隐藏(PA3 设计即复用 onClickBlank → hide)。
+            // 仅 .launcher/.appLibrary; detail 打开时由 Library 控制器与 detail
+            // 根视图门控, Settings/Folder 由 shield/覆盖层消费, 不会到达这里。
+            guard let self,
+                  self.interactionSurface == .launcher
+                    || self.interactionSurface == .appLibrary else { return }
             self.hide()
         }
         // Stage E9a: 语义 surface / Library detail 状态 → 输入 owner 同步。
@@ -1041,6 +1067,8 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         onVisibilityChange?(false)
         // M4: 隐藏时终止拖拽(display link/overlay 清理)
         dragController?.shutdown()
+        // V3: 隐藏时终止重分类拖拽(overlay/挂起恢复)
+        appLibraryControllerForDiag?.cancelReclassificationDrag()
         // 隐藏时清理 Library category detail(幂等; 其关闭 completion 不释放新 owner)。
         gridViewController?.closeAppLibraryDetail()
         // 文件夹是临时覆盖层；隐藏/Escape 后重开必须回到主网格。
@@ -1208,38 +1236,61 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         gridViewController?.dragCacheProbePoint()
     }
 
-    /// 是否有活动拖拽(Stage 2 三指 enable/disable 检查)。
+    /// 是否有活动拖拽(Stage 2 三指 enable/disable 检查; V3 含重分类拖拽)。
     public func hasActiveDrag() -> Bool {
-        dragController?.isDragging ?? false
+        (dragController?.isDragging ?? false)
+            || (appLibraryControllerForDiag?.isReclassificationDragging ?? false)
     }
 
-    /// 三指拖动: 反查指针下图标并开始拖拽(Stage 2)。返回是否成功开始。
-    /// 位置语义与旧 LaunchHistory 一致: 用 NSEvent.mouseLocation(指针), 非触点中心。
+    /// 三指拖动: 反查指针下图标并开始拖拽(Stage 2)。位置语义与旧 LaunchHistory
+    /// 一致: 用 NSEvent.mouseLocation(指针), 非触点中心。
+    /// V3(A11): 按 interactionSurface 分派 —— `.launcher` 既有 DragController;
+    /// `.appLibrary` 重分类拖拽; `.settings`/`.appLibraryCategory`/`.folder` 阻塞。
     public func threeFingerDragBegin() -> Bool {
-        // 只有 launcher 面拥有输入: Settings 激活或文件夹打开时不可命中底层网格。
-        guard interactionSurface == .launcher else { return false }
-        guard let grid = gridViewController, let drag = dragController else { return false }
-        guard let windowPoint = currentPointerInWindow() else { return false }
-        guard let item = grid.itemAt(point: windowPoint) else { return false }
-        drag.beginDrag(item: item, at: windowPoint, inputSource: .threeFinger)
-        return drag.isDragging
+        switch ThreeFingerDragRoute.make(for: interactionSurface) {
+        case .gridDrag:
+            guard let grid = gridViewController, let drag = dragController else { return false }
+            guard let windowPoint = currentPointerInWindow() else { return false }
+            guard let item = grid.itemAt(point: windowPoint) else { return false }
+            drag.beginDrag(item: item, at: windowPoint, inputSource: .threeFinger)
+            return drag.isDragging
+        case .libraryReclassification:
+            guard let windowPoint = currentPointerInWindow() else { return false }
+            return appLibraryControllerForDiag?.beginReclassificationDrag(at: windowPoint) ?? false
+        case .blocked:
+            return false
+        }
     }
 
     public func threeFingerDragUpdate() {
-        guard interactionSurface == .launcher,
-              let drag = dragController, let windowPoint = currentPointerInWindow() else { return }
-        drag.updateDrag(at: windowPoint, inputSource: .threeFinger)
+        switch ThreeFingerDragRoute.make(for: interactionSurface) {
+        case .gridDrag:
+            guard let drag = dragController, let windowPoint = currentPointerInWindow() else { return }
+            drag.updateDrag(at: windowPoint, inputSource: .threeFinger)
+        case .libraryReclassification:
+            guard let windowPoint = currentPointerInWindow() else { return }
+            appLibraryControllerForDiag?.updateReclassificationDrag(at: windowPoint)
+        case .blocked:
+            break
+        }
     }
 
     public func threeFingerDragEnd() {
-        guard interactionSurface == .launcher,
-              let drag = dragController, let windowPoint = currentPointerInWindow() else { return }
-        let leftMouseButtonPressed = (NSEvent.pressedMouseButtons & 1) != 0
-        drag.endDrag(
-            at: windowPoint,
-            inputSource: .threeFinger,
-            leftMouseButtonPressed: leftMouseButtonPressed
-        )
+        switch ThreeFingerDragRoute.make(for: interactionSurface) {
+        case .gridDrag:
+            guard let drag = dragController, let windowPoint = currentPointerInWindow() else { return }
+            let leftMouseButtonPressed = (NSEvent.pressedMouseButtons & 1) != 0
+            drag.endDrag(
+                at: windowPoint,
+                inputSource: .threeFinger,
+                leftMouseButtonPressed: leftMouseButtonPressed
+            )
+        case .libraryReclassification:
+            guard let windowPoint = currentPointerInWindow() else { return }
+            appLibraryControllerForDiag?.endReclassificationDrag(at: windowPoint)
+        case .blocked:
+            break
+        }
     }
 
     /// 三指路径统一使用窗口基坐标，避免多处 screen→window 转换产生契约漂移。
@@ -1315,6 +1366,7 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
 
     public func threeFingerDragCancel() {
         dragController?.cancelDrag()
+        appLibraryControllerForDiag?.cancelReclassificationDrag()
     }
 
     /// 拖拽缓存诊断(v0.1.6 §64): 同 destination 停留时 preview/transform 写应不增长。

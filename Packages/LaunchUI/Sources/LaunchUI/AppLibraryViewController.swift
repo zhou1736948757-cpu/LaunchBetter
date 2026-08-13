@@ -1,6 +1,39 @@
 import AppKit
 import LaunchCore
 
+/// V1: Library 空白点击逐会话 trace 共享写入器(生产默认关闭)。
+///
+/// `--libraryblanktrace` 时由探针开启; BlankClickLibraryCollectionView /
+/// PausableLibraryScrollView / AppLibraryViewController 三方调用 `record`,
+/// 探针侧额外追加 surface 快照与断言行, 事件序列按时间戳交错落在
+/// `/tmp/lb-library-blank-trace.log`。诊断用途, 非热路径(仅 enabled 时开
+/// 文件)。记录仅作诊断, 不参与任何行为决策。
+@MainActor
+enum LibraryBlankTraceLog {
+    private static let path = "/tmp/lb-library-blank-trace.log"
+
+    static var enabled = false
+
+    /// 记录一行 trace。enabled 关闭时零开销。
+    static func record(_ line: String) {
+        guard enabled else { return }
+        let timestamp = ProcessInfo.processInfo.systemUptime
+        let formatted = String(format: "[%10.4f]", timestamp)
+        if !FileManager.default.fileExists(atPath: path) {
+            FileManager.default.createFile(atPath: path, contents: nil)
+        }
+        guard let handle = FileHandle(forWritingAtPath: path) else { return }
+        defer { try? handle.close() }
+        _ = try? handle.seekToEnd()
+        try? handle.write(contentsOf: Data((formatted + " " + line + "\n").utf8))
+    }
+
+    /// 诊断点格式化(与探针一致, 便于日志内文本比较)。
+    static func fmt(_ point: NSPoint) -> String {
+        String(format: "%.1f,%.1f", point.x, point.y)
+    }
+}
+
 /// App Library 卡片网格控制器(独立 AppKit 表面)。
 ///
 /// 注入边界: model / displayName / iconProvider / onLaunch 全部由宿主提供;
@@ -36,6 +69,9 @@ public final class AppLibraryViewController: NSViewController {
     private var pendingContentInsets: (top: CGFloat, bottom: CGFloat)?
 
     private var detailController: AppLibraryDetailViewController?
+
+    /// 三指重分类拖拽(任务包 V3; 惰性创建, 首次拖拽才实例化)。
+    private var reclassificationDrag: AppLibraryReclassificationDragController?
 
     /// Category detail 打开/关闭状态变化回调(open = true 表示 detail 已打开)。
     /// 由宿主转发给 Grid/Window 维护 `.appLibraryCategory` 输入 owner。
@@ -154,7 +190,7 @@ public final class AppLibraryViewController: NSViewController {
 
     /// 关闭当前 detail(幂等; 不关闭 Library 本身)。
     /// 由宿主在 Settings 打开 / Launcher 隐藏 / 离开 Library surface 时调用。
-    func dismissDetailIfPresent() {
+    public func dismissDetailIfPresent() {
         guard detailController != nil else { return }
         closeDetail()
     }
@@ -162,6 +198,11 @@ public final class AppLibraryViewController: NSViewController {
     // MARK: - View lifecycle
 
     public override func loadView() {
+        // V1: --libraryblanktrace 时开启空白点击逐会话 trace(与 PA4
+        // PagingTraceLog 同模式; 幂等)。
+        if CommandLine.arguments.contains("--libraryblanktrace") {
+            LibraryBlankTraceLog.enabled = true
+        }
         scrollView.drawsBackground = false
         scrollView.hasHorizontalScroller = false
         scrollView.hasVerticalScroller = true
@@ -275,6 +316,8 @@ public final class AppLibraryViewController: NSViewController {
             updated[card.id] = card
         }
         previousCards = updated
+        // 模型刷新期间 cell 可能被复用: 清除 stale hover 高亮(拖拽会话本身不受影响)。
+        reclassificationDrag?.clearHover()
     }
 
     private func updateDocumentFrame() {
@@ -298,7 +341,16 @@ public final class AppLibraryViewController: NSViewController {
     /// 空白隐藏 —— detail 根视图覆盖并消费全部点击, 这里再门控一次是防御性
     /// 兜底(保证任何路径都不在 detail 期隐藏 Library)。
     private func handleBlankClick() {
-        guard detailController == nil, !scrollView.isScrollPaused else { return }
+        guard detailController == nil, !scrollView.isScrollPaused else {
+            LibraryBlankTraceLog.record(
+                "onBlankClick layer=libraryController blocked detail=\(detailController != nil ? 1 : 0) "
+                    + "paused=\(scrollView.isScrollPaused ? 1 : 0)"
+            )
+            return
+        }
+        LibraryBlankTraceLog.record(
+            "onBlankClick layer=libraryController forwarded handler=\(onBlankClick != nil ? 1 : 0)"
+        )
         onBlankClick?()
     }
 
@@ -439,11 +491,122 @@ public final class AppLibraryViewController: NSViewController {
         let category: AppLibraryCategory
     }
 
+    // MARK: - 三指重分类拖拽(V3)
+
+    /// 源命中(A13): 仅 large primary 大图标可作为源; mini 簇 / 卡片背景 /
+    /// 标题 / 页面空白不启动(mini 簇源延迟到后续阶段)。detail 打开时不启动。
+    private func reclassificationSource(
+        at windowPoint: NSPoint
+    ) -> AppLibraryReclassificationDragController.Source? {
+        guard detailController == nil else { return nil }
+        let local = gridCollectionView.convert(windowPoint, from: nil)
+        guard let indexPath = gridCollectionView.indexPathForItem(at: local),
+              let cell = gridCollectionView.item(at: indexPath) as? AppLibraryCardCell else {
+            return nil
+        }
+        let cellLocal = cell.view.convert(windowPoint, from: nil)
+        guard let index = cell.primaryFrames.firstIndex(where: { $0.contains(cellLocal) }),
+              cell.primaryAppIDs.indices.contains(index),
+              let visual = cell.sourceVisualImage(at: index),
+              let sourceCategory = effectiveCategory(for: cell.primaryAppIDs[index]) else {
+            return nil
+        }
+        return AppLibraryReclassificationDragController.Source(
+            appID: cell.primaryAppIDs[index],
+            sourceCategory: sourceCategory,
+            visual: visual,
+            iconSize: cell.primaryFrames[index].width
+        )
+    }
+
+    /// 目标命中(A15): 仅普通分类卡; Suggestions / Recently Added / 空白 /
+    /// 搜索 / 设置(均在 Library 视图之外或非分类卡)无效。返回卡片与 cell。
+    private func reclassificationTarget(
+        at windowPoint: NSPoint
+    ) -> (card: AppLibraryCard, cell: AppLibraryCardCell)? {
+        let local = gridCollectionView.convert(windowPoint, from: nil)
+        guard let indexPath = gridCollectionView.indexPathForItem(at: local),
+              let cell = gridCollectionView.item(at: indexPath) as? AppLibraryCardCell,
+              let cardID = cell.cardID,
+              let card = model.cards.first(where: { $0.id == cardID }) else { return nil }
+        return (card, cell)
+    }
+
+    private func ensureReclassificationDrag() -> AppLibraryReclassificationDragController {
+        if let drag = reclassificationDrag { return drag }
+        let drag = AppLibraryReclassificationDragController(
+            hostView: view,
+            modelProvider: { [weak self] in
+                self?.model ?? AppLibraryModel(cards: [], categoryDetail: [:])
+            },
+            categoryOverriding: categoryOverriding,
+            targetResolver: { [weak self] point in
+                self?.reclassificationTarget(at: point)
+            }
+        )
+        reclassificationDrag = drag
+        return drag
+    }
+
+    /// 三指重分类拖拽 begin(由 WindowController 按 `.appLibrary` 面路由)。
+    /// 源命中成功后开始拖拽并挂起 Library 垂直滚动与水平翻页(A19)。
+    @discardableResult
+    func beginReclassificationDrag(at windowPoint: NSPoint) -> Bool {
+        guard reclassificationDrag?.isActive != true else { return false }
+        guard let source = reclassificationSource(at: windowPoint) else { return false }
+        let drag = ensureReclassificationDrag()
+        guard drag.begin(source: source, at: windowPoint) else { return false }
+        // A19: 拖拽激活 → 挂起垂直滚动与 Library↔Page1 水平翻页(既有 paused
+        // 门控同时消费两轴; 恢复在 end/cancel)。
+        scrollView.isScrollPaused = true
+        return true
+    }
+
+    func updateReclassificationDrag(at windowPoint: NSPoint) {
+        guard reclassificationDrag?.isActive == true else { return }
+        reclassificationDrag?.update(at: windowPoint)
+    }
+
+    /// 三指重分类拖拽 end: drop/cancel 语义在控制器内; 无论结果如何恢复滚动。
+    func endReclassificationDrag(at windowPoint: NSPoint) {
+        guard reclassificationDrag?.isActive == true else { return }
+        reclassificationDrag?.end(at: windowPoint)
+        scrollView.isScrollPaused = false
+    }
+
+    /// 三指重分类拖拽 cancel(无变更; 恢复滚动)。
+    func cancelReclassificationDrag() {
+        guard reclassificationDrag?.isActive == true else { return }
+        reclassificationDrag?.cancel()
+        scrollView.isScrollPaused = false
+    }
+
+    /// 是否有活动的重分类拖拽(WindowController hasActiveDrag / 测试 seam)。
+    var isReclassificationDragging: Bool {
+        reclassificationDrag?.isActive ?? false
+    }
+
+    /// 诊断: 重分类拖拽状态。
+    var reclassificationDragStateForDiag: String {
+        guard let drag = reclassificationDrag else { return "nil" }
+        return "active=\(drag.isActive ? 1 : 0) "
+            + "hovered=\(drag.hoveredCategory.map(\.rawValue) ?? "nil") "
+            + "overlay=\(drag.overlayVisibleForDiag ? 1 : 0)"
+    }
+
+    /// 诊断: 当前 hover 的生效分类(测试 seam)。
+    var reclassificationDragHoveredCategoryForDiag: AppLibraryCategory? {
+        reclassificationDrag?.hoveredCategory
+    }
+
+    /// 诊断: 当前模型快照(测试 seam; 只读, 用于断言拖拽不驱动模型变更)。
+    var modelForDiag: AppLibraryModel { model }
+
     // MARK: - 诊断 seam(E10 visual evidence)
 
     /// E10 诊断: 打开第一个 category 分类卡 detail(幂等; 无分类卡返回 false)。
     /// 只导航/读取, 不写 Layout/Config/Usage。
-    func openFirstCategoryDetailForDiagnostic() -> Bool {
+    public func openFirstCategoryDetailForDiagnostic() -> Bool {
         guard detailController == nil else { return true }
         guard let card = model.cards.first(where: { card in
             if case .category = card.id { return true }
@@ -468,8 +631,77 @@ public final class AppLibraryViewController: NSViewController {
     }
 
     /// E10 诊断: 卡片 / 可见 cell / detail 状态快照。
-    func libraryShotCounts() -> String {
+    public func libraryShotCounts() -> String {
         "cards=\(model.cards.count) visible=\(gridCollectionView.visibleItems().count) detail=\(detailController == nil ? 0 : 1)"
+    }
+
+    /// V1 诊断 seam: 空白点击 trace 探针的关键命中点(窗口坐标)。
+    ///
+    /// 场景: `bottomBlank`(文档外 clip 空白; 内容不足一屏时才存在) /
+    /// `gap`(两卡之间空白) / `primary` / `mini` / `title` / `cardWhitespace`
+    /// (卡片内图标/mini/标题之外的空白)。只读取几何, 不触发任何行为。
+    /// 依赖已布局的 cell(探针在 settle 后调用)。
+    ///
+    /// 坐标规则: 事件派发点必须满足视图侧 `convert(event.locationInWindow,
+    /// from: nil)` 的逆变换 —— 卡内热区 frame 属于卡片根视图本地坐标, 必须经
+    /// `cell.view.convert(...)` 转窗口; 网格空白点(集合本地坐标)经
+    /// `gridCollectionView.convert(...)` 转窗口。探针用 `scroll.hitTest(W)`
+    /// 验证实际派发命中(与 AppKit 派发一致)。
+    public func libraryBlankTracePoints() -> [String: NSPoint] {
+        var points: [String: NSPoint] = [:]
+        let collection = gridCollectionView
+        let count = collection.numberOfItems(inSection: 0)
+        let frames = (0..<count).compactMap {
+            collection.collectionViewLayout?.layoutAttributesForItem(
+                at: IndexPath(item: $0, section: 0)
+            )?.frame
+        }
+        guard !frames.isEmpty else { return points }
+        // 底部空白(文档外): 文档 frame 在窗口坐标中位于视口内且下方有余量。
+        if let doc = scrollView.documentView {
+            let docRect = doc.convert(doc.bounds, to: nil)
+            let viewport = scrollView.convert(scrollView.bounds, to: nil)
+            let candidate = CGPoint(x: docRect.midX, y: docRect.minY - 4)
+            if viewport.contains(candidate) {
+                points["bottomBlank"] = candidate
+            }
+        }
+        // 卡间隙: 首卡与次卡之间的水平中线(同一行内, 集合本地坐标)。
+        if frames.count >= 2 {
+            let wp = collection.convert(
+                CGPoint(x: (frames[0].maxX + frames[1].minX) / 2, y: frames[0].midY),
+                to: nil
+            )
+            points["gap"] = wp
+        }
+        // 卡片热区: 从首卡 cell 的真实 frame 取(与点击路由同一几何);
+        // 热区 frame 属于卡片根视图本地坐标, 经 cell.view.convert 转窗口。
+        if let cell = collection.item(at: IndexPath(item: 0, section: 0)) as? AppLibraryCardCell {
+            if let p = cell.primaryFrames.first {
+                points["primary"] = cell.view.convert(CGPoint(x: p.midX, y: p.midY), to: nil)
+            }
+            if cell.titleFrame.width > 0 {
+                points["title"] = cell.view.convert(
+                    CGPoint(x: cell.titleFrame.midX, y: cell.titleFrame.midY), to: nil
+                )
+            }
+            // 卡内空白: 标题左上角外侧 padding 区(不在标题/图标/mini 任何热区)。
+            let bounds = cell.view.bounds
+            points["cardWhitespace"] = cell.view.convert(
+                CGPoint(x: 7, y: bounds.height - 7), to: nil
+            )
+        }
+        // mini: 首个带 mini 簇的卡(Suggestions 卡无 mini)。
+        for index in 0..<count {
+            guard let cell = collection.item(at: IndexPath(item: index, section: 0))
+                as? AppLibraryCardCell,
+                cell.miniFrame.width > 0 else { continue }
+            points["mini"] = cell.view.convert(
+                CGPoint(x: cell.miniFrame.midX, y: cell.miniFrame.midY), to: nil
+            )
+            break
+        }
+        return points
     }
 }
 
@@ -522,22 +754,55 @@ final class BlankClickLibraryCollectionView: NSCollectionView {
 
     override func mouseDown(with event: NSEvent) {
         let point = event.locationInWindow
-        if isBlank(at: point) {
+        let local = convert(point, from: nil)
+        let blank = isBlank(at: point)
+        if blank {
             blankSession.arm(at: point)
         } else {
             blankSession.reset()
         }
+        LibraryBlankTraceLog.record(
+            "grid mouseDown win=\(LibraryBlankTraceLog.fmt(point)) "
+                + "local=\(LibraryBlankTraceLog.fmt(local)) "
+                + "indexPath=\(indexPathForItem(at: local).map { "\($0.item)" } ?? "nil") "
+                + "cardHit=\(cardHitArea(for: local) ?? "none") "
+                + "session=\(blank ? "arm" : "reset")"
+        )
     }
 
     override func mouseUp(with event: NSEvent) {
         let point = event.locationInWindow
-        guard isBlank(at: point), blankSession.release(at: point) else { return }
+        let local = convert(point, from: nil)
+        let blank = isBlank(at: point)
+        let released = blankSession.release(at: point)
+        let fired = blank && released
+        LibraryBlankTraceLog.record(
+            "grid mouseUp win=\(LibraryBlankTraceLog.fmt(point)) "
+                + "local=\(LibraryBlankTraceLog.fmt(local)) "
+                + "indexPath=\(indexPathForItem(at: local).map { "\($0.item)" } ?? "nil") "
+                + "cardHit=\(cardHitArea(for: local) ?? "none") "
+                + "blank=\(blank ? 1 : 0) released=\(released ? 1 : 0) fire=\(fired ? 1 : 0)"
+        )
+        guard fired else { return }
         onBlankClick?()
     }
 
     private func isBlank(at windowPoint: NSPoint) -> Bool {
         let local = convert(windowPoint, from: nil)
         return indexPathForItem(at: local) == nil
+    }
+
+    /// V1 trace 辅助: 本地点命中的卡片热区(primary/mini/title/卡内空白)。
+    /// 与 `AppLibraryCardCell.handleClick` 使用同一 frame 几何; 非卡片返回 nil。
+    private func cardHitArea(for local: NSPoint) -> String? {
+        guard let indexPath = indexPathForItem(at: local),
+              let cell = item(at: indexPath) as? AppLibraryCardCell else { return nil }
+        if let index = cell.primaryFrames.firstIndex(where: { $0.contains(local) }) {
+            return "primary[\(index)]"
+        }
+        if cell.miniFrame.contains(local) { return "mini" }
+        if cell.titleFrame.contains(local) { return "title" }
+        return "cardWhitespace"
     }
 }
 
@@ -604,24 +869,79 @@ final class PausableLibraryScrollView: NSScrollView {
     /// PA3: 容器空白点击会话(mouseDown→mouseUp 空白 + 位移 ≤ 6pt)。
     private var blankSession = LibraryBlankClickSession()
 
+    /// V1 修复: 文档外空白区(内容不足一屏时属于 NSClipView)由本层空白会话
+    /// 接管。修复前该区域 hitTest 返回 NSClipView, scroll view 的 mouseDown
+    /// 根本不会触发(NSScrollView 不拦截), clip view 吞掉点击 → 空白不隐藏。
+    ///
+    /// 只拦截 clip 空白: 卡片/集合视图命中返回最深子视图(卡片自身消费),
+    /// 滚动条(NSScroller)命中不拦截, detail 根视图覆盖层命中不拦截
+    /// (detail 打开时 `isScrollPaused` 门控仍在 mouseDown 兜底)。
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let hit = super.hitTest(point)
+        // 文档外空白区命中本层 contentView(NSClipView; 内容不足一屏时的底部
+        // 留白)时由本层接管: mouseDown/mouseUp 走 isScrollContainerBlank 会话。
+        // 只拦截本层自己的 clip: 卡片/集合视图、滚动条(NSScroller)、detail
+        // 根覆盖及其内部 scroll(有自己的 NSClipView)命中一律不拦截 —— detail
+        // 打开时其列表空白点击仍由 detail 根视图关闭, 不受影响。
+        let intercept = hit === contentView
+        LibraryBlankTraceLog.record(
+            "scroll hitTest local=\(LibraryBlankTraceLog.fmt(point)) "
+                + "hit=\(hit.map { String(describing: type(of: $0)) } ?? "nil") "
+                + "intercept=\(intercept ? "self" : "none")"
+        )
+        return intercept ? self : hit
+    }
+
     override func mouseDown(with event: NSEvent) {
+        let point = event.locationInWindow
         // detail/owner paused: 空白点击由 detail 根视图消费, 本层不记录。
         guard !isScrollPaused else {
             blankSession.reset()
+            LibraryBlankTraceLog.record(
+                "scroll mouseDown win=\(LibraryBlankTraceLog.fmt(point)) paused=1 session=reset"
+            )
             return
         }
-        let point = event.locationInWindow
-        if isScrollContainerBlank(at: point) {
+        let blank = isScrollContainerBlank(at: point)
+        if blank {
             blankSession.arm(at: point)
         } else {
             blankSession.reset()
         }
+        LibraryBlankTraceLog.record(
+            "scroll mouseDown win=\(LibraryBlankTraceLog.fmt(point)) paused=0 "
+                + "documentFrame=\(documentFrameSummary()) "
+                + "containerBlank=\(blank ? 1 : 0) session=\(blank ? "arm" : "reset")"
+        )
     }
 
     override func mouseUp(with event: NSEvent) {
         let point = event.locationInWindow
-        guard isScrollContainerBlank(at: point), blankSession.release(at: point) else { return }
+        let blank = isScrollContainerBlank(at: point)
+        let released = blankSession.release(at: point)
+        let fired = blank && released
+        LibraryBlankTraceLog.record(
+            "scroll mouseUp win=\(LibraryBlankTraceLog.fmt(point)) paused=\(isScrollPaused ? 1 : 0) "
+                + "documentFrame=\(documentFrameSummary()) "
+                + "containerBlank=\(blank ? 1 : 0) released=\(released ? 1 : 0) fire=\(fired ? 1 : 0)"
+        )
+        guard fired else { return }
         onBlankClick?()
+    }
+
+    /// V1 trace 辅助: 文档视图在 scroll view 本地坐标的 frame 摘要。
+    private func documentFrameSummary() -> String {
+        guard let document = documentView else { return "nil" }
+        let frame: CGRect
+        if let superview = document.superview {
+            frame = convert(document.frame, from: superview)
+        } else {
+            frame = document.frame
+        }
+        return String(
+            format: "[%.1f,%.1f %.1fx%.1f]",
+            frame.minX, frame.minY, frame.width, frame.height
+        )
     }
 
     /// scroll 容器空白 = 点不在文档视图(网格) frame 内。
