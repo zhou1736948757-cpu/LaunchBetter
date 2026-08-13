@@ -455,6 +455,8 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
             interactionSurface = .appLibrary
             dragController?.cancelDrag()
             appLibraryControllerForDiag?.cancelReclassificationDrag()
+            // P2: 进入 Library surface → 收掉 compositor(Library 邻页不支持合成)。
+            gridViewController?.shutdownPageCompositor()
         case .layoutPage:
             interactionSurface = .launcher
         }
@@ -908,6 +910,33 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         gridViewController?.libraryControllerForDiag
     }
 
+    // MARK: - P2 Page Compositor 诊断(探针/遥测)
+
+    /// 组合器是否激活。
+    public var pageCompositorActiveForDiag: Bool {
+        gridViewController?.pageCompositorActiveForDiag ?? false
+    }
+
+    /// 组合器激活条件是否满足(普通中间页 + 密度门 + 视觉齐备)。
+    public var pageCompositorEligibleForDiag: Bool {
+        gridViewController?.pageCompositorEligibleForDiag ?? false
+    }
+
+    /// 页面视觉缓存条目数。
+    public var pageVisualCacheCountForDiag: Int {
+        gridViewController?.pageVisualCacheCountForDiag ?? -1
+    }
+
+    /// 组合器当前层数(0 = 无残留)。
+    public var pageCompositorLayerCountForDiag: Int {
+        gridViewController?.pageCompositorLayerFramesForDiag.count ?? -1
+    }
+
+    /// 遥测汇总(A/B 对比输出)。
+    public func pageCompositorMetricsSummary() -> String {
+        gridViewController?.pageCompositorMetricsSummary() ?? "no-grid"
+    }
+
     /// 诊断: Settings 关闭后恢复的面(owner 状态机断言用)。
     public var settingsReturnSurfaceForDiag: LauncherInteractionSurface {
         settingsReturnSurface
@@ -1071,6 +1100,9 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         appLibraryControllerForDiag?.cancelReclassificationDrag()
         // 隐藏时清理 Library category detail(幂等; 其关闭 completion 不释放新 owner)。
         gridViewController?.closeAppLibraryDetail()
+        // P2: 隐藏时收掉 compositor(同步 reveal)并 purge 页面视觉缓存。
+        gridViewController?.shutdownPageCompositor()
+        gridViewController?.purgePageVisuals()
         // 文件夹是临时覆盖层；隐藏/Escape 后重开必须回到主网格。
         closeFolderView(immediately: true)
         iconProvider?.trimMemoryForHidden()
@@ -1252,6 +1284,8 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
             guard let grid = gridViewController, let drag = dragController else { return false }
             guard let windowPoint = currentPointerInWindow() else { return false }
             guard let item = grid.itemAt(point: windowPoint) else { return false }
+            // P2: 拖拽开始 → 收掉 compositor。
+            grid.shutdownPageCompositor()
             drag.beginDrag(item: item, at: windowPoint, inputSource: .threeFinger)
             return drag.isDragging
         case .libraryReclassification:
@@ -1309,6 +1343,8 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         if CommandLine.arguments.contains("--inputtrace") {
             print("INPUTTRACE grid drag begin")
         }
+        // P2: 拖拽开始 → 收掉 compositor(同步收尾)。
+        gridViewController?.shutdownPageCompositor()
         dragController?.beginDrag(item: item, at: point)
     }
 
