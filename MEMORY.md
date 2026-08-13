@@ -114,6 +114,20 @@
 - 测试: LaunchCore 180 / LaunchPlatform 142 / LaunchUI 326 全绿;Debug build OK。
 - 评审 qwen3.7-plus: 0 BLOCKER / 0 MAJOR / 3 MINOR。视觉: Library 卡片+Settings 表单 PASS(0B/0M)。
 - **Phase B: perf/page-compositor-v0.4.x 分支自本 checkpoint 创建, 移植 perf/page-compositor@8b4d8f3 的 PageCompositor 架构。**
+
+## P2 移植(perf/page-compositor-v0.4.x @11ad60c, 2026-08-13)
+
+- 已移植并推送分支(未合 main): PageVisual/PageVisualCache/PageVisualRenderer/PageCompositor/PageCompositorProbe;
+  冲突按当前架构解决, Phase A 六项成果全部保留(评审逐项核对);修正 leadingDocumentOffset placement、
+  密度资格门默认 20、并发 prepare 串行化 + languageRevision 快照(修复并行套件 L10n 竞态 flaky)、renderer availableIDs let。
+- kill switch: `--pagecompositor` 默认关 + `--disable-pagecompositor`;缓存 miss → live 降级, 绝不阻塞手势起点。
+- 测试: LaunchUI **355/355**(基线 304 + P2 51, 10+ 轮稳定), Debug build OK;LaunchCore/Platform 零改动。
+- 评审 qwen3.7-plus: 0 BLOCKER / 0 MAJOR / 3 MINOR(防御性)/ 2 NOTE。
+- **决策: DO NOT SHIP(暂不合 main)**。headless 无法 idle 预渲染(`PAGECOMPOSITOR visuals not ready`),
+  真机 40-60 App 页 A/B(p95/手感)是 MANUAL_PHYSICAL_GATE。main 保持 pre-page-compositor-v0.4.0 稳定 checkpoint。
+- 真机 A/B 命令: `open /Applications/LaunchBetter.app --args --pagecompositor`(或从分支构建)对照
+  `--pagingtelemetry` 帧间隔(/tmp/lb-paging-telemetry.log);`--disable-pagecompositor` 为 live 基线。
+- 回滚: `git checkout main`(024bb54 稳定) 即可。
 - 已知限制: Settings 控件内部标题(弹出菜单/按钮)在 CALayer.render 下仍镜像
   (与既有 `--settingsshot` 一致, 属捕获管线限制, 非 Stage E 回归);壁纸预览两
   矩形区域 layer-render 为黑色;mid 内容不足一屏 → STABLE_NOOP(记录, 非缺陷);
