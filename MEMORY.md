@@ -83,6 +83,16 @@
 - **Part A 稳定化(进行中, 2026-08-13, 未提交)**: 卡片象限布局(2×2, 3 large + 右下 mini 2×2, Suggestions 2×2 四大图标, 标题 top-left, 无卡片内标签, 无 mini 胶囊;密度 330/370/inset30/spacing16, 1470pt→4 列);分类根因(QQ 自报 developer-tools→bundle 校正 com.tencent.qq→social + 手动覆盖 schema v2 categoryOverrides, 优先级 override>bundle>classifier, 稀疏含覆盖分类不合并, 右键 Move to Category/Automatic Classification, 热刷新 updateModel);Library 空白点击隐藏(BlankClickLibraryCollectionView + scroll 容器空白, 复用 grid.onClickBlank→hide)。测试: Core 174 / Platform 142 / UI 293 全绿。
 - **P2 真机基线(telemetry, 2026-08-13)**: 用户实际手势两次 settle: frames 22/42, avgMs 17.64/17.87, p95 26.18/33.23, max 32.25/33.44 → 密集页 settle 帧间隔 ~18ms(60Hz 屏名义 16.7ms), p95 约 2 帧 → 偶发掉帧, 这是"卡顿"的可测证据(供 P2 before/after)。
 - **翻页半路卡住根因(代码级定位)**: beginGesture 打断 in-flight settle 后, 若新手势未锁定水平轴(垂直/微动), endGesture→finishTrackingWithoutSettle 停在被打断的中间偏移(baseOffset 是动画中间值)且 display link 停 → 半路卡住;后续手势能再动。修复方案: 记录 interruptedSettleTarget, finishTrackingWithoutSettle/零位移水平结束时 restart settle 到原目标。PA4 实施中。
+
+## Part A 稳定化 checkpoint(2026-08-13, 已验证)
+
+- **APP_LIBRARY_STABLE_CHECKPOINT=`55f038d5b05aa7d8e5fd2a540a561fadf1be33fb`**(commit `library: stabilize App Library (Part A)`)
+- **APP_LIBRARY_STABLE_TAG=`pre-page-compositor-20260813`**(annotated, 已推 origin)
+- 内容: QQ 分类根因(自报 developer-tools→bundle 校正 com.tencent.qq→social);手动分类覆盖(schema v2 categoryOverrides, 优先级 override>bundle>classifier, 稀疏含覆盖不合并, 右键菜单, 热刷新);卡片象限布局(2×2, 4 列@1470pt);Library 空白点击隐藏;翻页半路卡住修复(interruptedSettleTarget 重启 settle);`--pagingeventtrace`/`--pagingstressprobe`(500 轮全过)。
+- 测试: LaunchCore 174 / LaunchPlatform 142 / LaunchUI 304 全绿, 零警告;Debug build OK。
+- 评审: qwen3.7-plus 0 BLOCKER / 0 MAJOR / 0 MINOR。视觉: Library 卡片布局 PASS(4 列/象限/top-left/无标签/无胶囊);Settings 截图镜像与壁纸预览黑为已记录捕获管线限制(非用户可见)。
+- 工作树: work/ 与 Docs/Visual/* 未跟踪保留;`--pagingtelemetry` 真机基线(frames 22/42, avg 17.6-17.9ms, p95 26-33ms)为 P2 before 数据。
+- **P2 实验分支: `perf/page-compositor`(自本 checkpoint 创建)**
 - 已知限制: Settings 控件内部标题(弹出菜单/按钮)在 CALayer.render 下仍镜像
   (与既有 `--settingsshot` 一致, 属捕获管线限制, 非 Stage E 回归);壁纸预览两
   矩形区域 layer-render 为黑色;mid 内容不足一屏 → STABLE_NOOP(记录, 非缺陷);
