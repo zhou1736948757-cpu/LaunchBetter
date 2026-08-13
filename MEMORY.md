@@ -93,6 +93,14 @@
 - 评审: qwen3.7-plus 0 BLOCKER / 0 MAJOR / 0 MINOR。视觉: Library 卡片布局 PASS(4 列/象限/top-left/无标签/无胶囊);Settings 截图镜像与壁纸预览黑为已记录捕获管线限制(非用户可见)。
 - 工作树: work/ 与 Docs/Visual/* 未跟踪保留;`--pagingtelemetry` 真机基线(frames 22/42, avg 17.6-17.9ms, p95 26-33ms)为 P2 before 数据。
 - **P2 实验分支: `perf/page-compositor`(自本 checkpoint 创建)**
+
+## P2 Page Compositor 实验(2026-08-13, 分支 perf/page-compositor @8b4d8f3)
+
+- 已实现并推送分支(未合 main): PageVisual 轻量渲染器(OPTION C, 纯内存 CGImage, 网格内容区);PageVisualCache(cap≤3/字节记账/多 revision 失效/purge);PageCompositor(presentation-only, 普通 Layout 页触控板手势合成, Library/搜索/文件夹/设置/拖拽边界降级 live, 激活零跳变, 反转复用 working set, settle 完成 clip 同步→reveal→移除, 打断保持, 安全中止, 显式 shutdown);readPagingOffset 抽象;PagingInteractionController 仍唯一运动引擎;--pagecompositor 遥测。
+- 测试: LaunchUI 332 全绿(含 cache/renderer/compositor/integration 500 轮压力), Debug build OK。
+- 评审 qwen3.7-plus: 0 BLOCKER / 0 MAJOR / 3 MINOR(合 main 前清理)。
+- **决策: DO NOT SHIP(暂不合 main)**。headless 无法测真实 120Hz 手感;真机 A/B(`--pagecompositor` vs `--pagingtelemetry` 帧间隔)是 MANUAL_PHYSICAL_GATE。main 保持 pre-page-compositor-20260813 稳定 checkpoint。
+- 回滚路径: 任意时刻 `git checkout main`(55f038d 稳定) 即可, 无歧义。
 - 已知限制: Settings 控件内部标题(弹出菜单/按钮)在 CALayer.render 下仍镜像
   (与既有 `--settingsshot` 一致, 属捕获管线限制, 非 Stage E 回归);壁纸预览两
   矩形区域 layer-render 为黑色;mid 内容不足一屏 → STABLE_NOOP(记录, 非缺陷);
