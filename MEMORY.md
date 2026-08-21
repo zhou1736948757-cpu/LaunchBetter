@@ -21,23 +21,36 @@
 
 ## Current Phase
 
-**性能优化 Phase A(快赢)已完成并推送(2026-08-21), v0.4.2 已安装。**
+**v0.5.0 已发布(2026-08-21): Page Compositor 成为默认分页架构。**
+
+- 发布: `v0.5.0` tag + GitHub Release(用户决策: 免真机 A/B, 直接作为最终版本);
+  /Applications 已覆盖 v0.5.0 (4) Release 构建并运行
+- 合并提交: `ce38705` merge Page Compositor into main as default paging architecture;
+  版本提交: `8def7fe` build: version 0.5.0
+- 组合器默认 ON; `--disable-pagecompositor` kill switch 保留; `--pagecompositor`
+  现在仅表示 A/B 遥测探针(PageCompositorProbe)
+- 分支 perf/page-compositor 与 perf/page-compositor-v0.4.x 已合入, 可删(未删)
+- 测试(全绿): LaunchUI 371(含 P2 29)/ LaunchCore 181 / LaunchPlatform 142;
+  `--smoke` OK / `--gridtest` OK / 普通启动存活 OK; pbxproj 冲突以 HEAD UUID +
+  仅新增 PageCompositorProbe 条目解决(重复条目扫描通过)
+- PA1 测试适配: prewarm 去重测试显式关闭 compositor(compositor idle prepare
+  会额外请求图标, 隔离断言语义)
+- 未做(记录): 真机 p95/手感量化对比(用户明示跳过); 若日常出现分页视觉异常,
+  第一反应 = 用 `--disable-pagecompositor` 复现对照再报 issue
+- 本会话工程限制: opencode run 与 Task 子代理多次空返回, 实现由总控直接完成
+  (用户指令), 单写者规则由总控独占满足
+
+**历史: 性能优化 Phase A(快赢)已完成(2026-08-21)。**
 
 - 提交: `f6f7f1b` library: X2 进 Library 首次交互修复(key-window 激活点击/手势残留/host 布局)
 - 提交: `69cbe9c` settings: X1 滑杆固定宽度可拖 + SMAppService 开机自启
-- 提交: `e2541ea` build: version 0.4.2 (3); /Applications 已覆盖 Release 构建
 - 提交: `6b9b0c1` perf: PA1 翻页帧预算(遥测 IO 移出 settle 帧/trace autoclosure/
   页点增量更新/预热 (page,revision) 去重/displayModel revision 键控缓存)
 - 提交: `fcb630f` perf: PA2 启动路径(BootstrapSeeds 读盘去重 2→1/Settings 惰性构建
   10-30ms/SMAppService XPC 移出首帧/滑杆 commit 150ms 合并+关闭冲刷)
-- 测试(全绿): LaunchPlatform 142 / LaunchCore 181 / LaunchUI 342; `--gridtest` OK;
-  `--smoke` OK(90 apps); `--settingsshot` 惰性构建截图正常
 - 任务记录: Docs/Tasks/pa1-interaction-frame-budget.md, pa2-launch-settings.md
-- 待办: PA1/PA2 的真机 `--pagingtelemetry` before/after 对比(基线 avg 17.9/p95 26-33ms);
-  Phase B(B1 拖拽几何缓存/B2 Library host 预挂载/B3 复用快速路径/B4 运动模糊降级)、
+- 待办: Phase B(B1 拖拽几何缓存/B2 Library host 预挂载/B3 复用快速路径/B4 运动模糊降级)、
   Phase C(C1 图标解码并发化/C2 缓存 128→48MB/C3 LRU O(1))未开始
-- 本会话工程限制: opencode run 与 Task 子代理多次空返回, PA1/PA2 由总控直接实现
-  (用户指令"去修改吧"), 单写者规则由总控独占满足
 
 **Stage D 自动化与代码审查门禁已完成，v0.3.8 已发布。**
 
