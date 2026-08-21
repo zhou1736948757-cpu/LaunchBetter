@@ -21,6 +21,24 @@
 
 ## Current Phase
 
+**性能优化 Phase A(快赢)已完成并推送(2026-08-21), v0.4.2 已安装。**
+
+- 提交: `f6f7f1b` library: X2 进 Library 首次交互修复(key-window 激活点击/手势残留/host 布局)
+- 提交: `69cbe9c` settings: X1 滑杆固定宽度可拖 + SMAppService 开机自启
+- 提交: `e2541ea` build: version 0.4.2 (3); /Applications 已覆盖 Release 构建
+- 提交: `6b9b0c1` perf: PA1 翻页帧预算(遥测 IO 移出 settle 帧/trace autoclosure/
+  页点增量更新/预热 (page,revision) 去重/displayModel revision 键控缓存)
+- 提交: `fcb630f` perf: PA2 启动路径(BootstrapSeeds 读盘去重 2→1/Settings 惰性构建
+  10-30ms/SMAppService XPC 移出首帧/滑杆 commit 150ms 合并+关闭冲刷)
+- 测试(全绿): LaunchPlatform 142 / LaunchCore 181 / LaunchUI 342; `--gridtest` OK;
+  `--smoke` OK(90 apps); `--settingsshot` 惰性构建截图正常
+- 任务记录: Docs/Tasks/pa1-interaction-frame-budget.md, pa2-launch-settings.md
+- 待办: PA1/PA2 的真机 `--pagingtelemetry` before/after 对比(基线 avg 17.9/p95 26-33ms);
+  Phase B(B1 拖拽几何缓存/B2 Library host 预挂载/B3 复用快速路径/B4 运动模糊降级)、
+  Phase C(C1 图标解码并发化/C2 缓存 128→48MB/C3 LRU O(1))未开始
+- 本会话工程限制: opencode run 与 Task 子代理多次空返回, PA1/PA2 由总控直接实现
+  (用户指令"去修改吧"), 单写者规则由总控独占满足
+
 **Stage D 自动化与代码审查门禁已完成，v0.3.8 已发布。**
 
 物理/视觉 gate 尚未验收：时间连续性、真实触控板甩动速度与 120 Hz 手感仍为
