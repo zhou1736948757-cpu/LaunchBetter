@@ -1,0 +1,1134 @@
+{
+  "schema_version": "1.0",
+  "command": "inspect-prepare",
+  "source_video": "/Users/mac/Projects/LaunchBetter/work/stage-d-launcher-m2.mov",
+  "duration": 7.033333,
+  "timestamps_are_absolute": true,
+  "request": {
+    "at": [],
+    "start": 0.0,
+    "end": 7.0,
+    "fps": 15
+  },
+  "frames": [
+    {
+      "frame_id": "inspection_f0001",
+      "timestamp": 0.0,
+      "timecode": "00:00:00.000",
+      "image_path": "analysis/inspection/frames/inspect_0001.jpg",
+      "kind": "interval",
+      "pinned": false,
+      "source": "interval",
+      "sha256": "31de95cea198cf424c2c3533538dade1c0ec76079cd6962d10c29ba6514003a9"
+    },
+    {
+      "frame_id": "inspection_f0090",
+      "timestamp": 5.933333,
+      "timecode": "00:00:05.933",
+      "image_path": "analysis/inspection/frames/inspect_0090.jpg",
+      "kind": "interval",
+      "pinned": false,
+      "source": "interval",
+      "sha256": "63d33460fa520e2c2650e43c2ed38f79d619c1866963ba72bb17638280135676"
+    },
+    {
+      "frame_id": "inspection_f0091",
+      "timestamp": 6.0,
+      "timecode": "00:00:06.000",
+      "image_path": "analysis/inspection/frames/inspect_0091.jpg",
+      "kind": "interval",
+      "pinned": false,
+      "source": "interval",
+      "sha256": "4899d15d517b6c092c3025d0aeda9174937f9cc006eac913db883eb34c0e384a"
+    },
+    {
+      "frame_id": "inspection_f0095",
+      "timestamp": 6.266667,
+      "timecode": "00:00:06.267",
+      "image_path": "analysis/inspection/frames/inspect_0095.jpg",
+      "kind": "interval",
+      "pinned": false,
+      "source": "interval",
+      "sha256": "2a675cbe956487665e4cb8e183037d7c5d1601c3f8ce6b3a6668b6e87e558ddc"
+    },
+    {
+      "frame_id": "inspection_f0097",
+      "timestamp": 6.4,
+      "timecode": "00:00:06.400",
+      "image_path": "analysis/inspection/frames/inspect_0097.jpg",
+      "kind": "interval",
+      "pinned": false,
+      "source": "interval",
+      "sha256": "c3716bed14dc54db16d5be48f72a9aa861421cf8722b176ce5511c77d2a8f929"
+    },
+    {
+      "frame_id": "inspection_f0106",
+      "timestamp": 7.0,
+      "timecode": "00:00:07.000",
+      "image_path": "analysis/inspection/frames/inspect_0106.jpg",
+      "kind": "interval",
+      "pinned": false,
+      "source": "interval",
+      "sha256": "c8353e836eb33f386215d9d4a391e01cd099dbdb0a04de2badbc4e730dcfe3bf"
+    }
+  ],
+  "contact_sheets": [
+    {
+      "sheet_id": "inspection__sheet_0001",
+      "path": "analysis/inspection/contact_sheets/sheet_0001.jpg",
+      "frame_ids": [
+        "inspection_f0001",
+        "inspection_f0090",
+        "inspection_f0091",
+        "inspection_f0095",
+        "inspection_f0097",
+        "inspection_f0106"
+      ],
+      "timestamps": [
+        0.0,
+        5.933333,
+        6.0,
+        6.266667,
+        6.4,
+        7.0
+      ],
+      "sha256": "fdfaf5bad9985f149b4546f698e110228d18cff12f9332334b4e88cde1f3aa41"
+    }
+  ],
+  "deduplication": {
+    "algorithm_version": "gray-pixel-mean-absolute-v1",
+    "stats": {
+      "enabled": true,
+      "algorithm_version": "gray-pixel-mean-absolute-v1",
+      "metric": "mean_absolute_grayscale_pixel_difference_normalized",
+      "resolution": {
+        "width": 32,
+        "height": 18
+      },
+      "threshold": 0.02,
+      "source_frame_count": 106,
+      "kept_frame_count": 6,
+      "dropped_frame_count": 100,
+      "comparison_count": 104,
+      "forced_keep_count": 2,
+      "pinned_kept_count": 0,
+      "first_kept_count": 1,
+      "last_kept_count": 1,
+      "unreadable_frame_count": 0
+    },
+    "dropped_to_kept": [
+      {
+        "dropped_id": "inspection_f0002",
+        "dropped_timestamp": 0.066667,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.00104167,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0002.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0003",
+        "dropped_timestamp": 0.133333,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.00104167,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0003.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0004",
+        "dropped_timestamp": 0.2,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.00104167,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0004.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0005",
+        "dropped_timestamp": 0.266667,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.00104167,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0005.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0006",
+        "dropped_timestamp": 0.333333,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.00108252,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0006.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0007",
+        "dropped_timestamp": 0.4,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.00109613,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0007.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0008",
+        "dropped_timestamp": 0.466667,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.00117102,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0008.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0009",
+        "dropped_timestamp": 0.533333,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.00121868,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0009.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0010",
+        "dropped_timestamp": 0.6,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.00126634,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0010.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0011",
+        "dropped_timestamp": 0.666667,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.00129357,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0011.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0012",
+        "dropped_timestamp": 0.733333,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.00132081,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0012.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0013",
+        "dropped_timestamp": 0.8,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.00133442,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0013.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0014",
+        "dropped_timestamp": 0.866667,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.00134123,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0014.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0015",
+        "dropped_timestamp": 0.933333,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.00134123,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0015.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0016",
+        "dropped_timestamp": 1.0,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.00134123,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0016.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0017",
+        "dropped_timestamp": 1.066667,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.00134123,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0017.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0018",
+        "dropped_timestamp": 1.133333,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.00132761,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0018.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0019",
+        "dropped_timestamp": 1.2,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.00134123,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0019.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0020",
+        "dropped_timestamp": 1.266667,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.00134804,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0020.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0021",
+        "dropped_timestamp": 1.333333,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.00138208,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0021.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0022",
+        "dropped_timestamp": 1.4,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.00140931,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0022.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0023",
+        "dropped_timestamp": 1.466667,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.00141612,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0023.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0024",
+        "dropped_timestamp": 1.533333,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.00141612,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0024.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0025",
+        "dropped_timestamp": 1.6,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.00141612,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0025.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0026",
+        "dropped_timestamp": 1.666667,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.00141612,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0026.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0027",
+        "dropped_timestamp": 1.733333,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.00141612,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0027.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0028",
+        "dropped_timestamp": 1.8,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.00141612,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0028.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0029",
+        "dropped_timestamp": 1.866667,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.00141612,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0029.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0030",
+        "dropped_timestamp": 1.933333,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.00141612,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0030.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0031",
+        "dropped_timestamp": 2.0,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.00140931,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0031.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0032",
+        "dropped_timestamp": 2.066667,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.00140931,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0032.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0033",
+        "dropped_timestamp": 2.133333,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.00141612,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0033.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0034",
+        "dropped_timestamp": 2.2,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.00141612,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0034.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0035",
+        "dropped_timestamp": 2.266667,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.00150463,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0035.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0036",
+        "dropped_timestamp": 2.333333,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.00150463,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0036.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0037",
+        "dropped_timestamp": 2.4,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.00153186,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0037.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0038",
+        "dropped_timestamp": 2.466667,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.00434368,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0038.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0039",
+        "dropped_timestamp": 2.533333,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.00435049,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0039.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0040",
+        "dropped_timestamp": 2.6,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.00890523,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0040.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0041",
+        "dropped_timestamp": 2.666667,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.00890523,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0041.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0042",
+        "dropped_timestamp": 2.733333,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.00891204,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0042.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0043",
+        "dropped_timestamp": 2.8,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.00891885,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0043.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0044",
+        "dropped_timestamp": 2.866667,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.00891885,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0044.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0045",
+        "dropped_timestamp": 2.933333,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.00891885,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0045.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0046",
+        "dropped_timestamp": 3.0,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.00891885,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0046.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0047",
+        "dropped_timestamp": 3.066667,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.00891204,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0047.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0048",
+        "dropped_timestamp": 3.133333,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.00890523,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0048.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0049",
+        "dropped_timestamp": 3.2,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.00889161,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0049.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0050",
+        "dropped_timestamp": 3.266667,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.0088848,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0050.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0051",
+        "dropped_timestamp": 3.333333,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.00889842,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0051.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0052",
+        "dropped_timestamp": 3.4,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.00889161,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0052.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0053",
+        "dropped_timestamp": 3.466667,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.00889842,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0053.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0054",
+        "dropped_timestamp": 3.533333,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.00889161,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0054.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0055",
+        "dropped_timestamp": 3.6,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.00889161,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0055.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0056",
+        "dropped_timestamp": 3.666667,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.00889161,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0056.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0057",
+        "dropped_timestamp": 3.733333,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.00889842,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0057.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0058",
+        "dropped_timestamp": 3.8,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.0148012,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0058.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0059",
+        "dropped_timestamp": 3.866667,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.01476716,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0059.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0060",
+        "dropped_timestamp": 3.933333,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.01477397,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0060.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0061",
+        "dropped_timestamp": 4.0,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.01477397,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0061.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0062",
+        "dropped_timestamp": 4.066667,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.01477397,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0062.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0063",
+        "dropped_timestamp": 4.133333,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.01499864,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0063.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0064",
+        "dropped_timestamp": 4.2,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.01514842,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0064.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0065",
+        "dropped_timestamp": 4.266667,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.01547522,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0065.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0066",
+        "dropped_timestamp": 4.333333,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.01580202,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0066.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0067",
+        "dropped_timestamp": 4.4,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.01635349,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0067.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0068",
+        "dropped_timestamp": 4.466667,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.01649646,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0068.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0069",
+        "dropped_timestamp": 4.533333,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.01650327,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0069.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0070",
+        "dropped_timestamp": 4.6,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.01648965,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0070.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0071",
+        "dropped_timestamp": 4.666667,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.01646923,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0071.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0072",
+        "dropped_timestamp": 4.733333,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.01647603,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0072.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0073",
+        "dropped_timestamp": 4.8,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.01646242,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0073.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0074",
+        "dropped_timestamp": 4.866667,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.0164488,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0074.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0075",
+        "dropped_timestamp": 4.933333,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.0164488,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0075.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0076",
+        "dropped_timestamp": 5.0,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.0164488,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0076.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0077",
+        "dropped_timestamp": 5.066667,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.0164488,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0077.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0078",
+        "dropped_timestamp": 5.133333,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.0164488,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0078.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0079",
+        "dropped_timestamp": 5.2,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.0164488,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0079.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0080",
+        "dropped_timestamp": 5.266667,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.0164488,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0080.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0081",
+        "dropped_timestamp": 5.333333,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.01644199,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0081.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0082",
+        "dropped_timestamp": 5.4,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.01644199,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0082.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0083",
+        "dropped_timestamp": 5.466667,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.01644199,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0083.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0084",
+        "dropped_timestamp": 5.533333,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.01644199,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0084.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0085",
+        "dropped_timestamp": 5.6,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.01644199,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0085.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0086",
+        "dropped_timestamp": 5.666667,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.01645561,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0086.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0087",
+        "dropped_timestamp": 5.733333,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.01648284,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0087.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0088",
+        "dropped_timestamp": 5.8,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.01649646,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0088.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0089",
+        "dropped_timestamp": 5.866667,
+        "kept_id": "inspection_f0001",
+        "kept_timestamp": 0.0,
+        "pixel_difference": 0.01648965,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0089.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0001.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0092",
+        "dropped_timestamp": 6.066667,
+        "kept_id": "inspection_f0091",
+        "kept_timestamp": 6.0,
+        "pixel_difference": 4.766e-05,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0092.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0091.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0093",
+        "dropped_timestamp": 6.133333,
+        "kept_id": "inspection_f0091",
+        "kept_timestamp": 6.0,
+        "pixel_difference": 4.766e-05,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0093.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0091.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0094",
+        "dropped_timestamp": 6.2,
+        "kept_id": "inspection_f0091",
+        "kept_timestamp": 6.0,
+        "pixel_difference": 6.808e-05,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0094.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0091.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0096",
+        "dropped_timestamp": 6.333333,
+        "kept_id": "inspection_f0095",
+        "kept_timestamp": 6.266667,
+        "pixel_difference": 2.723e-05,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0096.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0095.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0098",
+        "dropped_timestamp": 6.466667,
+        "kept_id": "inspection_f0097",
+        "kept_timestamp": 6.4,
+        "pixel_difference": 0.00233524,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0098.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0097.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0099",
+        "dropped_timestamp": 6.533333,
+        "kept_id": "inspection_f0097",
+        "kept_timestamp": 6.4,
+        "pixel_difference": 0.0047726,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0099.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0097.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0100",
+        "dropped_timestamp": 6.6,
+        "kept_id": "inspection_f0097",
+        "kept_timestamp": 6.4,
+        "pixel_difference": 0.00515387,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0100.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0097.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0101",
+        "dropped_timestamp": 6.666667,
+        "kept_id": "inspection_f0097",
+        "kept_timestamp": 6.4,
+        "pixel_difference": 0.00516068,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0101.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0097.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0102",
+        "dropped_timestamp": 6.733333,
+        "kept_id": "inspection_f0097",
+        "kept_timestamp": 6.4,
+        "pixel_difference": 0.00515387,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0102.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0097.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0103",
+        "dropped_timestamp": 6.8,
+        "kept_id": "inspection_f0097",
+        "kept_timestamp": 6.4,
+        "pixel_difference": 0.00515387,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0103.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0097.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0104",
+        "dropped_timestamp": 6.866667,
+        "kept_id": "inspection_f0097",
+        "kept_timestamp": 6.4,
+        "pixel_difference": 0.00514025,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0104.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0097.jpg"
+      },
+      {
+        "dropped_id": "inspection_f0105",
+        "dropped_timestamp": 6.933333,
+        "kept_id": "inspection_f0097",
+        "kept_timestamp": 6.4,
+        "pixel_difference": 0.00514025,
+        "reason": "pixel_near_duplicate",
+        "dropped_image_path": "analysis/inspection/frames/inspect_0105.jpg",
+        "kept_image_path": "analysis/inspection/frames/inspect_0097.jpg"
+      }
+    ]
+  },
+  "paths": {
+    "frames": "analysis/inspection/frames",
+    "contact_sheets": "analysis/inspection/contact_sheets"
+  },
+  "workflow": {
+    "changes_main_state_machine": false,
+    "consumed_by_finalize": false,
+    "note": "The current Agent may use these frames for a targeted visual check. Scripts do not infer semantic cues or decide when to inspect."
+  },
+  "vision_execution_mode": "in_session_agent",
+  "external_api_used": false,
+  "api_key_used": false
+}

@@ -32,6 +32,14 @@ final class PagingInteractionController {
     /// settle 收敛完成回调。
     var onSettleComplete: () -> Void = {}
 
+    /// P2: 手势真正开始时(读取 baseOffset 前)回调。PageCompositor 借此在
+    /// 读取当前偏移之前完成激活, 保证零跳变(baseOffset == 激活后 currentOffset)。
+    var onWillBeginGesture: (() -> Void)?
+
+    /// P2: phase 回到 idle 时回调(settle 收敛 / 无 settle 手势结束 / 禁用 / 跳转 /
+    /// shutdown)。GridViewController 借此在运动停止后收掉 compositor(同步 clip → reveal)。
+    var onPhaseIdle: (() -> Void)?
+
     private(set) var phase: Phase = .idle
 
     /// E13 遥测开关(默认 false, 零开销路径不变: 仅一次布尔判断)。
@@ -71,6 +79,7 @@ final class PagingInteractionController {
             settleTargetPage = nil
             stopDisplayLinkIfIdle()
             trace("disable isEnabled=false")
+            onPhaseIdle?()
         }
     }
 
@@ -97,6 +106,7 @@ final class PagingInteractionController {
         settleTargetPage = nil
         stopDisplayLink()
         trace("shutdown")
+        onPhaseIdle?()
     }
 
     /// 创建 DisplayLink 所绑定的视图(macOS 14+ NSView.displayLink)。
@@ -305,6 +315,8 @@ final class PagingInteractionController {
     // MARK: - 手势生命周期
 
     private func beginGesture() {
+        // P2: 手势开始前激活 compositor(读取 baseOffset 前; 零跳变前提)。
+        onWillBeginGesture?()
         if phase == .settling {
             // 打断旧 settle: 从当前实际位置重新跟手, 视觉 discontinuity ≈ 0(§29)
             animator.cancel()
@@ -423,6 +435,7 @@ final class PagingInteractionController {
         // jump 也必须经过统一写入路径, 禁止绕过 clamp/计数直接调用 onScroll。
         applyScroll(target, allowSkip: false)
         trace("jumpTo target=\(targetPage)")
+        onPhaseIdle?()
     }
 
     private func finishSettle() {
@@ -433,6 +446,7 @@ final class PagingInteractionController {
         trace("settleEnd clip=\(Int(onReadCurrentOffset()))")
         phase = .idle
         stopDisplayLinkIfIdle()
+        onPhaseIdle?()
     }
 
     private func finishTrackingWithoutSettle() {
@@ -455,6 +469,7 @@ final class PagingInteractionController {
         flushTelemetry(phase: "tracking")
         trace("finishWithoutSettle idle")
         stopDisplayLinkIfIdle()
+        onPhaseIdle?()
     }
 
     // MARK: - DisplayLink(唯一 offset writer)

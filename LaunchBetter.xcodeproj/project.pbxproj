@@ -27,6 +27,7 @@
 		97CAF62410D849C74D1ED8FE /* LaunchUI in Frameworks */ = {isa = PBXBuildFile; productRef = BFBADDC8868444DA8FEB4241 /* LaunchUI */; };
 		A6AA30F397E682609E5C3255 /* PagingProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B4157109522440A6D3DE67B /* PagingProbe.swift */; };
 		B8DFCF5CD675E6FF60D48D3B /* PagingScrollProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4A1911205FC8C78EBCBC7F1 /* PagingScrollProbe.swift */; };
+		AA11BB22CC33DD44EE55FF01 /* PageCompositorProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11BB22CC33DD44EE55FF02 /* PageCompositorProbe.swift */; };
 		BB5EC826ACB1AF62EE21847B /* IconImageAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E4FB7BAF0189E406E0361FE /* IconImageAdapter.swift */; };
 		C7367F5C43E434A600DE07D2 /* LauncherStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3667895D56B49968ADB46248 /* LauncherStore.swift */; };
 		C7F7808020E1F9AD70279D61 /* LibraryInteractionProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7122C1AA8BB9AAB07869A03C /* LibraryInteractionProbe.swift */; };
@@ -73,6 +74,7 @@
 		E330AC7D7E44DC67CC602785 /* PageTestProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PageTestProbe.swift; sourceTree = "<group>"; };
 		F2B7C15B26E035D2F86D16C6 /* DiagnosticRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticRunner.swift; sourceTree = "<group>"; };
 		F2BD2084D4EFFDBFE5CB24A5 /* PagingEventTraceProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PagingEventTraceProbe.swift; sourceTree = "<group>"; };
+		AA11BB22CC33DD44EE55FF02 /* PageCompositorProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PageCompositorProbe.swift; sourceTree = "<group>"; };
 		FE7E4CA496431AA25E487527 /* LayoutProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayoutProbe.swift; sourceTree = "<group>"; };
 		FE80D899386FA134055791B3 /* SmokeProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmokeProbe.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -138,6 +140,7 @@
 				FE7E4CA496431AA25E487527 /* LayoutProbe.swift */,
 				14828123E4BAFA7A71447D48 /* LibraryBlankTraceProbe.swift */,
 				7122C1AA8BB9AAB07869A03C /* LibraryInteractionProbe.swift */,
+				AA11BB22CC33DD44EE55FF02 /* PageCompositorProbe.swift */,
 				E330AC7D7E44DC67CC602785 /* PageTestProbe.swift */,
 				F2BD2084D4EFFDBFE5CB24A5 /* PagingEventTraceProbe.swift */,
 				1B4157109522440A6D3DE67B /* PagingProbe.swift */,
@@ -245,6 +248,7 @@
 				EB542672D892D265B3724B18 /* LayoutProbe.swift in Sources */,
 				FD7440B733C301CDF16456A8 /* LibraryBlankTraceProbe.swift in Sources */,
 				C7F7808020E1F9AD70279D61 /* LibraryInteractionProbe.swift in Sources */,
+				AA11BB22CC33DD44EE55FF01 /* PageCompositorProbe.swift in Sources */,
 				0B378C547F12199B13A4441B /* PageTestProbe.swift in Sources */,
 				C8837C8CE9E4C6C202AB61EC /* PagingEventTraceProbe.swift in Sources */,
 				A6AA30F397E682609E5C3255 /* PagingProbe.swift in Sources */,

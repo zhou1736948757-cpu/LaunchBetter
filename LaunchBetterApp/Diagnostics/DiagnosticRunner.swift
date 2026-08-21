@@ -75,6 +75,11 @@ enum DiagnosticRunner {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
                 PagingEventTraceProbe.run(container: container)
             }
+        } else if CommandLine.arguments.contains("--pagecompositor") {
+            // P2: Page Compositor 实验(默认关; flag 开启组合器 + 遥测, A/B 对比)。
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                PageCompositorProbe.run(container: container)
+            }
         } else if CommandLine.arguments.contains("--libraryblanktrace") {
             // V1: Library 空白点击逐会话 trace(写 /tmp/lb-library-blank-trace.log;
             // 视图侧开关在 AppLibraryViewController.loadView 经 flag 联动开启)。

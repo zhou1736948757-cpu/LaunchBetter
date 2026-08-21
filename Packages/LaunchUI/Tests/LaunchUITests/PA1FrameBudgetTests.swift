@@ -79,6 +79,9 @@ struct PA1FrameBudgetTests {
     func prewarmDeduplicatedUntilRefresh() async throws {
         let provider = PA1CountingIconProvider()
         let (grid, _, _) = makeGrid(pages: makePages(), iconProvider: provider)
+        // 本测试只针对相邻页预热去重; v0.5.0 起 compositor 默认启用且其
+        // idle prepare 会额外请求图标, 隔离关闭以保持断言语义。
+        grid.pageVisualCompositorEnabled = false
 
         // 排空 makeGrid 初始 refresh 路径的预热请求(page0 相邻页)。
         try await waitForStable(provider)
