@@ -21,6 +21,17 @@
 
 ## Current Phase
 
+**v0.5.1 已发布(2026-08-21): 合成器快速甩页空窗修复。**
+
+- 用户实测 bug: 快速甩到下一页后短暂只显示壁纸背景。根因: compositor 激活期间
+  真实 clip 从未滚过目标页 → 目标页 cell 从未物化; settle 完成 teardown 里
+  clip 同步后立即揭露 live, cell 物化在下一个布局周期 → 空窗。
+- 修复 `8d1bac4`: onSyncClip(仅 finish/abort/shutdown 揭露时刻触发)里 clip 同步后
+  强制 collectionView.layoutSubtreeIfNeeded, 让 cell 在合成表面仍遮盖时物化完毕。
+  新断言: SyncLayoutCount ≥1 + visibleItems > 0(settleActivationAndCompletion)。
+- 发布: v0.5.1 (5) 已装 /Applications 并运行; tag+main 已推 origin
+- 测试(全绿): LaunchUI 371 / LaunchCore 181 / LaunchPlatform 142
+
 **v0.5.0 已发布(2026-08-21): Page Compositor 成为默认分页架构。**
 
 - 发布: `v0.5.0` tag + GitHub Release(用户决策: 免真机 A/B, 直接作为最终版本);
