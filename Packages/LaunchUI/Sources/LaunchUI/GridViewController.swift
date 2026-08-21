@@ -410,6 +410,10 @@ final class GridViewController: NSViewController {
 
     /// 配置 App Library host cell: 挂载 Library 控制器视图(只挂一次)。
     /// 挂载时同步当前 chrome 顶部保留带(幂等; controller 创建前/后都生效)。
+    /// X2: 挂载后立即落定 layout —— host 在 settle 动画期间挂载, 若等到下一次
+    /// 布局才刷帧, 首个输入的 hit-test 会命中尚未布局(零 frame/空热区)的卡片
+    /// 区域而落空(被外层 Grid 吞掉)。这里显式 flush 保证进入 surface 的下一秒
+    /// 即可命中。
     private func configureHost(_ cell: AppLibraryHostCell?) {
         guard let cell else { return }
         hostItem.setContentInsets(
@@ -429,6 +433,8 @@ final class GridViewController: NSViewController {
         controller.view.frame = cell.view.bounds
         controller.view.autoresizingMask = [.width, .height]
         cell.view.addSubview(controller.view)
+        cell.view.needsLayout = true
+        cell.view.layoutSubtreeIfNeeded()
     }
 
     private func configure(_ cell: AppCellView?, with item: Item) {

@@ -121,9 +121,13 @@ public final class AppLibraryViewController: NSViewController {
     }
 
     /// 开始固定 session: 冻结当前模型, 后续 apply 一律忽略。
+    /// X2: 每次进入 surface(挂载/重挂 host)都经此入口 —— 同时清理上一个会话
+    /// 残留的手势状态(轴仲裁/momentum/未决 began), 保证进入后的首个输入
+    /// 从干净状态开始。
     public func beginSession(model: AppLibraryModel) {
         sessionFrozen = true
         self.model = model
+        scrollView.resetGestureState()
         if detailController != nil { closeDetail() }
         reloadCards()
     }
@@ -852,6 +856,21 @@ final class PausableLibraryScrollView: NSScrollView {
             guard traceEnabled else { return }
             trace("library traceEnabled")
         }
+    }
+
+    /// X2 修复: 进入 App Library surface 前清理本会话残留的轴仲裁/动量/未决
+    /// began 状态。
+    ///
+    /// 何时会有残留: 离开 Library 的水平手势把持指针经过 Library 区域, begin/
+    /// changed 期间指针滑过外层面板后, 后续 changed/ended/momentum 落到外层
+    /// Grid, 本视图永远收不到 .ended —— arbiter 可停在 horizontal 锁定、未决
+    /// 手势配对可能残留。下一次进入重挂 host(mount → beginSession)时清除,
+    /// 保证进入后的首个滚动/水平手势从干净状态开始, 不被旧锁定吞掉。
+    func resetGestureState() {
+        arbiter.end()
+        momentumRoute = .undecided
+        pendingBeganEvent = nil
+        trace("resetGestureState")
     }
 
     /// PA4: 轴仲裁 + 路由状态一行(traceEnabled 时写共享 log)。

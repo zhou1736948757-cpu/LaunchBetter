@@ -26,6 +26,7 @@ public final class ActivationCoordinator {
             "--dragcacheprobe", "--pagingprobe", "--searchprobe", "--gridtest", "--perf",
             "--motionprobe", "--libraryshot", "--pagingscrollprobe",
             "--pagingeventtrace", "--pagingstressprobe", "--libraryblanktrace",
+            "--libraryinteracttrace",
         ]
         return !nonInteractiveFlags.contains { args.contains($0) }
     }

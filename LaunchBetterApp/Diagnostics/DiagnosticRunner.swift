@@ -81,6 +81,11 @@ enum DiagnosticRunner {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
                 LibraryBlankTraceProbe.run(container: container)
             }
+        } else if CommandLine.arguments.contains("--libraryinteracttrace") {
+            // X2: Library 进入后首个事件是否被"激活点击"消耗(真实 sendEvent 路径)。
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                LibraryInteractionProbe.run(container: container)
+            }
         } else if CommandLine.arguments.contains("--pagingstressprobe") {
             // PA4: Library↔Page1 500 轮压力探针(不变式断言)。
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {

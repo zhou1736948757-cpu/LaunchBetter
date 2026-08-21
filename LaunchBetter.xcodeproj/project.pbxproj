@@ -22,15 +22,15 @@
 		78FF293876DA8791FD534F60 /* LaunchCore in Frameworks */ = {isa = PBXBuildFile; productRef = 022C22583EB95E8DB7E533DA /* LaunchCore */; };
 		79B6670C538DFA802D10D915 /* SearchProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41D011887390646903EE3FD2 /* SearchProbe.swift */; };
 		7C08D416C24B4866D93AFBE0 /* HotCornerProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82E562164F9BB08DB2E906F3 /* HotCornerProbe.swift */; };
+		7C6FC3FC770461F7EF2AE41C /* PagingStressProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6973E1BED64764796C448140 /* PagingStressProbe.swift */; };
 		7EC4DE81DB3A1D130A9760D8 /* AppLibraryShotProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 295B833ECF1DA4688AB5EC53 /* AppLibraryShotProbe.swift */; };
 		97CAF62410D849C74D1ED8FE /* LaunchUI in Frameworks */ = {isa = PBXBuildFile; productRef = BFBADDC8868444DA8FEB4241 /* LaunchUI */; };
 		A6AA30F397E682609E5C3255 /* PagingProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B4157109522440A6D3DE67B /* PagingProbe.swift */; };
-		B7E21D5A8C4F09A31D6E5F72 /* PagingScrollProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C3D8E27F6B4A5180E7C2D91 /* PagingScrollProbe.swift */; };
-		A1B2C3D4E5F60718A9B0C1D2 /* PagingEventTraceProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9E7B3A1D2F40485A6B7C8D9 /* PagingEventTraceProbe.swift */; };
-		B4C5D6E7F8091A2B3C4D5E6F /* LibraryBlankTraceProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3A4B5C6D7E8091A1B2C3D4E /* LibraryBlankTraceProbe.swift */; };
-		E2F3A4B5C6D70819E0F1A2B3 /* PagingStressProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1F2A3B4C5D60789E0F1A2B3 /* PagingStressProbe.swift */; };
+		B8DFCF5CD675E6FF60D48D3B /* PagingScrollProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4A1911205FC8C78EBCBC7F1 /* PagingScrollProbe.swift */; };
 		BB5EC826ACB1AF62EE21847B /* IconImageAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E4FB7BAF0189E406E0361FE /* IconImageAdapter.swift */; };
 		C7367F5C43E434A600DE07D2 /* LauncherStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3667895D56B49968ADB46248 /* LauncherStore.swift */; };
+		C7F7808020E1F9AD70279D61 /* LibraryInteractionProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7122C1AA8BB9AAB07869A03C /* LibraryInteractionProbe.swift */; };
+		C8837C8CE9E4C6C202AB61EC /* PagingEventTraceProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2BD2084D4EFFDBFE5CB24A5 /* PagingEventTraceProbe.swift */; };
 		D787CB7DB7A8142C2793057B /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F48F69D4EFE02FA4BFC2085 /* main.swift */; };
 		DA5D6E4F4DB95EE94074FB1C /* SettingsShotProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81C0075A1B63A8F22F018945 /* SettingsShotProbe.swift */; };
 		EB542672D892D265B3724B18 /* LayoutProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE7E4CA496431AA25E487527 /* LayoutProbe.swift */; };
@@ -38,10 +38,12 @@
 		F4C47C4D35D85CD8B30FE3FB /* DependencyContainer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 780898346943FE4934897076 /* DependencyContainer.swift */; };
 		F6C191167A2E4213B4251D81 /* LaunchPlatform in Frameworks */ = {isa = PBXBuildFile; productRef = 42E253C8CB0BA5EF8315FC9C /* LaunchPlatform */; };
 		F8D3BA3975E69CD862B869D8 /* SmokeProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE80D899386FA134055791B3 /* SmokeProbe.swift */; };
+		FD7440B733C301CDF16456A8 /* LibraryBlankTraceProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14828123E4BAFA7A71447D48 /* LibraryBlankTraceProbe.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		0C34AB424D5AF0AE055AF24D /* ActivationCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActivationCoordinator.swift; sourceTree = "<group>"; };
+		14828123E4BAFA7A71447D48 /* LibraryBlankTraceProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryBlankTraceProbe.swift; sourceTree = "<group>"; };
 		1B4157109522440A6D3DE67B /* PagingProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PagingProbe.swift; sourceTree = "<group>"; };
 		1C0358A5F6E9CB51041CDA05 /* LaunchBetter.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LaunchBetter.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		1C2AB3A60C689596001DB5D2 /* ThreeFingerProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreeFingerProbe.swift; sourceTree = "<group>"; };
@@ -52,7 +54,9 @@
 		41D011887390646903EE3FD2 /* SearchProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchProbe.swift; sourceTree = "<group>"; };
 		5363485EFF16DF98D8CCB975 /* LauncherWindowCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LauncherWindowCoordinator.swift; sourceTree = "<group>"; };
 		5E4FB7BAF0189E406E0361FE /* IconImageAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IconImageAdapter.swift; sourceTree = "<group>"; };
+		6973E1BED64764796C448140 /* PagingStressProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PagingStressProbe.swift; sourceTree = "<group>"; };
 		6E84932645B8B51425FF3EA5 /* SourcesProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourcesProbe.swift; sourceTree = "<group>"; };
+		7122C1AA8BB9AAB07869A03C /* LibraryInteractionProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryInteractionProbe.swift; sourceTree = "<group>"; };
 		780898346943FE4934897076 /* DependencyContainer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DependencyContainer.swift; sourceTree = "<group>"; };
 		78F8C351EFDEDDC0E57529CC /* SettingsOwnershipProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsOwnershipProbe.swift; sourceTree = "<group>"; };
 		7F48F69D4EFE02FA4BFC2085 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
@@ -62,15 +66,13 @@
 		A07D65125EC0696A81DDDC45 /* LaunchUI */ = {isa = PBXFileReference; lastKnownFileType = folder; name = LaunchUI; path = Packages/LaunchUI; sourceTree = SOURCE_ROOT; };
 		A0FFF73145C9A2D72A52E604 /* IconProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IconProbe.swift; sourceTree = "<group>"; };
 		A257A4CDFADF5CB520111144 /* ThreeFingerDragCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreeFingerDragCoordinator.swift; sourceTree = "<group>"; };
+		A4A1911205FC8C78EBCBC7F1 /* PagingScrollProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PagingScrollProbe.swift; sourceTree = "<group>"; };
 		A777C8C802C7A13E24A11B75 /* DragProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DragProbe.swift; sourceTree = "<group>"; };
 		A8DB7EDB939C825095D4B69F /* GridProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GridProbe.swift; sourceTree = "<group>"; };
 		DD3B97AB82BA34BFBECBC19A /* FolderProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FolderProbe.swift; sourceTree = "<group>"; };
 		E330AC7D7E44DC67CC602785 /* PageTestProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PageTestProbe.swift; sourceTree = "<group>"; };
 		F2B7C15B26E035D2F86D16C6 /* DiagnosticRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticRunner.swift; sourceTree = "<group>"; };
-		9C3D8E27F6B4A5180E7C2D91 /* PagingScrollProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PagingScrollProbe.swift; sourceTree = "<group>"; };
-		C9E7B3A1D2F40485A6B7C8D9 /* PagingEventTraceProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PagingEventTraceProbe.swift; sourceTree = "<group>"; };
-		F3A4B5C6D7E8091A1B2C3D4E /* LibraryBlankTraceProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryBlankTraceProbe.swift; sourceTree = "<group>"; };
-		D1F2A3B4C5D60789E0F1A2B3 /* PagingStressProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PagingStressProbe.swift; sourceTree = "<group>"; };
+		F2BD2084D4EFFDBFE5CB24A5 /* PagingEventTraceProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PagingEventTraceProbe.swift; sourceTree = "<group>"; };
 		FE7E4CA496431AA25E487527 /* LayoutProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayoutProbe.swift; sourceTree = "<group>"; };
 		FE80D899386FA134055791B3 /* SmokeProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmokeProbe.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -134,12 +136,13 @@
 				82E562164F9BB08DB2E906F3 /* HotCornerProbe.swift */,
 				A0FFF73145C9A2D72A52E604 /* IconProbe.swift */,
 				FE7E4CA496431AA25E487527 /* LayoutProbe.swift */,
-				F3A4B5C6D7E8091A1B2C3D4E /* LibraryBlankTraceProbe.swift */,
+				14828123E4BAFA7A71447D48 /* LibraryBlankTraceProbe.swift */,
+				7122C1AA8BB9AAB07869A03C /* LibraryInteractionProbe.swift */,
 				E330AC7D7E44DC67CC602785 /* PageTestProbe.swift */,
+				F2BD2084D4EFFDBFE5CB24A5 /* PagingEventTraceProbe.swift */,
 				1B4157109522440A6D3DE67B /* PagingProbe.swift */,
-				9C3D8E27F6B4A5180E7C2D91 /* PagingScrollProbe.swift */,
-				C9E7B3A1D2F40485A6B7C8D9 /* PagingEventTraceProbe.swift */,
-				D1F2A3B4C5D60789E0F1A2B3 /* PagingStressProbe.swift */,
+				A4A1911205FC8C78EBCBC7F1 /* PagingScrollProbe.swift */,
+				6973E1BED64764796C448140 /* PagingStressProbe.swift */,
 				41D011887390646903EE3FD2 /* SearchProbe.swift */,
 				78F8C351EFDEDDC0E57529CC /* SettingsOwnershipProbe.swift */,
 				81C0075A1B63A8F22F018945 /* SettingsShotProbe.swift */,
@@ -240,12 +243,13 @@
 				C7367F5C43E434A600DE07D2 /* LauncherStore.swift in Sources */,
 				F0D06B4E758A2F503166B24E /* LauncherWindowCoordinator.swift in Sources */,
 				EB542672D892D265B3724B18 /* LayoutProbe.swift in Sources */,
-				B4C5D6E7F8091A2B3C4D5E6F /* LibraryBlankTraceProbe.swift in Sources */,
+				FD7440B733C301CDF16456A8 /* LibraryBlankTraceProbe.swift in Sources */,
+				C7F7808020E1F9AD70279D61 /* LibraryInteractionProbe.swift in Sources */,
 				0B378C547F12199B13A4441B /* PageTestProbe.swift in Sources */,
+				C8837C8CE9E4C6C202AB61EC /* PagingEventTraceProbe.swift in Sources */,
 				A6AA30F397E682609E5C3255 /* PagingProbe.swift in Sources */,
-				B7E21D5A8C4F09A31D6E5F72 /* PagingScrollProbe.swift in Sources */,
-				A1B2C3D4E5F60718A9B0C1D2 /* PagingEventTraceProbe.swift in Sources */,
-				E2F3A4B5C6D70819E0F1A2B3 /* PagingStressProbe.swift in Sources */,
+				B8DFCF5CD675E6FF60D48D3B /* PagingScrollProbe.swift in Sources */,
+				7C6FC3FC770461F7EF2AE41C /* PagingStressProbe.swift in Sources */,
 				79B6670C538DFA802D10D915 /* SearchProbe.swift in Sources */,
 				623AF1DA518CCD1D5543165C /* SettingsOwnershipProbe.swift in Sources */,
 				DA5D6E4F4DB95EE94074FB1C /* SettingsShotProbe.swift in Sources */,
@@ -333,8 +337,6 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 0.4.1;
-				CURRENT_PROJECT_VERSION = 2;
 				PRODUCT_BUNDLE_IDENTIFIER = dev.launchbetter.LaunchBetter;
 				SDKROOT = macosx;
 				SWIFT_VERSION = 6.0;
@@ -421,8 +423,6 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 0.4.1;
-				CURRENT_PROJECT_VERSION = 2;
 				PRODUCT_BUNDLE_IDENTIFIER = dev.launchbetter.LaunchBetter;
 				SDKROOT = macosx;
 				SWIFT_VERSION = 6.0;

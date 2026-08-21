@@ -785,6 +785,14 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         lastShowStart = showStart
         let motionPolicy = MotionEnvironment.launcherPolicy
         transitionCoordinator.prepareForShow()
+        // X2 根因修复: 启动器是"覆盖式"界面(热键/手势/热角从任意前台应用唤起),
+        // 必须先把本应用提升为前台并把窗口激活为 key —— 否则窗口可见但非 key,
+        // macOS 会把用户的首次 mouseDown 当作"激活点击"吞掉(进入 App Library
+        // 后首次点 App 启动/点空白隐藏失效, 需再点一次; 用户实测)。
+        // makeKeyAndOrderFront 在未激活应用下不会真正置 key, 必须先 activate。
+        if NSApp.isActive != true || !window.isKeyWindow {
+            NSApp.activate(ignoringOtherApps: true)
+        }
         launcherWindow.showOnScreen(containing: NSEvent.mouseLocation)
         onVisibilityChange?(true)
         // 换屏后安全区可能变化: 同时更新搜索框、设置按钮与网格保留区。
