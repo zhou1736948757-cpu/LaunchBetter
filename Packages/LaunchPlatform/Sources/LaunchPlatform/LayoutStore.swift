@@ -42,7 +42,16 @@ public actor LayoutStore {
     }
 
     /// 启动: 加载磁盘快照(磁盘存在则权威)。损坏时备份并保留种子布局;缺失时保留种子布局。
-    public func start() -> StartResult {
+    ///
+    /// `adoptingSeed` 非 nil 时直接采纳(调用方已同步读过同一磁盘文件, PA1 去重);
+    /// nil = 保留原读盘/损坏恢复路径。
+    public func start(adoptingSeed seed: LayoutSnapshot? = nil) -> StartResult {
+        if let seed {
+            layout = seed
+            writesBlockedByUnpreservedCorruption = false
+            hasDurableSnapshot = true
+            return StartResult(loadedFromDisk: true, recoveredFromCorruption: false, layout: seed)
+        }
         hasDurableSnapshot = false
         lastPersistErrorDescription = nil
         do {

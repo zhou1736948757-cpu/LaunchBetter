@@ -25,6 +25,8 @@ struct SettingsWindowControllerTests {
         let previousLanguage = L10n.currentLanguage
         L10n.configure(language: .english)
         defer { L10n.configure(language: previousLanguage) }
+        SettingsWindowController.sliderCommitInterval = 0
+        defer { SettingsWindowController.sliderCommitInterval = 0.15 }
 
         let handler = SettingsHandlerStub(config: AppConfiguration(searchBarWidth: 512))
         let controller = SettingsWindowController(handler: handler)

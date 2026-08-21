@@ -36,9 +36,18 @@ public actor AppLibraryMetadataStore {
     }
 
     /// 启动: 加载磁盘快照(存在则权威)。损坏时备份后保留 seed;缺失时保留 seed。幂等。
-    public func start() async -> AppLibraryMetadataSnapshot {
+    ///
+    /// `adoptingSeed` 非 nil 时直接采纳(调用方已同步读过同一磁盘文件, PA1 去重);
+    /// nil = 保留原读盘/损坏恢复路径。
+    public func start(adoptingSeed seed: AppLibraryMetadataSnapshot? = nil) async -> AppLibraryMetadataSnapshot {
         guard !started else { return memory }
         started = true
+        if let seed {
+            memory = seed
+            writesBlockedByUnpreservedCorruption = false
+            lastPersistErrorDescription = nil
+            return seed
+        }
         do {
             if let loaded = try DurableFile.loadCodable(
                 AppLibraryMetadataSnapshot.self, from: fileURL

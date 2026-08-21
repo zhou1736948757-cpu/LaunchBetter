@@ -11,9 +11,27 @@ public final class DependencyContainer {
     public let windowController: LauncherWindowController
     public let directoryMonitor: DirectoryMonitor
     public let activationCoordinator: ActivationCoordinator
-    public let settingsController: SettingsWindowController
+    /// Settings 窗口控制器(惰性构建, 见 `settingsController` 文档)。
+    private var _settingsController: SettingsWindowController?
     public let loginItem: SMAppServiceLoginItemController
     let threeFingerCoordinator: ThreeFingerDragCoordinator
+
+    /// Settings 窗口(惰性构建)。
+    ///
+    /// 全量表单构建实测 10-30ms 且用户可能整个会话都不打开设置(PA1 A6):
+    /// 首次访问(齿轮/App 菜单/诊断探针)时才创建, 启动关键路径不含它。
+    /// 访问即构建并注入 windowController(weak 引用由本容器持有保活)。
+    public var settingsController: SettingsWindowController {
+        if let _settingsController { return _settingsController }
+        let controller = SettingsWindowController(
+            handler: store,
+            iconProvider: iconAdapter,
+            loginItem: loginItem
+        )
+        _settingsController = controller
+        windowController.settingsController = controller
+        return controller
+    }
 
     public init() {
         let bundleID = Bundle.main.bundleIdentifier ?? "dev.launchbetter.LaunchBetter"
@@ -22,19 +40,38 @@ public final class DependencyContainer {
         let settingsStore = SettingsStore(directory: supportDir)
 
         var sources = AppDiscoveryService.defaultSources
+        // PA1(A5): 配置只读一次; 成功读到的值作为 bootstrap 种子传给 LauncherStore,
+        // 失败(nil)时由 LauncherStore 走原重试/报错路径。
+        let configSeed: AppConfiguration?
         if let saved = try? settingsStore.load() {
+            configSeed = saved
             sources.append(contentsOf: saved.customSourceDirectories.map {
                 URL(fileURLWithPath: $0, isDirectory: true)
             })
+        } else {
+            configSeed = nil
         }
 
         let catalogActor = AppCatalogActor(store: catalogStore, sources: sources)
         // 首帧同步恢复快照(损坏时由 actor.start() 在后台备份处理)
-        let initialSnapshot = (try? catalogStore.load()) ?? CatalogSnapshot(apps: [])
+        // PA1(A5): 区分"成功读盘"(种子)与"缺失/损坏"(nil → bootstrap 原恢复路径)。
+        let catalogSeed: CatalogSnapshot?
+        do {
+            catalogSeed = try catalogStore.load()
+        } catch {
+            catalogSeed = nil
+        }
+        let initialSnapshot = catalogSeed ?? CatalogSnapshot(apps: [])
 
         // 布局存储: 首帧同步恢复(磁盘权威), 变更经 LayoutStore 持久化
         let layoutStore = LayoutSnapshotStore(directory: supportDir)
-        let initialLayout = (try? layoutStore.load()) ?? LayoutSnapshot()
+        let layoutSeed: LayoutSnapshot?
+        do {
+            layoutSeed = try layoutStore.load()
+        } catch {
+            layoutSeed = nil
+        }
+        let initialLayout = layoutSeed ?? LayoutSnapshot()
         let layoutActor = LayoutStore(seed: initialLayout, persistence: layoutStore)
 
         // App Library 元数据: 启动同步读盘 seed(启动恢复, 非 show/Library 入口 IO)。
@@ -43,11 +80,16 @@ public final class DependencyContainer {
         // 文件名与 AppLibraryMetadataStore.fileURL 保持一致,但不在 MainActor
         // 同步访问 actor 隔离属性;URL 直接由 supportDir 派生。
         let metadataFileURL = supportDir.appendingPathComponent("AppLibraryMetadata.json")
-        let initialMetadata =
-            (try? DurableFile.loadCodable(
+        let metadataSeed: AppLibraryMetadataSnapshot?
+        do {
+            metadataSeed = try DurableFile.loadCodable(
                 AppLibraryMetadataSnapshot.self,
                 from: metadataFileURL
-            )) ?? .init()
+            )
+        } catch {
+            metadataSeed = nil
+        }
+        let initialMetadata = metadataSeed ?? .init()
 
         let store = LauncherStore(
             catalogActor: catalogActor,
@@ -56,7 +98,13 @@ public final class DependencyContainer {
             initialLayout: initialLayout,
             settingsStore: settingsStore,
             metadataStore: metadataStore,
-            initialMetadata: initialMetadata
+            initialMetadata: initialMetadata,
+            bootstrapSeeds: BootstrapSeeds(
+                config: configSeed,
+                catalog: catalogSeed,
+                layout: layoutSeed,
+                metadata: metadataSeed
+            )
         )
 
         // 图标管道: 磁盘缓存(可再生) + 内存 LRU + 实时提取
@@ -171,24 +219,21 @@ public final class DependencyContainer {
         }
         self.threeFingerCoordinator = threeFinger
 
-        // 设置窗口
+        // 设置窗口(PA1 A6: 惰性构建, 见 settingsController 文档)
         let loginItem = SMAppServiceLoginItemController()
-        // 启动时按配置应用一次登录项(开机自动启动); 失败非致命
-        loginItem.apply(store.config.launchAtLogin)
-        let settingsController = SettingsWindowController(
-            handler: store,
-            iconProvider: iconAdapter,
-            loginItem: loginItem
-        )
-        self.settingsController = settingsController
         self.loginItem = loginItem
-        // 启动器右上角齿轮 → 打开设置: 作为启动器 child window(浮在上方, 启动器不退出)
-        windowController.settingsController = settingsController
-        windowController.onOpenSettings = { [weak windowController, weak settingsController] sourcePoint in
-            guard let windowController,
-                  let settingsController,
-                  let sw = settingsController.window else { return }
-            settingsController.launcherWindow = windowController.window
+        // 启动时按配置应用一次登录项(开机自动启动)。SMAppService status/register
+        // 是同步 XPC(实测 5-50ms), 移出首帧关键路径; MainActor hop 后执行,
+        // 失败非致命。
+        Task { @MainActor [loginItem, launchAtLogin = store.config.launchAtLogin] in
+            loginItem.apply(launchAtLogin)
+        }
+        // 启动器右上角齿轮 → 打开设置: 首次点击触发惰性构建, 之后复用。
+        windowController.onOpenSettings = { [weak self, weak windowController] sourcePoint in
+            guard let self, let windowController else { return }
+            let controller = self.settingsController
+            guard let sw = controller.window else { return }
+            controller.launcherWindow = windowController.window
             windowController.presentSettingsWindow(sw, from: sourcePoint)
         }
     }

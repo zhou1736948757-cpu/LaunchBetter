@@ -53,6 +53,8 @@ struct SettingsSliderLoginItemTests {
 
     @Test("blur slider value-to-commit roundtrip updates the persisted config immediately")
     func blurSliderCommitRoundtrip() throws {
+        SettingsWindowController.sliderCommitInterval = 0
+        defer { SettingsWindowController.sliderCommitInterval = 0.15 }
         let handler = SettingsHandlerStubX(config: AppConfiguration(wallpaperBlurRadius: 10))
         let controller = SettingsWindowController(handler: handler)
         let contentView = try #require(controller.window?.contentView)
@@ -70,6 +72,8 @@ struct SettingsSliderLoginItemTests {
 
     @Test("search bar slider value-to-commit roundtrip updates the persisted width immediately")
     func searchBarSliderCommitRoundtrip() throws {
+        SettingsWindowController.sliderCommitInterval = 0
+        defer { SettingsWindowController.sliderCommitInterval = 0.15 }
         let handler = SettingsHandlerStubX(config: AppConfiguration(searchBarWidth: 320))
         let controller = SettingsWindowController(handler: handler)
         let contentView = try #require(controller.window?.contentView)
@@ -93,6 +97,8 @@ struct SettingsSliderLoginItemTests {
             wallpaperBlurRadius: 0,
             searchBarWidth: 200
         ))
+        SettingsWindowController.sliderCommitInterval = 0
+        defer { SettingsWindowController.sliderCommitInterval = 0.15 }
         let controller = SettingsWindowController(handler: handler)
         let contentView = try #require(controller.window?.contentView)
         let blur = try #require(descendantX(
@@ -113,6 +119,29 @@ struct SettingsSliderLoginItemTests {
 
         #expect(handler.config.wallpaperBlurRadius == 60)
         #expect(handler.config.searchBarWidth == 592)
+    }
+
+    @Test("continuous slider ticks coalesce into one deferred commit until flushed")
+    func sliderCommitCoalescesUntilFlush() throws {
+        SettingsWindowController.sliderCommitInterval = 0.15
+        defer { SettingsWindowController.sliderCommitInterval = 0.15 }
+        let handler = SettingsHandlerStubX(config: AppConfiguration(wallpaperBlurRadius: 10))
+        let controller = SettingsWindowController(handler: handler)
+        let contentView = try #require(controller.window?.contentView)
+        let slider = try #require(descendantX(
+            of: NSSlider.self,
+            identifier: "settings.blur",
+            in: contentView
+        ))
+
+        // 合并窗口内: 标签即时更新, 但配置尚未落盘。
+        slider.doubleValue = 45
+        #expect(slider.sendAction(slider.action, to: slider.target))
+        #expect(handler.config.wallpaperBlurRadius == 10)
+
+        // 冲刷(关闭路径同款)后一次性提交。
+        controller.flushPendingSliderCommit()
+        #expect(handler.config.wallpaperBlurRadius == 45)
     }
 
     @Test("launch-at-login checkbox binds to config and persists through save")

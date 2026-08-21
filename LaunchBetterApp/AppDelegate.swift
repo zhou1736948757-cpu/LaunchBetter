@@ -51,7 +51,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func openSettings() {
-        container?.windowController.openSettingsFromMenu()
+        guard let container else { return }
+        // 惰性构建(PA1 A6): 首次菜单/齿轮访问才创建 Settings 并注入 windowController。
+        _ = container.settingsController
+        container.windowController.openSettingsFromMenu()
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {

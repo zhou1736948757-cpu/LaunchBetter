@@ -359,6 +359,8 @@ public final class SettingsWindowController: NSWindowController {
         }
         guard !closeRequested else { return }
 
+        // 关闭前冲刷滑杆合并窗口内未落盘的值(防丢最后一次拖动结果)。
+        flushPendingSliderCommit()
         closeRequested = true
         transitionCoordinator.dismiss(to: sourcePoint) { [weak self] in
             MainActor.assumeIsolated {
@@ -616,7 +618,7 @@ public final class SettingsWindowController: NSWindowController {
         left.alignment = .leading
         left.spacing = 10
 
-        let blurSlider = NSSlider(value: Double(config.wallpaperBlurRadius), minValue: 0, maxValue: 60, target: self, action: #selector(valueChanged))
+        let blurSlider = NSSlider(value: Double(config.wallpaperBlurRadius), minValue: 0, maxValue: 60, target: self, action: #selector(sliderValueChanged))
         blurSlider.isContinuous = true
         blurSlider.identifier = NSUserInterfaceItemIdentifier("settings.blur")
         blurSlider.translatesAutoresizingMaskIntoConstraints = false
@@ -635,7 +637,7 @@ public final class SettingsWindowController: NSWindowController {
             minValue: SearchBarSizing.minimumPercent,
             maxValue: SearchBarSizing.maximumPercent,
             target: self,
-            action: #selector(valueChanged)
+            action: #selector(sliderValueChanged)
         )
         searchBarSlider.isContinuous = true
         searchBarSlider.identifier = NSUserInterfaceItemIdentifier("settings.searchBarSize")
@@ -909,6 +911,47 @@ public final class SettingsWindowController: NSWindowController {
         commit()
     }
 
+    /// 滑杆连续拖动的 commit 合并窗口(秒)。0 = 立即 commit(测试/确定性路径)。
+    ///
+    /// isContinuous 滑杆一次拖动可产生几十个 tick; 每个 tick 都走
+    /// commit → handler.save(主线程同步写盘) + notifyDataChange(全网格
+    /// snapshot apply ~6ms), 累计数百毫秒主线程占用。标签即时更新保持拖动
+    /// 反馈, 配置落盘按窗口合并。仅滑杆走此路径; 复选框/弹窗等单击控件
+    /// 仍用 valueChanged 立即 commit。
+    static var sliderCommitInterval: TimeInterval = 0.15
+
+    private var pendingSliderCommit: DispatchWorkItem?
+
+    @objc private func sliderValueChanged() {
+        blurLabel?.stringValue = "\(Int(blurSlider?.doubleValue ?? 0))"
+        searchBarLabel?.stringValue = Self.percentLabel(
+            searchBarSlider?.doubleValue ?? 100
+        )
+        if Self.sliderCommitInterval <= 0 {
+            pendingSliderCommit?.cancel()
+            pendingSliderCommit = nil
+            commit()
+            return
+        }
+        pendingSliderCommit?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            self?.commit()
+        }
+        pendingSliderCommit = item
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + Self.sliderCommitInterval,
+            execute: item
+        )
+    }
+
+    /// 关闭/重建前冲刷未落盘的滑杆值(防丢最后一次拖动结果)。
+    func flushPendingSliderCommit() {
+        guard let item = pendingSliderCommit else { return }
+        item.cancel()
+        pendingSliderCommit = nil
+        commit()
+    }
+
     @objc private func valueChanged() {
         blurLabel?.stringValue = "\(Int(blurSlider?.doubleValue ?? 0))"
         searchBarLabel?.stringValue = Self.percentLabel(
@@ -1101,6 +1144,10 @@ public final class SettingsWindowController: NSWindowController {
         selectedSourceRow: Int,
         selectedHiddenRow: Int
     ) {
+        // 语言变更本身经 commit() 立即生效; 丢弃合并窗口内可能残留的滑杆
+        // workitem, 避免它在新控件树上再次触发 commit。
+        pendingSliderCommit?.cancel()
+        pendingSliderCommit = nil
         let frame = window?.frame
 
         window?.title = L10n.t(.settingsTitle)

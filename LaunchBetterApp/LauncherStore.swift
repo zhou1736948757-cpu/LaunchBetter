@@ -20,6 +20,27 @@ private final class LayoutMutationCompletionGate {
     }
 }
 
+/// PA1 启动去重: 容器首帧已同步读盘成功的种子, bootstrap 直接采纳而不再重读。
+/// 某项为 nil = 该资源首帧读取失败/缺失, bootstrap 走原读盘/损坏恢复路径。
+public struct BootstrapSeeds: Sendable {
+    public var config: AppConfiguration?
+    public var catalog: CatalogSnapshot?
+    public var layout: LayoutSnapshot?
+    public var metadata: AppLibraryMetadataSnapshot?
+
+    public init(
+        config: AppConfiguration? = nil,
+        catalog: CatalogSnapshot? = nil,
+        layout: LayoutSnapshot? = nil,
+        metadata: AppLibraryMetadataSnapshot? = nil
+    ) {
+        self.config = config
+        self.catalog = catalog
+        self.layout = layout
+        self.metadata = metadata
+    }
+}
+
 /// 启动器存储(MainActor): 组装 Catalog + Layout + Config → DisplayModel。
 ///
 /// 职责(§65 启动契约):
@@ -43,6 +64,7 @@ public final class LauncherStore: LauncherStoring, LayoutMutationCompleting, Set
     private let catalogActor: AppCatalogActor
     private let layoutStore: LayoutStore
     private let settingsStore: SettingsStore
+    private let bootstrapSeeds: BootstrapSeeds?
     private let metadataStore: AppLibraryMetadataStore
     private var catalogSnapshot: CatalogSnapshot
     private var catalogIndex: [AppID: AppRecord] = [:]
@@ -102,30 +124,31 @@ public final class LauncherStore: LauncherStoring, LayoutMutationCompleting, Set
         initialLayout: LayoutSnapshot,
         settingsStore: SettingsStore,
         metadataStore: AppLibraryMetadataStore,
-        initialMetadata: AppLibraryMetadataSnapshot
+        initialMetadata: AppLibraryMetadataSnapshot,
+        bootstrapSeeds: BootstrapSeeds? = nil
     ) {
         self.catalogActor = catalogActor
         self.layoutStore = layoutStore
         self.catalogSnapshot = initialSnapshot
         self.layout = initialLayout
-        do {
-            self.config = try settingsStore.load() ?? AppConfiguration()
-        } catch {
-            print("CONFIG load error: \(error)")
-            self.config = AppConfiguration()
+        if let configSeed = bootstrapSeeds?.config {
+            // 容器首帧已同步读过同一配置文件(PA1 启动去重); 仅失败时回退重读。
+            self.config = configSeed
+        } else {
+            do {
+                self.config = try settingsStore.load() ?? AppConfiguration()
+            } catch {
+                print("CONFIG load error: \(error)")
+                self.config = AppConfiguration()
+            }
         }
         self.settingsStore = settingsStore
         self.metadataStore = metadataStore
         self.metadataSnapshot = initialMetadata
-        // 首帧 Library model: initial Catalog/Layout/Config + metadata seed 纯内存构建
-        // (启动恢复, 非 show/Library 入口 IO; §E7)
-        self.libraryModelCache = Self.buildLibraryModel(
-            catalog: catalogSnapshot,
-            layout: layout,
-            config: config,
-            metadata: metadataSnapshot
-        )
-        rebuildCatalogIndex()
+        self.bootstrapSeeds = bootstrapSeeds
+        // 占位: reconcile 后由 rebuildLibraryModel() 填充唯一一次(PA1: 删除
+        // reconcile 前的冗余首建, 该中间结果无人读取)。
+        self.libraryModelCache = AppLibraryModel(cards: [], categoryDetail: [:])
 
         // 首帧: 用已恢复的快照构建显示模型(同步, 快照加载 < 10ms 目标)
         layout = LayoutReconciler.reconcile(
@@ -133,9 +156,9 @@ public final class LauncherStore: LauncherStoring, LayoutMutationCompleting, Set
             layout: layout,
             now: Date()
         )
-        // reconcile 可能新增/移除页面内容(墓碑、孤儿槽位), 重建 Library model,
         // 使 Page 1 fallback 使用对账后的 layout。
         rebuildLibraryModel()
+        rebuildCatalogIndex()
         rebuildSearchIndex()
 
         // 后台: 正式启动(含损坏恢复)+ 全量对账
@@ -145,10 +168,10 @@ public final class LauncherStore: LauncherStoring, LayoutMutationCompleting, Set
     }
 
     private func bootstrap() async {
-        _ = await layoutStore.start()
+        _ = await layoutStore.start(adoptingSeed: bootstrapSeeds?.layout)
         // Library 元数据: 磁盘权威快照(损坏已由 actor.start() 备份, 失败不阻断对账)
-        applyMetadataSnapshot(await metadataStore.start())
-        let result = await catalogActor.start()
+        applyMetadataSnapshot(await metadataStore.start(adoptingSeed: bootstrapSeeds?.metadata))
+        let result = await catalogActor.start(seed: bootstrapSeeds?.catalog)
         // bootstrap 使用 actor.start() 返回的完整 snapshot 作基线(此时 self.catalogSnapshot
         // 仍是首帧初始快照, 可能不含后台恢复的存量 apps)。
         await bootstrapLibraryMetadata(with: result.snapshot)

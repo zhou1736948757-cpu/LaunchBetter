@@ -68,7 +68,19 @@ public actor AppCatalogActor {
     }
 
     /// 启动: 加载磁盘快照。损坏时备份并继续(空快照),绝不静默清除。
-    public func start() async -> StartResult {
+    ///
+    /// `seed` 非 nil 时直接采纳(调用方已同步读过同一磁盘文件, PA1 去重);
+    /// nil = 保留原读盘/损坏恢复路径。
+    public func start(seed: CatalogSnapshot? = nil) async -> StartResult {
+        if let seed {
+            snapshot = seed
+            generation += 1
+            return StartResult(
+                loadedFromDisk: true,
+                recoveredFromCorruption: false,
+                snapshot: seed
+            )
+        }
         do {
             if let loaded = try store.load() {
                 snapshot = loaded
