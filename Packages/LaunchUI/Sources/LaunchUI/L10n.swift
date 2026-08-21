@@ -59,6 +59,8 @@ public enum L10n {
         case cornerHide
         case cornerToggle
         case pageOf
+        case generalSection
+        case launchAtLogin
         case aboutLabel
         case blurIntensityLabel
         case searchBarSection
@@ -108,6 +110,8 @@ public enum L10n {
         .later: "稍后", .none: "无",
         .cornerShow: "显示启动器", .cornerHide: "隐藏启动器", .cornerToggle: "切换启动器",
         .pageOf: "第 %@ 页，共 %@ 页",
+        .generalSection: "通用",
+        .launchAtLogin: "开机自动启动",
         .aboutLabel: "关于",
         .blurIntensityLabel: "模糊强度",
         .searchBarSection: "搜索栏",
@@ -157,6 +161,8 @@ public enum L10n {
         .later: "稍後", .none: "無",
         .cornerShow: "顯示啟動器", .cornerHide: "隱藏啟動器", .cornerToggle: "切換啟動器",
         .pageOf: "第 %@ 頁，共 %@ 頁",
+        .generalSection: "通用",
+        .launchAtLogin: "開機自動啟動",
         .aboutLabel: "關於",
         .blurIntensityLabel: "模糊強度",
         .searchBarSection: "搜尋列",
@@ -206,6 +212,8 @@ public enum L10n {
         .later: "Later", .none: "None",
         .cornerShow: "Show Launcher", .cornerHide: "Hide Launcher", .cornerToggle: "Toggle Launcher",
         .pageOf: "Page %@ of %@",
+        .generalSection: "General",
+        .launchAtLogin: "Launch at Login",
         .aboutLabel: "About",
         .blurIntensityLabel: "Blur Intensity",
         .searchBarSection: "Search Bar",

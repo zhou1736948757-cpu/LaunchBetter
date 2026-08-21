@@ -186,6 +186,7 @@ enum SettingsWindowPlacement {
 public final class SettingsWindowController: NSWindowController {
     private let handler: any SettingsHandling
     private let iconProvider: (any IconImageProviding)?
+    private let loginItem: any LoginItemApplying
     private let sourcePanelPresenter: SettingsSourcePanelPresenter
     private let hiddenPanelPresenter: SettingsHiddenPanelPresenter
     private let notificationTokens = NotificationTokenRegistry()
@@ -211,6 +212,7 @@ public final class SettingsWindowController: NSWindowController {
         self.init(
             handler: handler,
             iconProvider: iconProvider,
+            loginItem: SMAppServiceLoginItemController(),
             sourcePanelPresenter: { parentWindow, completion in
                 Self.presentSourcePanel(in: parentWindow, completion: completion)
             },
@@ -225,14 +227,55 @@ public final class SettingsWindowController: NSWindowController {
         )
     }
 
-    init(
+    /// 应用层注入登录项控制器(生产: SMAppService; 测试/诊断: 可注入 fake)。
+    public convenience init(
+        handler: any SettingsHandling,
+        iconProvider: (any IconImageProviding)?,
+        loginItem: any LoginItemApplying
+    ) {
+        self.init(
+            handler: handler,
+            iconProvider: iconProvider,
+            loginItem: loginItem,
+            sourcePanelPresenter: { parentWindow, completion in
+                Self.presentSourcePanel(in: parentWindow, completion: completion)
+            },
+            hiddenPanelPresenter: { parentWindow, apps, completion in
+                Self.presentHiddenPanel(
+                    in: parentWindow,
+                    apps: apps,
+                    iconProvider: iconProvider,
+                    completion: completion
+                )
+            }
+        )
+    }
+
+    convenience init(
         handler: any SettingsHandling,
         iconProvider: (any IconImageProviding)?,
         sourcePanelPresenter: @escaping SettingsSourcePanelPresenter,
         hiddenPanelPresenter: @escaping SettingsHiddenPanelPresenter
     ) {
+        self.init(
+            handler: handler,
+            iconProvider: iconProvider,
+            loginItem: SMAppServiceLoginItemController(),
+            sourcePanelPresenter: sourcePanelPresenter,
+            hiddenPanelPresenter: hiddenPanelPresenter
+        )
+    }
+
+    init(
+        handler: any SettingsHandling,
+        iconProvider: (any IconImageProviding)?,
+        loginItem: any LoginItemApplying,
+        sourcePanelPresenter: @escaping SettingsSourcePanelPresenter,
+        hiddenPanelPresenter: @escaping SettingsHiddenPanelPresenter
+    ) {
         self.handler = handler
         self.iconProvider = iconProvider
+        self.loginItem = loginItem
         self.sourcePanelPresenter = sourcePanelPresenter
         self.hiddenPanelPresenter = hiddenPanelPresenter
         let window = NSWindow(
@@ -358,6 +401,7 @@ public final class SettingsWindowController: NSWindowController {
     private var languagePopup: NSPopUpButton!
     private var hotkeyCheck: NSButton!
     private var hotkeyPopup: NSPopUpButton!
+    private var launchAtLoginCheck: NSButton!
     private var blurSlider: NSSlider!
     private var blurLabel: NSTextField!
     private var searchBarSlider: NSSlider!
@@ -378,6 +422,18 @@ public final class SettingsWindowController: NSWindowController {
 
     /// 隐藏应用行图标点尺寸(与行高匹配)。
     private static let hiddenIconPointSize = 32
+
+    /// 模糊强度 / 搜索栏尺寸滑杆的固定可用宽度(pt)。
+    ///
+    /// 现代 AppKit 的 `NSSlider.intrinsicContentSize.width` 是
+    /// `NSView.noIntrinsicMetric`(-1): 放入 V4 表单的
+    /// `NSStackView(views: [数值标签, 滑杆])` 值列后, 滑杆会坍缩到 0 或只拿到
+    /// 相邻控件留下的偶然富余宽度(三语实测 0 / 24.5 / 129.5 / 152.5), 零宽度
+    /// 时无命中区无法拖动。显式给滑杆宽度约束, 保证任何语言下都有可拖动的宽度。
+    private static let sliderWidth: CGFloat = 200
+
+    /// 测试窗口: 滑杆固定宽度真值(供可拖动性断言)。
+    static let sliderWidthForTesting = sliderWidth
 
     private var hiddenIconScale: Int {
         max(1, Int((window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2).rounded()))
@@ -491,6 +547,11 @@ public final class SettingsWindowController: NSWindowController {
         showLabelsCheck.identifier = NSUserInterfaceItemIdentifier("settings.showLabels")
         showLabelsCheck.state = config.showIconLabels ? .on : .off
 
+        // 开机自动启动
+        launchAtLoginCheck = NSButton(checkboxWithTitle: "", target: self, action: #selector(valueChanged))
+        launchAtLoginCheck.identifier = NSUserInterfaceItemIdentifier("settings.launchAtLogin")
+        launchAtLoginCheck.state = config.launchAtLogin ? .on : .off
+
         // 语言
         languagePopup = NSPopUpButton()
         languagePopup.identifier = NSUserInterfaceItemIdentifier("settings.language")
@@ -544,6 +605,11 @@ public final class SettingsWindowController: NSWindowController {
             )
         }
 
+        let launchAtLoginRow = SettingsFormRow(
+            title: L10n.t(.launchAtLogin),
+            value: launchAtLoginCheck
+        )
+
         // 布局: 分两列 section
         let left = NSStackView()
         left.orientation = .vertical
@@ -553,6 +619,10 @@ public final class SettingsWindowController: NSWindowController {
         let blurSlider = NSSlider(value: Double(config.wallpaperBlurRadius), minValue: 0, maxValue: 60, target: self, action: #selector(valueChanged))
         blurSlider.isContinuous = true
         blurSlider.identifier = NSUserInterfaceItemIdentifier("settings.blur")
+        blurSlider.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            blurSlider.widthAnchor.constraint(equalToConstant: Self.sliderWidth)
+        ])
         self.blurSlider = blurSlider
         let blurLabel = NSTextField(labelWithString: "\(config.wallpaperBlurRadius)")
         self.blurLabel = blurLabel
@@ -569,6 +639,10 @@ public final class SettingsWindowController: NSWindowController {
         )
         searchBarSlider.isContinuous = true
         searchBarSlider.identifier = NSUserInterfaceItemIdentifier("settings.searchBarSize")
+        searchBarSlider.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            searchBarSlider.widthAnchor.constraint(equalToConstant: Self.sliderWidth)
+        ])
         self.searchBarSlider = searchBarSlider
         let searchBarLabel = NSTextField(
             labelWithString: Self.percentLabel(searchBarPercent)
@@ -585,10 +659,15 @@ public final class SettingsWindowController: NSWindowController {
             value: NSStackView(views: [searchBarLabel, searchBarSlider])
         )
 
-        let allRows = gridRows + [languageRow, hotkeyRow] + cornerRows
-            + [wallpaperRow, searchRow]
+        let allRows = [launchAtLoginRow] + gridRows + [languageRow, hotkeyRow]
+            + cornerRows + [wallpaperRow, searchRow]
         let sharedLabelWidth = allRows.map(\.labelIntrinsicWidth).max() ?? 0
 
+        left.addArrangedSubview(makeFormSection(
+            title: L10n.t(.generalSection),
+            rows: [launchAtLoginRow],
+            labelColumnWidth: sharedLabelWidth
+        ))
         left.addArrangedSubview(makeFormSection(
             title: L10n.t(.gridSection),
             rows: gridRows,
@@ -954,6 +1033,7 @@ public final class SettingsWindowController: NSWindowController {
     /// 收集配置并保存(即时生效)。
     private func commit() {
         let previousLanguage = config.language
+        let previousLaunchAtLogin = config.launchAtLogin
         let selectedSourceRow = sourcesList.selectedRow
         let selectedHiddenRow = hiddenList.selectedRow
         var config = self.config
@@ -967,6 +1047,7 @@ public final class SettingsWindowController: NSWindowController {
         config.searchBarWidth = SearchBarSizing.persistedWidth(
             forPercent: searchBarSlider.doubleValue
         )
+        config.launchAtLogin = launchAtLoginCheck.state == .on
         switch languagePopup.indexOfSelectedItem {
         case 1: config.language = .english
         case 2: config.language = .simplifiedChinese
@@ -999,6 +1080,10 @@ public final class SettingsWindowController: NSWindowController {
         config.hiddenAppIDs = hiddenData
         handler.save(config)
         let languageChanged = handler.config.language != previousLanguage
+        if config.launchAtLogin != previousLaunchAtLogin {
+            // 勾选变化即时注册/注销登录项; 失败非致命(SMAppService 非 /Applications 运行会失败)
+            loginItem.apply(config.launchAtLogin)
+        }
         synchronizeSavedListsForPresentation(reloadTables: !languageChanged)
 
         // LauncherStore configures L10n synchronously as part of save. Rebuild

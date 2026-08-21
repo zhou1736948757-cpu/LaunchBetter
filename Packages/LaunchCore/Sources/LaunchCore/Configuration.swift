@@ -76,6 +76,10 @@ public struct AppConfiguration: Codable, Sendable {
     /// 保留此字段以兼容已有配置。
     public var searchBarWidth: Int
 
+    /// 是否开机自动启动(登录项; SMAppService)。
+    /// 默认 false; 旧配置文件缺失该字段时 decodeIfPresent 回退 false(保留旧文件可读)。
+    public var launchAtLogin: Bool
+
     /// 自定义应用源目录
     public var customSourceDirectories: [String]
 
@@ -101,6 +105,7 @@ public struct AppConfiguration: Codable, Sendable {
         showIconLabels: Bool = true,
         wallpaperBlurRadius: Int = 30,
         searchBarWidth: Int = 320,
+        launchAtLogin: Bool = false,
         customSourceDirectories: [String] = [],
         hiddenAppIDs: [AppID] = [],
         customDisplayNames: [AppID: String] = [:],
@@ -115,6 +120,7 @@ public struct AppConfiguration: Codable, Sendable {
         self.showIconLabels = showIconLabels
         self.wallpaperBlurRadius = wallpaperBlurRadius
         self.searchBarWidth = searchBarWidth
+        self.launchAtLogin = launchAtLogin
         self.customSourceDirectories = customSourceDirectories
         self.hiddenAppIDs = hiddenAppIDs
         self.customDisplayNames = customDisplayNames
@@ -132,6 +138,7 @@ public struct AppConfiguration: Codable, Sendable {
         showIconLabels = try container.decodeIfPresent(Bool.self, forKey: .showIconLabels) ?? true
         wallpaperBlurRadius = try container.decodeIfPresent(Int.self, forKey: .wallpaperBlurRadius) ?? 30
         searchBarWidth = try container.decodeIfPresent(Int.self, forKey: .searchBarWidth) ?? 320
+        launchAtLogin = try container.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? false
         customSourceDirectories = try container.decodeIfPresent(
             [String].self, forKey: .customSourceDirectories
         ) ?? []
@@ -154,6 +161,7 @@ public struct AppConfiguration: Codable, Sendable {
         case showIconLabels
         case wallpaperBlurRadius
         case searchBarWidth
+        case launchAtLogin
         case customSourceDirectories
         case hiddenAppIDs
         case customDisplayNames

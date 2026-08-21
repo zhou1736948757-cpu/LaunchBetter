@@ -459,14 +459,19 @@ struct SettingsWindowControllerTests {
         let contentView = try #require(controller.window?.contentView)
         let buttons = descendants(of: NSButton.self, in: contentView)
         let identifiedCheckboxes = buttons.filter {
-            ["settings.showLabels", "settings.hotkeyEnabled"].contains($0.identifier?.rawValue)
+            ["settings.showLabels", "settings.hotkeyEnabled", "settings.launchAtLogin"]
+                .contains($0.identifier?.rawValue)
         }
         let untitledButtons = buttons.filter(\.title.isEmpty)
         let sliders = descendants(of: NSSlider.self, in: contentView)
 
-        #expect(identifiedCheckboxes.count == 2)
-        #expect(untitledButtons.count == 1)
-        #expect(untitledButtons.first?.identifier?.rawValue == "settings.showLabels")
+        #expect(identifiedCheckboxes.count == 3)
+        // X1 起无标题复选框 = launchAtLogin + showLabels(壁纸仍只有滑杆, 无复选框)。
+        #expect(untitledButtons.count == 2)
+        #expect(
+            Set(untitledButtons.map { $0.identifier?.rawValue ?? "" })
+                == ["settings.launchAtLogin", "settings.showLabels"]
+        )
         #expect(sliders.contains { $0.minValue == 0 && $0.maxValue == 60 })
         #expect(textValues(in: contentView).contains("Blurred Wallpaper"))
         #expect(textValues(in: contentView).contains("Blur Intensity"))
@@ -681,6 +686,12 @@ struct SettingsWindowControllerTests {
             in: contentView
         ))
         #expect(abs(minX(of: showLabels, in: contentView) - sharedX) < 0.5)
+        let launchAtLogin = try #require(descendant(
+            of: NSButton.self,
+            identifier: "settings.launchAtLogin",
+            in: contentView
+        ))
+        #expect(abs(minX(of: launchAtLogin, in: contentView) - sharedX) < 0.5)
         let hotkeyEnabled = try #require(descendant(
             of: NSButton.self,
             identifier: "settings.hotkeyEnabled",

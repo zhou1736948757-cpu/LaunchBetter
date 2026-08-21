@@ -12,6 +12,7 @@ public final class DependencyContainer {
     public let directoryMonitor: DirectoryMonitor
     public let activationCoordinator: ActivationCoordinator
     public let settingsController: SettingsWindowController
+    public let loginItem: SMAppServiceLoginItemController
     let threeFingerCoordinator: ThreeFingerDragCoordinator
 
     public init() {
@@ -171,11 +172,16 @@ public final class DependencyContainer {
         self.threeFingerCoordinator = threeFinger
 
         // 设置窗口
+        let loginItem = SMAppServiceLoginItemController()
+        // 启动时按配置应用一次登录项(开机自动启动); 失败非致命
+        loginItem.apply(store.config.launchAtLogin)
         let settingsController = SettingsWindowController(
             handler: store,
-            iconProvider: iconAdapter
+            iconProvider: iconAdapter,
+            loginItem: loginItem
         )
         self.settingsController = settingsController
+        self.loginItem = loginItem
         // 启动器右上角齿轮 → 打开设置: 作为启动器 child window(浮在上方, 启动器不退出)
         windowController.settingsController = settingsController
         windowController.onOpenSettings = { [weak windowController, weak settingsController] sourcePoint in

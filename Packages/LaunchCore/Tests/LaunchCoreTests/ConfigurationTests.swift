@@ -16,6 +16,7 @@ struct ConfigurationTests {
         #expect(config.customDisplayNames.isEmpty)
         #expect(config.language == .system)
         #expect(!config.hotkey.enabled)
+        #expect(!config.launchAtLogin)
         #expect(config.hotCorner.topLeft == .none)
     }
 
@@ -30,6 +31,7 @@ struct ConfigurationTests {
         config.hiddenAppIDs = [appID]
         config.customDisplayNames = [appID: "MySecret"]
         config.language = .simplifiedChinese
+        config.launchAtLogin = true
         config.hotkey = HotkeyConfig(enabled: true, keyCode: 37, modifiers: [.command, .shift])
         config.hotCorner = HotCornerConfig(
             topLeft: .showLauncher,
@@ -44,6 +46,7 @@ struct ConfigurationTests {
         #expect(decoded.hiddenAppIDs == [appID])
         #expect(decoded.customDisplayNames == [appID: "MySecret"])
         #expect(decoded.language == .simplifiedChinese)
+        #expect(decoded.launchAtLogin)
         #expect(decoded.hotkey.keyCode == 37)
         #expect(decoded.hotkey.modifiers == [.command, .shift])
         #expect(decoded.hotkey.enabled)
@@ -60,6 +63,16 @@ struct ConfigurationTests {
         #expect(decoded.iconSize == 80)
         #expect(decoded.showIconLabels)
         #expect(decoded.language == .system)
+        #expect(!decoded.launchAtLogin)
+    }
+
+    @Test("旧配置文件缺省 launchAtLogin 时回退 false")
+    func oldFileMissingLaunchAtLoginDefaultsFalse() throws {
+        let data = Data(#"{"schemaVersion":1,"wallpaperBlurRadius":42,"searchBarWidth":512}"#.utf8)
+        let decoded = try JSONDecoder().decode(AppConfiguration.self, from: data)
+        #expect(!decoded.launchAtLogin)
+        #expect(decoded.wallpaperBlurRadius == 42)
+        #expect(decoded.searchBarWidth == 512)
     }
 
     @Test("旧 searchBarWidth 持久值映射为百分比且保持宽高比例")
