@@ -14,9 +14,11 @@ enum LibraryBlankTraceLog {
 
     static var enabled = false
 
-    /// 记录一行 trace。enabled 关闭时零开销。
-    static func record(_ line: String) {
+    /// 记录一行 trace。enabled 关闭时零开销(@autoclosure: 实参完全不求值,
+    /// hitTest 等热路径调用点的反射/格式化字符串不再构建)。
+    static func record(_ line: @autoclosure () -> String) {
         guard enabled else { return }
+        let line = line()
         let timestamp = ProcessInfo.processInfo.systemUptime
         let formatted = String(format: "[%10.4f]", timestamp)
         if !FileManager.default.fileExists(atPath: path) {
@@ -874,10 +876,11 @@ final class PausableLibraryScrollView: NSScrollView {
     }
 
     /// PA4: 轴仲裁 + 路由状态一行(traceEnabled 时写共享 log)。
-    private func trace(_ detail: String) {
+    /// @autoclosure: 关闭时实参(OptionSet/枚举 description 插值)不求值。
+    private func trace(_ detail: @autoclosure () -> String) {
         guard traceEnabled else { return }
         PagingTraceLog.record(
-            "library \(detail) arbiter=\(String(describing: arbiter.state)) "
+            "library \(detail()) arbiter=\(String(describing: arbiter.state)) "
                 + "route=\(String(describing: arbiter.route)) "
                 + "pendingBegan=\(pendingBeganEvent != nil ? 1 : 0) "
                 + "momentumRoute=\(String(describing: momentumRoute)) "

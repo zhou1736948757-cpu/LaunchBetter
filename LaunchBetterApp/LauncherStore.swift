@@ -337,12 +337,27 @@ public final class LauncherStore: LauncherStoring, LayoutMutationCompleting, Set
         dataObservers.removeValue(forKey: token)
     }
 
+    /// PA1: displayModel 的 revision 键控缓存。
+    ///
+    /// 翻页热路径(settle 目标页落地/相邻页预热/refresh)会在短时间内多次请求
+    /// 同一模型, 而 DisplayModel 构建是 O(n) 全量遍历 + 多次数组分配, 直接
+    /// 落在 settle 首帧预算内。displayRevision 与 refresh 门是同一变更信号,
+    /// 未变时返回缓存值; 变化后按需重建(无需显式失效)。
+    private var cachedDisplayModel: DisplayModel?
+    private var cachedDisplayModelRevision: UInt64 = .max
+
     public func displayModel() -> DisplayModel {
-        DisplayModel(
+        if let cachedDisplayModel, cachedDisplayModelRevision == displayRevision {
+            return cachedDisplayModel
+        }
+        let model = DisplayModel(
             catalog: catalogSnapshot,
             layout: layout,
             config: config
         )
+        cachedDisplayModel = model
+        cachedDisplayModelRevision = displayRevision
+        return model
     }
 
     public func searchResults() -> [DisplayModel.DisplayItem]? {

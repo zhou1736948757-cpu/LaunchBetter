@@ -120,11 +120,24 @@ final class PagingInteractionController {
 
     /// 一次手势结束后, 把当前环形缓冲写成一行追加到 `/tmp/lb-paging-telemetry.log`:
     /// 帧数、avg/p95/max(ms)、phase。写后清空缓冲。
+    ///
+    /// 排序/格式化/文件 IO 全部延后到下一个 runloop hop: 本函数会在 settle
+    /// 收敛帧(最后一个 animator.onFrame)内被调用, 同步做这些事会污染被测的
+    /// 帧间隔本身。样本数组在此同步拷出(O(n) memcpy), 随后立即复位缓冲,
+    /// 保证紧接的新手势从空缓冲开始且不丢样本。
     private func flushTelemetry(phase: String) {
         guard telemetryEnabled, telemetryCount > 0 else { return }
         let samples = (0..<telemetryCount).map {
             telemetryIntervals[(telemetryStart + $0) % Self.telemetryCapacity]
         }
+        resetTelemetry()
+        DispatchQueue.main.async { [weak self] in
+            self?.writeTelemetryLine(samples: samples, phase: phase)
+        }
+    }
+
+    /// 遥测统计与落盘(仅在 runloop hop 后执行, 不在任何帧预算内)。
+    private func writeTelemetryLine(samples: [CFTimeInterval], phase: String) {
         let sorted = samples.sorted()
         let avgMs = samples.reduce(0, +) / Double(samples.count) * 1000
         let p95Index = min(sorted.count - 1, max(0, Int((Double(sorted.count) * 0.95).rounded(.up)) - 1))
@@ -134,7 +147,6 @@ final class PagingInteractionController {
             + "maxMs=\(String(format: "%.2f", (sorted.last ?? 0) * 1000)) "
             + "phase=\(phase)"
         appendTelemetryLine(line)
-        resetTelemetry()
     }
 
     /// O(1) 环形缓冲追加。
@@ -220,8 +232,13 @@ final class PagingInteractionController {
     // MARK: - 事件入口
 
     /// PA4 trace 辅助: 汇总当前状态一行(调用方负责拼事件信息)。
-    private func trace(_ detail: String) {
+    ///
+    /// @autoclosure: traceEnabled 关闭时实参(含 NSEvent phase 描述、clip bounds
+    /// 读取)完全不求值——scrollWheel 可达 120-240 事件/秒, 每事件的字符串
+    /// 构建是输入热路径上的稳定分配源。
+    private func trace(_ detail: @autoclosure () -> String) {
         guard traceEnabled else { return }
+        let detail = detail()
         let offset = onReadCurrentOffset()
         let pageCount = onReadPageCount()
         let pageWidth = onReadPageWidth()

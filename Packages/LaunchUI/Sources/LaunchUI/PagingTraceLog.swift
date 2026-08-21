@@ -12,9 +12,11 @@ enum PagingTraceLog {
 
     static var enabled = false
 
-    /// 记录一行 trace。enabled 关闭时零开销。
-    static func record(_ line: String) {
+    /// 记录一行 trace。enabled 关闭时零开销(@autoclosure: 实参完全不求值,
+    /// 调用点的插值/反射字符串不再在热路径上构建)。
+    static func record(_ line: @autoclosure () -> String) {
         guard enabled else { return }
+        let line = line()
         let timestamp = ProcessInfo.processInfo.systemUptime
         let formatted = String(format: "[%10.4f]", timestamp)
         if !FileManager.default.fileExists(atPath: path) {

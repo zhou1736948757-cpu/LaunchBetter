@@ -318,6 +318,7 @@ final class GridViewController: NSViewController {
             dots.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -12),
         ])
         pageDots = dots
+        pageDotViews = []
 
         // 分页滚动: 集合视图必须包在 NSScrollView 中(否则分页滚动是空操作,
         // 用户只能看到第一页 — 这是"看不到后两页"的根因)
@@ -499,6 +500,9 @@ final class GridViewController: NSViewController {
     /// 应用最新显示模型(或搜索结果)。
     /// 修订相同(目录/布局/配置/搜索均未变)时跳过 full snapshot(Stage 1 §30)。
     func refresh() {
+        // 隐藏期间图标缓存可能被 trim; 每次 show 后的首次预热必须真正执行,
+        // 不能被 (page, revision) 去重键挡掉(PA1)。
+        lastPrewarmKey = nil
         // Settings 结构参数变更 → 重建布局几何并重新分页(Stage 1 §14)
         let layout = gridLayout
         if store.gridColumns != layout.columns
@@ -838,9 +842,20 @@ final class GridViewController: NSViewController {
 
     /// 相邻页图标预热(v0.1.6 §36-37): 只维护 current±1 working set, 不全量预加载。
     /// Library 是独立 surface, 不预热普通图标。
+    ///
+    /// 去重: 同一 (page, displayRevision) 只执行一次。settle 目标页回调与
+    /// navigate/goToPage 会先后各调一次本函数(PA1 前 = 双份 O(n) displayModel
+    /// 构建 + ~70 个 Task 派生落在 settle 首帧前), revision 未变时第二次是纯重复。
+    private var lastPrewarmKey: (page: Int, revision: UInt64)?
+
     private func prewarmAdjacentPages(_ page: Int) {
         guard currentSurface != .appLibrary else { return }
         guard let iconProvider else { return }
+        let revision = store.displayRevision
+        if let lastPrewarmKey, lastPrewarmKey.page == page, lastPrewarmKey.revision == revision {
+            return
+        }
+        lastPrewarmKey = (page, revision)
         let display = store.displayModel()
         let scale = Int(view.window?.backingScaleFactor ?? 2)
         let pointSize = liveEffectivePointSize()
@@ -1258,13 +1273,24 @@ final class GridViewController: NSViewController {
 
     /// 更新页码指示点(搜索模式与 Library active 时隐藏)。
     /// 页点只对应普通 Layout page count(Library 不占 dot); 可点击, 复用 paging engine(Stage A8)。
+    ///
+    /// 增量路径: 可见性不变且数量匹配时只切换 active 态, 不重建视图树。
+    /// 本函数在 settle 目标页落地时同步执行(onSettleTargetPage → 第一帧 settle
+    /// 之前), 全量销毁重建会直接吃掉首帧预算(PA1)。
     private func updatePageDots() {
         guard let pageDots else { return }
+        let dotsVisible = !searchMode && currentSurface != .appLibrary && pageCount > 1
+        if dotsVisible, pageDotViews.count == pageCount {
+            for (index, dot) in pageDotViews.enumerated() {
+                (dot as? PageDotView)?.setActive(index == currentPage)
+            }
+            return
+        }
         for dot in pageDotViews {
             dot.removeFromSuperview()
         }
         pageDotViews = []
-        guard !searchMode, currentSurface != .appLibrary, pageCount > 1 else { return }
+        guard dotsVisible else { return }
         for index in 0..<pageCount {
             let dot = PageDotView()
             dot.translatesAutoresizingMaskIntoConstraints = false
