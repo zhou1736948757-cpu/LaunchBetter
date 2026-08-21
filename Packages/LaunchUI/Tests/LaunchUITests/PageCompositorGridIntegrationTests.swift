@@ -245,6 +245,16 @@ struct PageCompositorGridIntegrationTests {
         #expect(grid.pageCompositorLayerFramesForDiag.isEmpty, "无残留层")
         #expect(grid.currentPageValue == 2)
         #expect(grid.pageVisualCacheCountForDiag <= 3)
+        // 空窗修复(v0.5.1): 揭露时刻强制同步布局已执行, 目标页 cell 在
+        // 合成表面移除前就绪(快速甩页后不再出现只有壁纸的空白页)。
+        #expect(
+            grid.pageCompositorSyncLayoutCountForDiag >= 1,
+            "揭露前强制同步布局已执行"
+        )
+        #expect(
+            grid.visibleItemsCountForDiag > 0,
+            "揭露时目标页 cell 已物化"
+        )
     }
 
     @Test("打断: settle 中新手势不拆 compositor, 从 compositor.currentOffset 继续")

@@ -1188,6 +1188,14 @@ final class GridViewController: NSViewController {
             self.collectionView.enclosingScrollView?.contentView.scroll(
                 to: NSPoint(x: offset, y: 0)
             )
+            // P2 空窗修复(v0.5.1): 快速甩页时真实 clip 从未滚过目标页,
+            // 目标页 cell 从未物化。若揭露后等下一个布局周期才创建 cell,
+            // 用户会看到一段只有壁纸背景的空白。这里在合成表面仍遮盖时
+            // 强制同步布局, 让目标页 cell 在揭露前就绪。
+            if self.pageCompositor.isActive {
+                self.collectionView.layoutSubtreeIfNeeded()
+                self.pageCompositorSyncLayoutCountForDiag += 1
+            }
         }
         pageCompositor.metrics.enabled = pageVisualCompositorEnabled
         // E13: --pagingtelemetry 遥测开关接线。应用保持正常交互运行,
@@ -1482,6 +1490,10 @@ final class GridViewController: NSViewController {
     var pageCompositorPageIndicesForDiag: [Int] { pageCompositor.pageIndicesForDiag }
     var pageCompositorLiveOpacityForDiag: Float? { pageCompositor.liveLayerOpacityForDiag }
     var pageCompositorEventsForDiag: [PageCompositor.Event] { pageCompositor.eventsForDiag }
+    /// clip 同步时强制同步布局的次数(空窗修复回归观察)。
+    private(set) var pageCompositorSyncLayoutCountForDiag = 0
+    /// 目标页已物化 cell 数(测试: 揭露时刻 cell 应就绪)。
+    var visibleItemsCountForDiag: Int { collectionView.visibleItems().count }
     var pageVisualCacheCountForDiag: Int { pageVisualCache.visualCount }
     var pageVisualCacheTotalBytesForDiag: Int { pageVisualCache.totalBytes }
 
