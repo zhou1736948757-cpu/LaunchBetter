@@ -255,6 +255,53 @@ struct PageCompositorGridIntegrationTests {
             grid.visibleItemsCountForDiag > 0,
             "揭露时目标页 cell 已物化"
         )
+        // 平滑落地(v0.5.2): settling 帧内真实 clip 遮盖下渐进跟进已发生。
+        #expect(
+            grid.pageVisualRealClipAdvanceCountForDiag > 0,
+            "settle 期间真实 clip 渐进跟进已执行"
+        )
+    }
+
+    @Test("平滑落地: settling 帧内真实 clip 遮盖下向目标渐进推进")
+    func realClipAdvancesIncrementallyDuringSettle() async throws {
+        let store = CompositorIntegrationStore()
+        let grid = makeGrid(store)
+        let window = makeWindow(for: grid)
+        defer { window.orderOut(nil); window.contentView = nil }
+
+        grid.refresh()
+        grid.goToPage(1, animated: false)
+        let pageWidth = grid.geometry.pageWidth
+        await grid.waitForPageVisualPrepareForDiag()
+
+        grid.pagingProbeGesture(deltaXs: [-180, -240])
+        #expect(grid.pagingProbePhase() == "settling")
+
+        // 驱动少量 settle 帧(带真实间隔, 时间驱动弹簧才能推进): 真实 clip
+        // 应在遮盖下向弹簧当前位置渐进推进, 但仍落后于合成器偏移(渐进,
+        // 未一步到位)。注意合成器 currentOffset 在 settle 过程中从起点向
+        // 目标收敛, 这里对比的是"活值"。
+        for _ in 0..<10 {
+            _ = grid.pagingProbeDisplayFrame()
+            try? await Task.sleep(nanoseconds: 6_000_000)
+        }
+        let midClip = grid.clipOffsetXForDiag
+        let midCompositorOffset = grid.readPagingOffset()
+        #expect(
+            midClip > pageWidth,
+            "clip 已从起点推进(mid=\(midClip))"
+        )
+        #expect(
+            midClip < midCompositorOffset,
+            "clip 落后于合成器偏移(遮盖下渐进)"
+        )
+
+        // 收敛: 跟进至目标附近, 最终同步精确落点(一页手势 = 起点+pageWidth)。
+        let settled = await driveUntilIdle(grid)
+        #expect(settled)
+        #expect(!grid.pageCompositorActiveForDiag)
+        #expect(grid.clipOffsetXForDiag == pageWidth * 2, "最终精确同步到目标页")
+        #expect(grid.visibleItemsCountForDiag > 0)
     }
 
     @Test("打断: settle 中新手势不拆 compositor, 从 compositor.currentOffset 继续")

@@ -1224,16 +1224,37 @@ final class GridViewController: NSViewController {
         return collectionView.enclosingScrollView?.contentView.bounds.origin.x ?? 0
     }
 
-    /// 唯一 offset writer 路由: compositor active → 只移动合成层(不写 clip);
+    /// 唯一 offset writer 路由: compositor active → 只移动合成层(不写 clip),
+    /// settle 期间真实 clip 在遮盖下渐进跟进(见 `advanceRealClipBehindCover`);
     /// 否则写真实 clip。
     private func routeScroll(_ offset: CGFloat) {
         if pageCompositor.isActive {
             pageCompositor.applyOffset(offset)
+            if paging.phase == .settling {
+                advanceRealClipBehindCover()
+            }
             return
         }
         collectionView.enclosingScrollView?.contentView.scroll(
             to: NSPoint(x: offset, y: 0)
         )
+    }
+
+    /// P2 平滑落地(v0.5.2): settling 每帧让真实 clip 向 compositor 偏移跟进
+    /// 35% 缺口(遮盖下, 视觉不可见)。NSCollectionView 因此逐帧增量物化目标页
+    /// cell + 发起图标请求, 而不是把整页 ~40 个 cell 的创建压缩到揭露瞬间
+    /// (v0.5.1 的落地强制布局保留为兜底, 此时通常已无剩余工作)。
+    /// 引擎不受影响: readPagingOffset 在 compositor active 期间只读合成器偏移。
+    /// abort/打断路径由 teardown 的 clip 同步 + 强制布局兜底。
+    private func advanceRealClipBehindCover() {
+        let target = pageCompositor.currentOffset
+        let current = realClipOffset()
+        let gap = target - current
+        guard abs(gap) > 0.5 else { return }
+        collectionView.enclosingScrollView?.contentView.scroll(
+            to: NSPoint(x: current + gap * 0.35, y: 0)
+        )
+        pageVisualRealClipAdvanceCountForDiag += 1
     }
 
     /// 当前真实 clip 水平偏移(compositor 未激活时的权威值)。
@@ -1492,6 +1513,8 @@ final class GridViewController: NSViewController {
     var pageCompositorEventsForDiag: [PageCompositor.Event] { pageCompositor.eventsForDiag }
     /// clip 同步时强制同步布局的次数(空窗修复回归观察)。
     private(set) var pageCompositorSyncLayoutCountForDiag = 0
+    /// settling 期间真实 clip 遮盖下渐进跟进的帧数(平滑落地诊断)。
+    private(set) var pageVisualRealClipAdvanceCountForDiag = 0
     /// 目标页已物化 cell 数(测试: 揭露时刻 cell 应就绪)。
     var visibleItemsCountForDiag: Int { collectionView.visibleItems().count }
     var pageVisualCacheCountForDiag: Int { pageVisualCache.visualCount }

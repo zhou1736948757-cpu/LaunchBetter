@@ -39,8 +39,11 @@ struct PagingOffsetOwnershipTests {
         #expect(grid.contains("physicalIndex(forLayoutPage"))
         #expect(grid.contains("paging.jumpTo(page: 0)"))
         // P2: 唯一 offset writer 注入(routeScroll)+ compositor settle 完成的一次性
-        // clip 同步(onSyncClip)——两处写都只由 PagingInteractionController 驱动。
-        #expect(grid.components(separatedBy: "contentView.scroll(").count - 1 == 2)
+        // clip 同步(onSyncClip) + v0.5.2 settling 遮盖下渐进跟进
+        // (advanceRealClipBehindCover, 由 routeScroll 在引擎帧内调用)——
+        // 三处写都只由 PagingInteractionController 驱动。
+        #expect(grid.components(separatedBy: "contentView.scroll(").count - 1 == 3)
+        #expect(grid.contains("private func advanceRealClipBehindCover()"))
         #expect(grid.contains("private func routeScroll(_ offset: CGFloat)"))
         #expect(grid.contains("func readPagingOffset() -> CGFloat"))
     }
