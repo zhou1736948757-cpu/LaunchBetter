@@ -21,6 +21,19 @@
 
 ## Current Phase
 
+**v0.5.2 已发布(2026-08-21): 平滑落地(用户实测"略微有点卡"第二轮修复)。**
+
+- 根因: v0.5.1 的揭露前强制布局把整页 ~40 cell 创建压缩到落地瞬间 = 一次
+  主线程长停顿(首访页面明显)。
+- 修复 `bf77232`: settling 每帧 routeScroll 内 advanceRealClipBehindCover —
+  真实 clip 遮盖下向合成器偏移跟进 35% 缺口, NSCollectionView 逐帧增量物化
+  cell + 图标请求摊到整个手势; 落地强制布局保留为兜底(此时通常无剩余工作)。
+  引擎单一运动源不变(readPagingOffset 仍只读合成器); abort 由 teardown 兜底。
+- 不变式测试更新: PagingOffsetOwnership clip 写点 2→3(新增第三处引擎驱动写);
+  新增渐进推进集成测试(带真实间隔泵帧, 时间驱动弹簧才能推进)。
+- 发布: v0.5.2 (6) 已装 /Applications 运行中; tag+main 已推。
+- 测试(全绿): LaunchUI 372 / LaunchCore 181 / LaunchPlatform 142。
+
 **v0.5.1 已发布(2026-08-21): 合成器快速甩页空窗修复。**
 
 - 用户实测 bug: 快速甩到下一页后短暂只显示壁纸背景。根因: compositor 激活期间
