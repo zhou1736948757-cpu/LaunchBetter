@@ -511,6 +511,38 @@ struct PageCompositorGridIntegrationTests {
             #expect(grid.currentPageValue == targetPage, "第 \(round) 轮: 语义页一致")
         }
     }
+
+    // MARK: - live 降级空白页回归(v0.5.x 类 bug)
+
+    @Test("live 降级(不可合成)快速甩页 settle 后强制物化目标页 cell")
+    func liveFallbackSettleMaterializesTargetCells() async throws {
+        let store = CompositorIntegrationStore()
+        let grid = GridViewController(
+            store: store, iconProvider: CompositorIntegrationIconProvider()
+        )
+        // 保持默认密度门(20 项/页)而测试页仅 3 项 → compositor 永不激活,
+        // 分页走 live clip 路径。这正是用户复现“滑几次后只有壁纸背景”的路径。
+        grid.pageVisualCompositorEnabled = true
+        let window = makeWindow(for: grid)
+        defer { window.orderOut(nil); window.contentView = nil }
+
+        grid.refresh()
+        grid.goToPage(1, animated: false)
+        #expect(!grid.pageCompositorEligibleForDiag, "稀疏页不可合成(live 路径)")
+
+        grid.pagingProbeGesture(deltaXs: [-180, -240, -120])
+        let settled = await driveUntilIdle(grid)
+        #expect(settled)
+        #expect(grid.currentPageValue == 2)
+        #expect(
+            grid.liveSettleLayoutSyncCountForDiag >= 1,
+            "live settle 收尾执行强制同步布局"
+        )
+        #expect(
+            grid.visibleItemsCountForDiag > 0,
+            "落地时目标页 cell 已物化(不是空白壁纸)"
+        )
+    }
 }
 
 // MARK: - 测试替身

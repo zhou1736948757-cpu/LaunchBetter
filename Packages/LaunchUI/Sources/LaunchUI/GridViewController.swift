@@ -416,7 +416,11 @@ final class GridViewController: NSViewController {
         source.setEventHandler { [weak self] in
             // 主队列事件源回调: 与视图层主线程约定一致。
             MainActor.assumeIsolated {
-                self?.purgePageVisuals()
+                guard let self else { return }
+                self.purgePageVisuals()
+                // purge 后立即重排一次 idle 视觉准备: 缓存清空不能把后续手势
+                // 永久困在 live 降级路径(空白页 bug 的触发源之一)。
+                self.schedulePageVisualPrepare()
             }
         }
         source.resume()
@@ -1417,10 +1421,20 @@ final class GridViewController: NSViewController {
     }
 
     /// 运动停止(idle)→ 收掉 compositor: 同步真实 clip 到精确偏移 → reveal live。
-    /// 幂等: compositor 未激活时 no-op。
+    ///
+    /// live 降级路径(compositor 未激活)在快速甩页时同样可能出现“真实 clip 已到
+    /// 目标页、cell 尚未物化”的空白揭示帧。收尾时强制一次同步布局，让目标页
+    /// cell 在当前 runloop 物化(占位图标立即可见)，与 v0.5.1 的合成器空窗修复
+    /// 对齐：两条路径都必须在用户看到页面前完成 cell 物化。
+    /// 幂等: compositor 未激活时只做 live 收尾物化。
     private func finalizePageCompositor() {
-        guard pageCompositor.isActive else { return }
-        pageCompositor.finishSettle()
+        if pageCompositor.isActive {
+            pageCompositor.finishSettle()
+            return
+        }
+        guard currentSurface != .appLibrary, !searchMode, pageCount > 0 else { return }
+        collectionView.layoutSubtreeIfNeeded()
+        liveSettleLayoutSyncCountForDiag += 1
     }
 
     /// 显式 shutdown(search/folder/settings/hide/drag 开始/配置/scale/结构变更)。
@@ -1593,6 +1607,8 @@ final class GridViewController: NSViewController {
     var pageCompositorEventsForDiag: [PageCompositor.Event] { pageCompositor.eventsForDiag }
     /// clip 同步时强制同步布局的次数(空窗修复回归观察)。
     private(set) var pageCompositorSyncLayoutCountForDiag = 0
+    /// live 降级 settle 收尾强制同步布局的次数(空白页修复回归观察)。
+    private(set) var liveSettleLayoutSyncCountForDiag = 0
     /// settling 期间真实 clip 遮盖下渐进跟进的帧数(平滑落地诊断)。
     private(set) var pageVisualRealClipAdvanceCountForDiag = 0
     /// 目标页已物化 cell 数(测试: 揭露时刻 cell 应就绪)。
