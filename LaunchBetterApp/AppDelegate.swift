@@ -64,5 +64,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         container.windowController.hide()
+        // L3: 进程退出前冲刷 Library 元数据 pending 写(2s 上限, 退出路径阻塞可接受)。
+        container.flushMetadataForTermination()
     }
 }

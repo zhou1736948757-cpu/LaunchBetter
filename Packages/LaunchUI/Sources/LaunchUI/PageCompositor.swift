@@ -95,6 +95,9 @@ final class PageCompositorMetrics {
 /// - `finishSettle` / `abort` / `shutdown`: 同步 clip → reveal → 移除层。
 @MainActor
 final class PageCompositor {
+    /// 诊断事件环上限(M3): eventsForDiag 每帧 append 且永不清理,
+    /// 长时间会话会无限增长。超过该值丢弃最旧事件, 保留最近窗口。
+    private static let maxDiagEvents = 64
     /// 一页视觉的放置信息(baseFrame 为宿主层坐标, y-up; 水平随 offset 漂移)。
     struct Placement {
         let page: Int
@@ -128,6 +131,14 @@ final class PageCompositor {
     private var lastDirectionSign: CGFloat = 0
 
     private(set) var eventsForDiag: [Event] = []
+
+    /// 有界诊断事件记录: append 后超出上限移除最旧事件。
+    private func recordEvent(_ event: Event) {
+        eventsForDiag.append(event)
+        if eventsForDiag.count > Self.maxDiagEvents {
+            eventsForDiag.removeFirst(eventsForDiag.count - Self.maxDiagEvents)
+        }
+    }
 
     /// 激活(零跳变): 把 visual 摆到与 live 完全一致的位置, 然后隐藏 live 前景。
     /// - 前提: 调用方已确认相邻页视觉齐备、surface/状态允许。
@@ -173,7 +184,7 @@ final class PageCompositor {
             visualCount: placements.count,
             bytes: placements.reduce(0) { $0 + $1.visual.bytes }
         )
-        eventsForDiag.append(.activated(offset: startOffset))
+        recordEvent(.activated(offset: startOffset))
     }
 
     /// 每帧唯一 offset 写入: 只移动层, 不写 clip。
@@ -201,7 +212,7 @@ final class PageCompositor {
         lastAppliedOffset = offset
         currentOffset = offset
         metrics.recordFrameApply(durationUs: (CACurrentMediaTime() - start) * 1_000_000)
-        eventsForDiag.append(.applied(offset: offset))
+        recordEvent(.applied(offset: offset))
     }
 
     /// settle 完成: 禁隐式动画下把真实 clip 同步到精确目标 → reveal live →
@@ -224,7 +235,7 @@ final class PageCompositor {
     /// 显式 shutdown(幂等; 可重复调用, 无僵尸 layer)。
     func shutdown() {
         guard isActive else {
-            eventsForDiag.append(.shutdown(offset: currentOffset))
+            recordEvent(.shutdown(offset: currentOffset))
             return
         }
         let offset = currentOffset
@@ -245,7 +256,7 @@ final class PageCompositor {
         placements.removeAll()
         isActive = false
         metrics.recordActiveChange(active: false)
-        eventsForDiag.append(event)
+        recordEvent(event)
     }
 
     // MARK: - 诊断

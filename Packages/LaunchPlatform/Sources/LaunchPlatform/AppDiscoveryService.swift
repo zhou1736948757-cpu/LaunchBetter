@@ -23,15 +23,17 @@ public enum AppDiscoveryService {
 
     /// 枚举源目录中的全部应用并提取记录。
     /// 不存在的源目录跳过;忽略隐藏项与非 .app 目录。
-    public static func discover(sources: [URL]) -> [AppRecord] {
+    /// `knownRecords` 提供上次扫描的记录: 仅当 Info.plist 未变时复用其本地化名
+    /// (跳过 lproj/InfoPlist.strings 重读), 其余字段仍实时计算。
+    public static func discover(sources: [URL], knownRecords: [AppID: AppRecord] = [:]) -> [AppRecord] {
         var records: [AppRecord] = []
         for source in sources {
-            records.append(contentsOf: discover(in: source))
+            records.append(contentsOf: discover(in: source, knownRecords: knownRecords))
         }
         return records
     }
 
-    private static func discover(in source: URL) -> [AppRecord] {
+    private static func discover(in source: URL, knownRecords: [AppID: AppRecord] = [:]) -> [AppRecord] {
         guard let children = try? FileManager.default.contentsOfDirectory(
             at: source,
             includingPropertiesForKeys: nil,
@@ -41,12 +43,19 @@ public enum AppDiscoveryService {
         }
         return children.compactMap { child in
             guard child.pathExtension == "app" else { return nil }
-            return makeRecord(from: child)
+            let appID = PathCanonicalizer.canonicalAppID(from: child)
+            return makeRecord(from: child, previousRecord: knownRecords[appID])
         }
     }
 
     /// 从 .app bundle 目录构建 AppRecord;无法读取 Info.plist 时返回 nil。
-    public static func makeRecord(from url: URL) -> AppRecord? {
+    /// `previousRecord` 非 nil 且其 `infoPlistModificationDate` 与本次 Info.plist
+    /// 修改时间一致时, 直接复用其 `localizedNames`(跳过 lproj 遍历与
+    /// InfoPlist.strings 的 Data 读取)。其余字段(displayName/bundleIdentifier/
+    /// categoryIdentifier/iconContentVersion)仍从本次读取的 plist 实时计算。
+    /// 极少数"只改 lproj 不改 plist"的更新会等到下次 plist 变化才刷新, 可接受
+    /// (下一次 app 更新必然带 plist 变化)。
+    public static func makeRecord(from url: URL, previousRecord: AppRecord? = nil) -> AppRecord? {
         let infoURL = url
             .appendingPathComponent("Contents", isDirectory: true)
             .appendingPathComponent("Info.plist")
@@ -68,6 +77,18 @@ public enum AppDiscoveryService {
             ?? (plist["CFBundleName"] as? String)
             ?? url.deletingPathExtension().lastPathComponent
 
+        // 本地化名: 仅当 plist 未变时复用 previousRecord 的缓存, 否则重扫 lproj。
+        // F7: 必须解包 previousDate —— 两个 nil 相等是误复用(旧记录缺日期信号时
+        // 不得跳过重扫, 否则 localizations 更新永远不会被读取)。
+        let localizedDisplayNames: [String: String]
+        if let previousRecord,
+           let previousDate = previousRecord.infoPlistModificationDate,
+           previousDate == plistDate {
+            localizedDisplayNames = previousRecord.localizedNames
+        } else {
+            localizedDisplayNames = Self.localizedDisplayNames(from: url)
+        }
+
         // 图标内容版本: 真实内容信号(图标资源/Assets.car/Info.plist + 版本)
         let iconVersion = IconContentVersionFactory.make(
             appURL: url,
@@ -82,7 +103,7 @@ public enum AppDiscoveryService {
             displayName: displayName,
             infoPlistModificationDate: plistDate,
             iconContentVersion: iconVersion,
-            localizedNames: localizedDisplayNames(from: url),
+            localizedNames: localizedDisplayNames,
             categoryIdentifier: categoryIdentifier(from: plist)
         )
     }

@@ -34,7 +34,9 @@ public actor AppCatalogActor {
     private let store: CatalogSnapshotStore
     /// 当前源集合(规范化 + 去重)。设置中自定义源增删后经 `updateSources` 动态更新。
     private var sources: [URL]
-    private let discoverSources: @Sendable ([URL]) -> [AppRecord]
+    /// 发现闭包: 第二参数为上次快照的 knownRecords(按 AppID 索引),
+    /// 供 AppDiscoveryService 在 Info.plist 未变时复用本地化名(跳过 lproj 重读)。
+    private let discoverSources: @Sendable ([URL], [AppID: AppRecord]) -> [AppRecord]
     private let discoverAppRoot: @Sendable (URL) -> AppRecord?
 
     private var snapshot: CatalogSnapshot
@@ -53,8 +55,8 @@ public actor AppCatalogActor {
     public init(
         store: CatalogSnapshotStore,
         sources: [URL],
-        discoverSources: @escaping @Sendable ([URL]) -> [AppRecord] = {
-            AppDiscoveryService.discover(sources: $0)
+        discoverSources: @escaping @Sendable ([URL], [AppID: AppRecord]) -> [AppRecord] = { urls, known in
+            AppDiscoveryService.discover(sources: urls, knownRecords: known)
         },
         discoverAppRoot: @escaping @Sendable (URL) -> AppRecord? = {
             AppDiscoveryService.makeRecord(from: $0)
@@ -63,6 +65,25 @@ public actor AppCatalogActor {
         self.store = store
         self.sources = Self.normalizedSources(sources)
         self.discoverSources = discoverSources
+        self.discoverAppRoot = discoverAppRoot
+        self.snapshot = CatalogSnapshot(apps: [])
+    }
+
+    /// 兼容重载(FX-C F6): 旧调用方传一参 discoverSources。内部包装为二参形式,
+    /// 第二参数(knownRecords)恒空 —— 旧调用方不参与 plist-unchanged 复用优化。
+    /// 注意: 本重载的 discoverSources 不给默认值,避免与上方新签名 init 的默认参数歧义。
+    public init(
+        store: CatalogSnapshotStore,
+        sources: [URL],
+        discoverSources: @escaping @Sendable ([URL]) -> [AppRecord],
+        discoverAppRoot: @escaping @Sendable (URL) -> AppRecord? = {
+            AppDiscoveryService.makeRecord(from: $0)
+        }
+    ) {
+        let legacy = discoverSources
+        self.store = store
+        self.sources = Self.normalizedSources(sources)
+        self.discoverSources = { urls, _ in legacy(urls) }
         self.discoverAppRoot = discoverAppRoot
         self.snapshot = CatalogSnapshot(apps: [])
     }
@@ -133,10 +154,11 @@ public actor AppCatalogActor {
             let capturedSources = sources
             let capturedGeneration = generation
             let capturedSourceGeneration = sourceGeneration
+            let known = Dictionary(uniqueKeysWithValues: snapshot.apps.map { ($0.id, $0) })
             let discoverSources = discoverSources
             let discovered = Self.deduplicated(
                 await Task.detached(priority: .utility) {
-                    discoverSources(capturedSources)
+                    discoverSources(capturedSources, known)
                 }.value
             )
 
@@ -196,11 +218,12 @@ public actor AppCatalogActor {
             let added = newSources.filter { !current.contains($0) }
             let removed = current.filter { !newSources.contains($0) }
             let capturedGeneration = generation
+            let known = Dictionary(uniqueKeysWithValues: snapshot.apps.map { ($0.id, $0) })
             var discoveredAdded: [AppRecord] = []
             for scope in added {
                 let discoverSources = discoverSources
                 let found = await Task.detached(priority: .utility) {
-                    discoverSources([scope])
+                    discoverSources([scope], known)
                 }.value
                 discoveredAdded.append(contentsOf: found)
             }
@@ -325,9 +348,10 @@ public actor AppCatalogActor {
             let capturedSourceGeneration = sourceGeneration
             // scope 已不再是配置源(重配/移除): 禁止对非当前 source 执行 reconcile。
             guard isConfiguredSource(scopeURL.path) else { return CatalogDelta() }
+            let known = Dictionary(uniqueKeysWithValues: snapshot.apps.map { ($0.id, $0) })
             let discoverSources = discoverSources
             let discovered = await Task.detached(priority: .utility) {
-                discoverSources([scopeURL])
+                discoverSources([scopeURL], known)
             }.value
             // Preserve disjoint updates too: retry this scope against the latest
             // generation instead of merely dropping a result when any scan wins.

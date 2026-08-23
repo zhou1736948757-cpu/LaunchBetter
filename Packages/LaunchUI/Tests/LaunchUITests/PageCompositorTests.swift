@@ -233,4 +233,27 @@ struct PageCompositorTests {
         )
         #expect(clipWrites.isEmpty)
     }
+
+    @Test("eventsForDiag 有界: 超过 64 条丢弃最旧, last 仍正确(M3)")
+    func diagnosticEventsAreBounded() {
+        let compositor = PageCompositor()
+        let host = CALayer()
+        let live = CALayer()
+        compositor.activate(
+            placements: makePlacements(), pageWidth: 640, startOffset: 640,
+            hostLayer: host, liveLayer: live
+        )
+        for offset in 1...100 {
+            compositor.applyOffset(640 + CGFloat(offset))
+        }
+        // 1 条 activated + 100 条 applied = 101 条, 裁剪后恒为 64。
+        #expect(compositor.eventsForDiag.count == 64)
+        #expect(compositor.eventsForDiag.last == .applied(offset: 740))
+        // 最旧事件已被丢弃(首条不再是 activated, 而是被保留下来的 applied)。
+        if case .applied? = compositor.eventsForDiag.first {
+            #expect(Bool(true))
+        } else {
+            #expect(Bool(false), "最旧事件应已被裁剪")
+        }
+    }
 }

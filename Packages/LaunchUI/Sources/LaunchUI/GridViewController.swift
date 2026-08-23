@@ -168,12 +168,28 @@ final class GridViewController: NSViewController {
         return !CommandLine.arguments.contains("--disable-pagecompositor")
     }()
 
+    /// 内存压力监听(L10): 注释声称的 purge 此前无监听。macOS 的 AppKit 没有
+    /// 内存警告通知(iOS 才有 `UIApplicationDidReceiveMemoryWarningNotification`),
+    /// 真实机制是 `DispatchSourceMemoryPressure`——loadView 时注册(主队列),
+    /// 回调 purgePageVisuals(); deinit 取消源, 不泄漏。
+    private var memoryPressureSource: DispatchSourceMemoryPressure?
+
+    /// 诊断 seam: purgePageVisuals 触发次数(内存压力 / 显式 purge 共用)。
+    private(set) var memoryPressurePurgeCountForDiag = 0
+
+    /// 诊断 seam: 内存压力事件源是否已注册(测试生命周期断言)。
+    var memoryPressureObserverRegisteredForDiag: Bool { memoryPressureSource != nil }
+
     /// 密度门: 当前普通页项数低于该值不合成(稀疏页 live 合成成本低, 无收益;
     /// 密集页才是目标)。测试可调低覆盖默认 3 项/页的替身。
     var pageVisualMinItemsPerPage = 20
 
     /// prepare 代际: 每次调度递增, 过期 prepare 不得插入缓存(结构已变)。
     private var pageVisualPrepareGeneration = 0
+
+    /// 在途防抖 prepare 任务(L15): 每次调度先取消旧任务, 完成后置 nil。
+    /// 防止快速连续变化时多个 100ms 防抖任务堆积、旧任务在结构已变后仍执行。
+    private var pageVisualPrepareTask: Task<Void, Never>?
 
     /// 在途 working set 准备(串行化; 重复调用 await 同一任务)。
     private var pageVisualPrepareInFlight: Task<Void, Never>?
@@ -387,6 +403,51 @@ final class GridViewController: NSViewController {
         view = container
         // 必须在 view 赋值之后接线(linkView 访问 self.view 会触发 loadView 递归)
         setupPagingController()
+        registerMemoryPressureObserver()
+    }
+
+    /// L10: 注册内存压力监听(幂等)。事件源挂主队列, 回调直接 purge 页面视觉。
+    private func registerMemoryPressureObserver() {
+        guard memoryPressureSource == nil else { return }
+        let source = DispatchSource.makeMemoryPressureSource(
+            eventMask: [.warning, .critical],
+            queue: .main
+        )
+        source.setEventHandler { [weak self] in
+            // 主队列事件源回调: 与视图层主线程约定一致。
+            MainActor.assumeIsolated {
+                self?.purgePageVisuals()
+            }
+        }
+        source.resume()
+        memoryPressureSource = source
+    }
+
+    /// 测试 seam: 直接触发一次内存压力 purge(等价于事件源回调路径)。
+    func triggerMemoryPressurePurgeForDiag() {
+        purgePageVisuals()
+    }
+
+    /// F10: 取消并清理内存压力事件源(幂等)。
+    /// deinit(nonisolated) 与 MainActor 侧 teardown seam 共用这一静态路径,
+    /// 避免取消逻辑重复。`nonisolated`: 仅操作 dispatch source(线程安全),
+    /// 可在 deinit 中同步调用。
+    private nonisolated static func tearDownMemoryPressureSource(_ source: DispatchSourceMemoryPressure?) {
+        source?.setEventHandler {}
+        source?.cancel()
+    }
+
+    /// F10: 内存压力源 teardown seam(幂等): 清 handler → cancel → 置 nil。
+    /// 调用后 `memoryPressureObserverRegisteredForDiag == false`;
+    /// 重复调用安全。deinit 走同一路径。
+    func teardownMemoryPressureObserver() {
+        guard let source = memoryPressureSource else { return }
+        Self.tearDownMemoryPressureSource(source)
+        memoryPressureSource = nil
+    }
+
+    deinit {
+        Self.tearDownMemoryPressureSource(memoryPressureSource)
     }
 
     override func viewDidLayout() {
@@ -896,22 +957,28 @@ final class GridViewController: NSViewController {
     /// 相邻页图标预热(v0.1.6 §36-37): 只维护 current±1 working set, 不全量预加载。
     /// Library 是独立 surface, 不预热普通图标。
     ///
-    /// 去重: 同一 (page, displayRevision) 只执行一次。settle 目标页回调与
-    /// navigate/goToPage 会先后各调一次本函数(PA1 前 = 双份 O(n) displayModel
-    /// 构建 + ~70 个 Task 派生落在 settle 首帧前), revision 未变时第二次是纯重复。
-    private var lastPrewarmKey: (page: Int, revision: UInt64)?
+    /// 去重: 同一 (page, displayRevision, pointSize, scale) 只执行一次
+    /// (L15 扩展: 几何/图标尺寸或 backing scale 变化时允许重新预热)。
+    /// settle 目标页回调与 navigate/goToPage 会先后各调一次本函数
+    /// (PA1 前 = 双份 O(n) displayModel 构建 + ~70 个 Task 派生落在 settle
+    /// 首帧前), revision 未变时第二次是纯重复。
+    private var lastPrewarmKey: (page: Int, revision: UInt64, pointSize: Int, scale: Int)?
 
     private func prewarmAdjacentPages(_ page: Int) {
         guard currentSurface != .appLibrary else { return }
         guard let iconProvider else { return }
         let revision = store.displayRevision
-        if let lastPrewarmKey, lastPrewarmKey.page == page, lastPrewarmKey.revision == revision {
+        let pointSize = liveEffectivePointSize()
+        let scale = Int(view.window?.backingScaleFactor ?? 2)
+        if let lastPrewarmKey,
+           lastPrewarmKey.page == page,
+           lastPrewarmKey.revision == revision,
+           lastPrewarmKey.pointSize == pointSize,
+           lastPrewarmKey.scale == scale {
             return
         }
-        lastPrewarmKey = (page, revision)
+        lastPrewarmKey = (page, revision, pointSize, scale)
         let display = store.displayModel()
-        let scale = Int(view.window?.backingScaleFactor ?? 2)
-        let pointSize = liveEffectivePointSize()
         for p in [page - 1, page + 1] where p >= 0 && p < display.pages.count {
             let apps = display.pages[p].compactMap { item -> AppID? in
                 if case .app(let id) = item { return id }
@@ -1364,16 +1431,26 @@ final class GridViewController: NSViewController {
 
     /// purge 页面视觉缓存(hide / 内存压力 / scale 变更)。
     func purgePageVisuals() {
+        memoryPressurePurgeCountForDiag += 1
         pageVisualCache.removeAll()
     }
 
     /// 调度 idle 视觉准备(防抖 100ms; 仅 idle 时执行, 绝不阻塞手势起点)。
     /// 触发: settle 完成 / show 稳定 / 数据与几何变化 / 图标安静。
+    ///
+    /// L15: 每次调度取消在途防抖任务并替换, 快速连续变化只保留最后一个;
+    /// 任务完成后若仍是当前代际则置 nil(旧任务被取消/代际过期时不误清新任务)。
+    ///
+    /// F10 语义澄清: `pageVisualPrepareInFlight` 是 generation-guarded 的共享
+    /// 准备任务——`pageVisualPrepareTask?.cancel()` 只取消 100ms 防抖外壳,
+    /// 已经开始执行的 idle 视觉准备不会中途被掐断(避免浪费已启动的光栅化),
+    /// 这是有意的设计, 不是遗漏。
     func schedulePageVisualPrepare() {
         guard pageVisualCompositorEnabled, isViewLoaded, collectionView != nil else { return }
         pageVisualPrepareGeneration &+= 1
         let generation = pageVisualPrepareGeneration
-        Task { [weak self] in
+        pageVisualPrepareTask?.cancel()
+        pageVisualPrepareTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 100_000_000)
             guard let self,
                   generation == self.pageVisualPrepareGeneration,
@@ -1382,6 +1459,9 @@ final class GridViewController: NSViewController {
                   !self.searchMode,
                   self.currentSurface != .appLibrary else { return }
             await self.prepareWorkingSetVisuals()
+            if generation == self.pageVisualPrepareGeneration {
+                self.pageVisualPrepareTask = nil
+            }
         }
     }
 

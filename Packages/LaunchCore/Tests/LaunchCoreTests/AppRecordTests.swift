@@ -120,6 +120,61 @@ struct AppRecordTests {
         let record = try JSONDecoder().decode(AppRecord.self, from: Data(json.utf8))
         #expect(record.categoryIdentifier == nil)
     }
+
+    @Test("normalizedLocalizedNames 由 localizedNames 派生并缓存")
+    func normalizedNamesCache() throws {
+        let record = try makeRecord(localizedNames: [
+            "en": "Safari", "zh_CN": "浏览器", "zh-Hant": "瀏覽器",
+        ])
+        #expect(record.normalizedLocalizedNames == [
+            "en": "Safari", "zh-Hans": "浏览器", "zh-Hant": "瀏覽器",
+        ])
+        // localizedDisplayName 走缓存, 解析结果不变
+        #expect(
+            record.localizedDisplayName(language: .simplifiedChinese, systemPreferredLanguages: [])
+                == "浏览器"
+        )
+        #expect(
+            record.localizedDisplayName(language: .traditionalChinese, systemPreferredLanguages: [])
+                == "瀏覽器"
+        )
+    }
+
+    @Test("JSON 形状不变: 不编码 normalizedLocalizedNames; roundtrip 相等")
+    func jsonShapeUnchanged() throws {
+        let record = try makeRecord(localizedNames: [
+            "en": "Safari", "zh_CN": "浏览器",
+        ])
+        let data = try JSONEncoder().encode(record)
+        let object = try #require(
+            JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+        #expect(object["id"] as? String == "/Applications/Safari.app")
+        #expect(object["localizedNames"] as? [String: String] == ["en": "Safari", "zh_CN": "浏览器"])
+        #expect(object["normalizedLocalizedNames"] == nil)
+        // roundtrip: 解码后重新计算缓存, 记录完全相等
+        let decoded = try JSONDecoder().decode(AppRecord.self, from: data)
+        #expect(decoded == record)
+        #expect(decoded.normalizedLocalizedNames == record.normalizedLocalizedNames)
+    }
+
+    @Test("归一化确定性: 同内容不同插入顺序的记录相等")
+    func normalizedNamesDeterministicAcrossInsertionOrder() throws {
+        // 冲突归一键: zh_CN 与 zh-Hans 都归一到 zh-Hans 族, "保留首个" 的赢家
+        // 必须由 key 排序决定, 与字典插入/迭代顺序无关。
+        let a = try makeRecord(localizedNames: [
+            "zh_CN": "浏览器", "zh-Hans": "浏览器Pro", "en": "Safari",
+        ])
+        let b = try makeRecord(localizedNames: [
+            "en": "Safari", "zh-Hans": "浏览器Pro", "zh_CN": "浏览器",
+        ])
+        #expect(a.normalizedLocalizedNames == b.normalizedLocalizedNames)
+        #expect(a.normalizedLocalizedNames["zh-Hans"] == "浏览器Pro")
+        #expect(a.normalizedLocalizedNames["en"] == "Safari")
+        #expect(a == b)
+        // Hashable 同样一致
+        #expect(Set([a, b]).count == 1)
+    }
 }
 
 @Suite("AppRecord 本地化显示名解析")

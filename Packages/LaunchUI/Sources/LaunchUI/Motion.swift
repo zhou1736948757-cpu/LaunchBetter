@@ -130,6 +130,9 @@ enum MotionEnvironment {
         policy(for: liveSnapshot())
     }
 
+    /// Reduce Motion 读取(L5): 每次访问 3 次 NSWorkspace 查询。reload/过渡级
+    /// 入口应读取一次快照并在逐 cell 配置中复用(如 AppLibraryViewController 的
+    /// reloadReduceMotion 缓存); 不要在 per-cell / display frame 热路径重复调用。
     @MainActor
     static var reduceMotion: Bool {
         liveSnapshot().reduceMotion

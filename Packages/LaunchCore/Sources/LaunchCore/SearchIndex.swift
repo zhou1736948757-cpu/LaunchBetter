@@ -15,18 +15,25 @@ public struct SearchIndex: Sendable {
     }
 
     /// 为应用建立索引。customName 非 nil 时作为额外字段。
+    /// 字段在写入时预折叠(大小写 + 变音符), 查询时无需每键击重复 Unicode 折叠。
     public mutating func index(
         _ app: AppID,
         displayName: String,
         bundleIdentifier: String?,
         customName: String?
     ) {
-        var fields = [displayName]
+        var fields = [displayName.folding(
+            options: [.caseInsensitive, .diacriticInsensitive], locale: nil
+        )]
         if let bundleIdentifier, !bundleIdentifier.isEmpty {
-            fields.append(bundleIdentifier)
+            fields.append(bundleIdentifier.folding(
+                options: [.caseInsensitive, .diacriticInsensitive], locale: nil
+            ))
         }
         if let customName, !customName.isEmpty {
-            fields.append(customName)
+            fields.append(customName.folding(
+                options: [.caseInsensitive, .diacriticInsensitive], locale: nil
+            ))
         }
         entries[app] = fields
     }
@@ -42,16 +49,19 @@ public struct SearchIndex: Sendable {
     }
 
     /// 查询。空查询返回全部已索引 AppID(排序)。
+    /// 查询词与索引字段同样折叠一次后做普通 contains, 匹配语义与
+    /// `range(of:options:[.caseInsensitive,.diacriticInsensitive])` 等价。
     public func query(_ text: String) -> [AppID] {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             return entries.keys.sorted { $0.rawValue < $1.rawValue }
         }
+        let folded = trimmed.folding(
+            options: [.caseInsensitive, .diacriticInsensitive], locale: nil
+        )
         return entries
             .filter { _, fields in
-                fields.contains { field in
-                    field.range(of: trimmed, options: [.caseInsensitive, .diacriticInsensitive]) != nil
-                }
+                fields.contains { field in field.contains(folded) }
             }
             .keys
             .sorted { $0.rawValue < $1.rawValue }

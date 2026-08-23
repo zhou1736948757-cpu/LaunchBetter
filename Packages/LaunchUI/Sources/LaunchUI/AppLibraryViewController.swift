@@ -65,6 +65,24 @@ public final class AppLibraryViewController: NSViewController {
     private let gridCollectionView = BlankClickLibraryCollectionView()
     private var dataSource: NSCollectionViewDiffableDataSource<Int, AppLibraryCardID>?
 
+    /// Reduce Motion 快照(L5): 每个 cell configure 都读
+    /// `MotionEnvironment.reduceMotion`(内部 3 次 NSWorkspace 查询)太贵。
+    /// 在 reload 级入口(reloadCards 等)读取一次缓存, cell 配置复用该值;
+    /// 系统设置在下次 reload 时生效。
+    private var reloadReduceMotion = false
+
+    /// F9: 无障碍显示选项变化观察者 token(Reduce Motion 系统变更即时生效)。
+    /// loadView 注册, deinit 移除, 不重复注册。
+    ///
+    /// 用 `@unchecked Sendable` 盒子持有 NSObjectProtocol: deinit 是
+    /// nonisolated 上下文, 直接持有非 Sendable token 会在 deinit 读取时触发
+    /// Sendable 诊断; 盒子在写入(loadView 主线程)与读取(最后一次引用释放)
+    /// 两个单点之间传递, 无实际竞态。
+    private var motionDisplayOptionsObserver: DisplayOptionsObserverToken?
+
+    /// 测试 seam(F9): 当前缓存的 Reduce Motion 快照值。
+    var reloadReduceMotionForDiag: Bool { reloadReduceMotion }
+
     /// view 加载前的 inset 请求缓存: `setContentInsets` 可能在 loadView 前
     /// 被调用(host `makeController` 早于 `controller.view` 访问), 此时 layout
     /// 尚不存在, 暂存并在 `loadView` 创建布局后应用。
@@ -268,7 +286,7 @@ public final class AppLibraryViewController: NSViewController {
                 mini: mini,
                 provider: self.iconProvider,
                 backingScale: self.currentBackingScale,
-                reducedMotion: MotionEnvironment.reduceMotion
+                reducedMotion: self.reloadReduceMotion
             )
             return cell
         }
@@ -278,6 +296,43 @@ public final class AppLibraryViewController: NSViewController {
         view = scrollView
 
         reloadCards()
+        registerMotionDisplayOptionsObserver()
+    }
+
+    /// F9: 注册无障碍显示选项变化观察者(幂等; 主队列回调, 与视图层一致)。
+    /// Reduce Motion 系统变更即时刷新快照并 reload 卡片, 已显示/新复用
+    /// cell 不再等到下一次 reload 才生效。
+    private func registerMotionDisplayOptionsObserver() {
+        guard motionDisplayOptionsObserver == nil else { return }
+        let token = NotificationCenter.default.addObserver(
+            forName: MotionEnvironment.displayOptionsDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.handleDisplayOptionsChange()
+            }
+        }
+        motionDisplayOptionsObserver = DisplayOptionsObserverToken(token)
+    }
+
+    private func handleDisplayOptionsChange() {
+        reloadReduceMotion = MotionEnvironment.reduceMotion
+        if isViewLoaded, dataSource != nil {
+            reloadCards()
+        }
+    }
+
+    /// 测试 seam(F9): 直接走通知回调路径刷新 Reduce Motion 快照
+    /// (合成通知的显示选项状态不可靠, 与项目其它探针同构)。
+    func refreshMotionSnapshotForTesting() {
+        handleDisplayOptionsChange()
+    }
+
+    deinit {
+        if let box = motionDisplayOptionsObserver {
+            NotificationCenter.default.removeObserver(box.token)
+        }
     }
 
     public override func viewDidLayout() {
@@ -302,6 +357,9 @@ public final class AppLibraryViewController: NSViewController {
 
     private func reloadCards() {
         guard let dataSource else { return }
+        // L5: reload 级入口读取一次系统动效快照, cell 配置复用缓存值,
+        // 避免每个 cell configure 重复 NSWorkspace 查询。
+        reloadReduceMotion = MotionEnvironment.reduceMotion
         var snapshot = NSDiffableDataSourceSnapshot<Int, AppLibraryCardID>()
         snapshot.appendSections([0])
         snapshot.appendItems(model.cards.map(\.id))
@@ -1133,5 +1191,19 @@ final class PausableLibraryScrollView: NSScrollView {
     /// PA4 诊断 seam: 直接沿 momentum 路由处理(合成事件 phase 往返不可靠)。
     func routeMomentumForProbe(_ event: NSEvent) {
         routeMomentum(event)
+    }
+}
+
+/// F9: 观察者 token 的 Sendable 盒子。
+///
+/// NSObjectProtocol 不满足 Sendable; deinit(nonisolated) 需要读取 token 以
+/// removeObserver。写入只在 loadView 主线程发生一次, 读取只在最后一次引用
+/// 释放的 deinit, 两者之间无并发——`@unchecked Sendable` 传达这一不变量,
+/// 避免 deinit 跨隔离读取触发 Sendable 诊断。
+private final class DisplayOptionsObserverToken: @unchecked Sendable {
+    let token: NSObjectProtocol
+
+    init(_ token: NSObjectProtocol) {
+        self.token = token
     }
 }

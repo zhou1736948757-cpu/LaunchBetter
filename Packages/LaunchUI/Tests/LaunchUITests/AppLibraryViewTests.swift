@@ -1523,6 +1523,36 @@ struct AppLibraryViewTests {
         try? await Task.sleep(for: .milliseconds(20))
         for _ in 0..<5 { await Task.yield() }
     }
+
+    // MARK: - F9 Reduce Motion 即时刷新
+
+    @Test("Reduce Motion snapshot refreshes immediately via display-options path (F9)")
+    func reduceMotionSnapshotRefreshesImmediately() {
+        let previous = L10n.currentLanguage
+        defer { L10n.configure(language: previous) }
+        L10n.configure(language: .english)
+
+        let model = makeModel()
+        let controller = AppLibraryViewController(
+            model: model,
+            displayName: { $0.rawValue },
+            iconProvider: nil,
+            onLaunch: { _ in }
+        )
+        let window = host(controller)
+        defer { window.orderOut(nil); window.contentView = nil }
+
+        // loadView 完成后快照已初始化, 且与实时系统值一致。
+        #expect(controller.reloadReduceMotionForDiag == MotionEnvironment.reduceMotion)
+
+        // 通知回调路径(测试 seam)即时刷新快照, 且带动 reload 不破坏卡片身份。
+        let before = cardCells(controller).map(\.cardID)
+        controller.refreshMotionSnapshotForTesting()
+        #expect(controller.reloadReduceMotionForDiag == MotionEnvironment.reduceMotion)
+        controller.refreshMotionSnapshotForTesting()
+        let after = cardCells(controller).map(\.cardID)
+        #expect(after == before, "即时刷新路径不得扰动卡片身份/布局")
+    }
 }
 
 /// 可控图标 provider: 记录请求; 可选挂起每个 AppID 的请求, 由测试 release。

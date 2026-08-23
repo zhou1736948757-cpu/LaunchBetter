@@ -127,9 +127,9 @@ public final class ActivationCoordinator {
                 self?.windowController.toggle()
             }
         }
-        // 默认 Cmd+L(Carbon keyCode 37, cmd 修饰符 256); 设置变更经 reconfigure
-        let registered = hotkey.start(keyCode: 37, modifiers: 256)
-        print("ACTIVATION hotkey=Cmd+L registered=\(registered)")
+        // L14: 不再先注册默认 Cmd+L 热键再 stop/start——热键注册统一由
+        // DependencyContainer 在 start() 后立即 reconfigure(with: config) 完成,
+        // 启动时行为与配置一致(去重注册、无默认覆盖)。
 
         // 旧版应用冲突提示(§115: 两者同时监听触控板需退出旧版)
         checkLegacyConflict()

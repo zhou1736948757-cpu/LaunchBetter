@@ -319,7 +319,7 @@ struct SourceGenerationSafetyTests {
         let actor = AppCatalogActor(
             store: CatalogSnapshotStore(directory: dir),
             sources: [sourceA, sourceB],
-            discoverSources: probe.discover
+            discoverSources: { urls in probe.discover(urls) }
         )
         _ = await actor.start()
 

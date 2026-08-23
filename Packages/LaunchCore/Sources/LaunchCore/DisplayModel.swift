@@ -22,6 +22,12 @@ public struct DisplayModel: Sendable, Equatable {
     /// 分页显示结构。
     public let pages: [[DisplayItem]]
 
+    /// 扁平显示槽位(存储化; 派生自 pages, 避免拖拽/预览每次重复 flatMap)。
+    public let flatSlots: [DisplayItem]
+
+    /// 可见应用 ID(扁平、显示顺序; 存储化)。
+    public let visibleAppIDs: [AppID]
+
     /// 每页槽位容量(列 × 行),用于拖拽索引数学。
     public let pageCapacity: Int
 
@@ -65,6 +71,13 @@ public struct DisplayModel: Sendable, Equatable {
                 }
             }
         }
+        self.flatSlots = derived
+        self.visibleAppIDs = derived.compactMap { slot in
+            if case .app(let id) = slot {
+                return id
+            }
+            return nil
+        }
         pages = Self.chunk(derived, capacity: pageCapacity)
         self.folderChildrenPayload = folderPayloads
     }
@@ -83,6 +96,14 @@ public struct DisplayModel: Sendable, Equatable {
         self.hiddenAppIDs = hiddenAppIDs
         self.missingAppIDs = missingAppIDs
         self.folderChildrenPayload = folderChildrenPayload
+        let flat = pages.flatMap { $0 }
+        self.flatSlots = flat
+        self.visibleAppIDs = flat.compactMap { slot in
+            if case .app(let id) = slot {
+                return id
+            }
+            return nil
+        }
     }
 
     private static func chunk(
@@ -95,21 +116,6 @@ public struct DisplayModel: Sendable, Equatable {
             pages.append(Array(slots[start..<min(start + capacity, slots.count)]))
         }
         return pages
-    }
-
-    /// 扁平显示槽位。
-    public var flatSlots: [DisplayItem] {
-        pages.flatMap { $0 }
-    }
-
-    /// 可见应用 ID(扁平、显示顺序)。
-    public var visibleAppIDs: [AppID] {
-        flatSlots.compactMap { slot in
-            if case .app(let id) = slot {
-                return id
-            }
-            return nil
-        }
     }
 
     /// 文件夹的可见子项 payload;文件夹不在显示中时返回 nil。

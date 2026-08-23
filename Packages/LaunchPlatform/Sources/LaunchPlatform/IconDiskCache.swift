@@ -11,8 +11,13 @@ import UniformTypeIdentifiers
 /// Icons/<hash(AppID)>/<pointSize>-<scale>-<contentVersionHash>.png
 /// ```
 /// 禁止仅以 hash(AppID) 命名。缓存可再生,损坏文件删除重建(§97)。
-public final class IconDiskCache {
+/// @unchecked Sendable: 仅持有不可变 rootURL,方法为无状态文件操作;供
+/// IconRepository 后台 prune 任务(@Sendable 捕获)使用(与 GlobalHotkey 等同模式)。
+public final class IconDiskCache: @unchecked Sendable {
     public let rootURL: URL
+
+    /// 默认 prune 保留时长: 30 天内的文件视为新鲜,不清理(L4)。
+    public static let defaultRetentionInterval: TimeInterval = 30 * 24 * 3600
 
     public init(rootURL: URL) {
         self.rootURL = rootURL
@@ -49,6 +54,43 @@ public final class IconDiskCache {
             throw Error.encodeFailed
         }
         try data.write(to: url, options: .atomic)
+    }
+
+    /// 清理过期缓存文件(L4): 枚举 rootURL 下全部常规文件(含子目录,跳过 .DS_Store),
+    /// 删除 contentModificationDate 早于 cutoff 的文件并计数;清理后空的目录可选移除;
+    /// 任何单个失败忽略(缓存可再生)。
+    public func pruneStaleFiles(olderThan cutoff: Date) -> Int {
+        var removed = 0
+        guard let enumerator = FileManager.default.enumerator(
+            at: rootURL,
+            includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey, .contentModificationDateKey],
+            options: []
+        ) else {
+            return 0
+        }
+        var directories: [URL] = []
+        while let url = enumerator.nextObject() as? URL {
+            let values = try? url.resourceValues(
+                forKeys: [.isRegularFileKey, .isDirectoryKey, .contentModificationDateKey]
+            )
+            if values?.isRegularFile == true {
+                guard url.lastPathComponent != ".DS_Store" else { continue }
+                guard let modified = values?.contentModificationDate, modified < cutoff else { continue }
+                if (try? FileManager.default.removeItem(at: url)) != nil {
+                    removed += 1
+                }
+            } else if values?.isDirectory == true {
+                directories.append(url)
+            }
+        }
+        // 清理后空的目录可选移除(自底向上,避免子目录残留)
+        for dir in directories.reversed() {
+            if let contents = try? FileManager.default.contentsOfDirectory(atPath: dir.path),
+               contents.isEmpty {
+                try? FileManager.default.removeItem(at: dir)
+            }
+        }
+        return removed
     }
 
     public enum Error: Swift.Error {

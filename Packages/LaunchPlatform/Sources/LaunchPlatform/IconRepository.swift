@@ -72,6 +72,16 @@ public actor IconRepository {
         self.provider = provider
         self.diskWriter = diskWriter ?? DiskCacheWriter(rootURL: diskCache.rootURL)
 
+        // L4/F5: 后台一次性 prune 过期磁盘缓存(不阻塞 init)。prune 只删 30 天前的
+        // 旧文件,与 DiskCacheWriter 的新写入按 age 隔离;任务纳入 shutdown 生命周期。
+        // 必须在首个 self 捕获(下方 setEventHandler [weak self])之前初始化 pruneTask。
+        let prune = Task.detached(priority: .utility) {
+            _ = diskCache.pruneStaleFiles(
+                olderThan: Date().addingTimeInterval(-IconDiskCache.defaultRetentionInterval)
+            )
+        }
+        self.pruneTask = prune
+
         let source = DispatchSource.makeMemoryPressureSource(
             eventMask: [.warning, .critical], queue: .global(qos: .utility)
         )
@@ -94,10 +104,21 @@ public actor IconRepository {
         memoryPressureSource.cancel()
         inFlight.removeAll()
         memoryCache.removeAll()
+        // F5: 等待后台 prune 完成后再 flush。prune 只删 30 天前旧文件,
+        // 与 writer 的新写入按 age 隔离,不会互相影响。
+        if let pruneTask {
+            await pruneTask.value
+        }
         await diskWriter.flush()
     }
 
     private var shutdownCalled = false
+
+    /// 启动时后台 prune 任务(F5): shutdown 等待其完成。
+    /// 用 let: actor 的 nonisolated init 中只能初始化性地写入属性,
+    /// var 一旦被默认值初始化就不能再从 init 写入(编译错误)。
+    /// 任务完成后自行释放,不置 nil。
+    private let pruneTask: Task<Void, Never>?
 
     /// 等待所有已提交的磁盘写完成(干净 shutdown / 测试同步)。幂等。
     public func waitForPendingDiskWrites() async {
@@ -248,7 +269,8 @@ public actor IconRepository {
         if critical {
             trimMemory(keeping: [], level: .critical)
         } else if warning {
-            trimMemory(keeping: [], level: .warning)
+            // L1: warning 分级——保留最近使用 32 个图标,避免压力恢复后整屏重解码
+            memoryCache.trim(recentCount: 32)
         }
     }
 }

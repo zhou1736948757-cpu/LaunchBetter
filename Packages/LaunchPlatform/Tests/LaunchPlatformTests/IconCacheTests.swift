@@ -290,6 +290,36 @@ struct IconDiskCacheTests {
         #expect(cache.load(key: key) == nil)
         #expect(!FileManager.default.fileExists(atPath: url.path), "损坏文件应被删除")
     }
+
+    @Test("prune: 删早于 cutoff 的常规文件(含子目录), 保留新文件, 跳过 .DS_Store, 计数正确")
+    func pruneStaleFiles() throws {
+        let root = try tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cache = IconDiskCache(rootURL: root)
+
+        // 布局: root/sub/<hash>/old.png(60 天前) + root/fresh.png(今天) + root/.DS_Store(60 天前)
+        let sub = root.appendingPathComponent("sub/hash123", isDirectory: true)
+        try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: true)
+        let old = sub.appendingPathComponent("96-2-abc.png")
+        let fresh = root.appendingPathComponent("fresh.png")
+        let dsStore = root.appendingPathComponent(".DS_Store")
+        try Data("old".utf8).write(to: old)
+        try Data("fresh".utf8).write(to: fresh)
+        try Data("ds".utf8).write(to: dsStore)
+
+        let oldDate = Date().addingTimeInterval(-60 * 24 * 3600) // 60 天前
+        try FileManager.default.setAttributes([.modificationDate: oldDate], ofItemAtPath: old.path)
+        try FileManager.default.setAttributes(
+            [.modificationDate: oldDate], ofItemAtPath: dsStore.path
+        )
+
+        let removed = cache.pruneStaleFiles(olderThan: Date().addingTimeInterval(-30 * 24 * 3600))
+
+        #expect(removed == 1, "只删 old.png(.DS_Store 跳过)")
+        #expect(!FileManager.default.fileExists(atPath: old.path), "旧文件应被删除")
+        #expect(FileManager.default.fileExists(atPath: fresh.path), "新文件应保留")
+        #expect(FileManager.default.fileExists(atPath: dsStore.path), ".DS_Store 应跳过")
+    }
 }
 
 @Suite("DiskCacheWriter 异步写")

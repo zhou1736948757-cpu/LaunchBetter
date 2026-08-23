@@ -872,6 +872,18 @@ struct LayoutEditorTests {
         ) == nil)
     }
 
+    @Test("renameFolder: 文件夹不存在 → nil")
+    func renameFolderMissing() {
+        let ids = apps(2)
+        let ghost = folderID("Ghost")
+        let layout = layout(pages: [ids.map(LayoutItem.app)])
+        #expect(LayoutEditor.apply(
+            .renameFolder(ghost, newName: "开发工具"),
+            to: layout,
+            display: makeDisplay(layout: layout)
+        ) == nil)
+    }
+
     @Test("全量确定性: 相同输入相同输出")
     func deterministic() throws {
         let ids = apps(16)

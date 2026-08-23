@@ -3,10 +3,32 @@ import CoreText
 import LaunchCore
 
 /// App Library 卡片的稳定占位图标(色块 + 首字母, 同一 AppID 恒同色同字母)。
-/// 与主网格/设置行的占位风格一致, 供卡片与 detail 行共用。
+/// 与主网格/设置行的占位风格一致, 供卡片 / 设置隐藏行 / detail 行共用。
+///
+/// M2: 渲染结果经 `AppIconPlaceholderCache` 按 (appID, name, pointSize, scale)
+/// 共享; 像素输出与无缓存时完全一致(色板/字号/布局照旧), 只是 miss 渲染一次、
+/// 后续同键直接复用。
 @MainActor
 enum AppLibraryIconPlaceholder {
+    private static let cache = AppIconPlaceholderCache()
+
     static func image(appID: AppID, name: String, pointSize: Int, scale: Int) -> NSImage {
+        let key = cacheKey(appID: appID, name: name, pointSize: pointSize, scale: scale)
+        if let cached = cache.image(forKey: key) {
+            return cached
+        }
+        let rendered = render(appID: appID, name: name, pointSize: pointSize, scale: scale)
+        cache.setImage(rendered, forKey: key)
+        return rendered
+    }
+
+    /// 缓存键: appID 与 name 必须参与(自定义名/语言变化要能刷新首字母)。
+    /// 长度前缀消除任意字符串拼接歧义(分隔符可能出现在 app 名内)。
+    private static func cacheKey(appID: AppID, name: String, pointSize: Int, scale: Int) -> String {
+        "\(appID.rawValue.count)#\(appID.rawValue)|\(name.count)#\(name)|\(pointSize)#\(scale)"
+    }
+
+    private static func render(appID: AppID, name: String, pointSize: Int, scale: Int) -> NSImage {
         let pixels = pointSize * max(1, scale)
         guard pixels > 0,
               let context = CGContext(

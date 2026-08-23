@@ -239,29 +239,66 @@ public enum L10n {
         .automaticClassification: "Automatic Classification",
     ]
 
-    nonisolated(unsafe) private static var language: AppLanguage = .system
+    /// L10n 全部可变状态的锁隔离容器(F8)。
+    ///
+    /// L10n 的公开 API 保持 nonisolated(t()/configure/currentLanguage 任意线程
+    /// 可调); 所有可变状态收进此类, 由 NSLock 保护, 消除原先
+    /// `nonisolated(unsafe)` 可变静态的后台线程竞态。观察者 token 也在锁内
+    /// 双检, 保证只注册一次。回调只清缓存(无 UI / 无 MainActor 依赖),
+    /// 锁内操作, 不需要 assumeIsolated。
+    private static let state = L10nState()
 
     /// 应用层在配置加载后设置。
     public static func configure(language: AppLanguage) {
-        self.language = language
+        state.setLanguage(language)
+        state.clearSystemLanguageCache()
+        ensureLocaleObserverRegistered()
     }
 
     /// 当前语言。
-    public static var currentLanguage: AppLanguage { language }
+    public static var currentLanguage: AppLanguage { state.language() }
+
+    /// 惰性注册系统语言变更观察者(F8: 锁内双检 token, 只注册一次)。
+    /// 系统语言变化 → 失效缓存, 下一次 `t(_:)` 重新解析。
+    private static func ensureLocaleObserverRegistered() {
+        state.ensureObserver {
+            NotificationCenter.default.addObserver(
+                forName: NSLocale.currentLocaleDidChangeNotification,
+                object: nil,
+                queue: .main
+            ) { _ in
+                L10n.state.clearSystemLanguageCache()
+            }
+        }
+    }
+
+    /// 测试 seam(F11): 手动失效系统语言推断缓存。
+    /// 系统首选语言无法在测试中变更, 断言缓存被清空后 `.system` 重新解析
+    /// 即可(结果应与重解析前一致)。
+    static func invalidateSystemLanguageCacheForTesting() {
+        state.clearSystemLanguageCache()
+    }
+
+    /// 系统首选语言 → AppLanguage(与旧 `t(_:)` 内联逻辑逐字等价)。
+    private static func resolveSystemLanguage() -> AppLanguage {
+        let preferred = Locale.preferredLanguages.first ?? ""
+        if preferred.hasPrefix("zh-Hant") || preferred.hasPrefix("zh-TW") || preferred.hasPrefix("zh-HK") {
+            return .traditionalChinese
+        } else if preferred.hasPrefix("zh") {
+            return .simplifiedChinese
+        } else {
+            return .english
+        }
+    }
 
     /// 取翻译; 未翻译的 key 回退简体中文。
     public static func t(_ key: Key) -> String {
+        ensureLocaleObserverRegistered()
         let effective: AppLanguage
-        switch language {
+        switch state.language() {
         case .system:
-            let preferred = Locale.preferredLanguages.first ?? ""
-            if preferred.hasPrefix("zh-Hant") || preferred.hasPrefix("zh-TW") || preferred.hasPrefix("zh-HK") {
-                effective = .traditionalChinese
-            } else if preferred.hasPrefix("zh") {
-                effective = .simplifiedChinese
-            } else {
-                effective = .english
-            }
+            // F8: 锁内双检——读缓存, miss 则解析并写回, 全程持锁无竞态。
+            effective = state.resolvedSystemLanguage { resolveSystemLanguage() }
         case let other:
             effective = other
         }
@@ -295,5 +332,59 @@ public enum L10n {
         case .finance: return t(.categoryFinance)
         case .other: return t(.categoryOther)
         }
+    }
+}
+
+/// L10n 可变状态的锁隔离容器(F8)。
+///
+/// 全部可变状态(language / 系统语言推断缓存 / 观察者 token)收进此类,
+/// 每个访问点都在 NSLock 临界区内, 后台线程调 t()/configure 不再竞态。
+/// `@unchecked Sendable`: 可变性完全由内部锁串行化, 状态不跨临界区暴露
+/// (getter 返回值是值类型/只读 token 引用)。
+private final class L10nState: @unchecked Sendable {
+    private let lock = NSLock()
+
+    private var _language: AppLanguage = .system
+    private var _systemLanguageCache: AppLanguage?
+    private var _localeChangeObserverToken: NSObjectProtocol?
+
+    func language() -> AppLanguage {
+        lock.lock()
+        defer { lock.unlock() }
+        return _language
+    }
+
+    func setLanguage(_ language: AppLanguage) {
+        lock.lock()
+        defer { lock.unlock() }
+        _language = language
+    }
+
+    /// 锁内双检的系统语言解析: 命中缓存直接返回; miss 时执行 resolver
+    /// 并写回缓存(全程持锁, 无竞态窗口)。
+    func resolvedSystemLanguage(resolving resolve: () -> AppLanguage) -> AppLanguage {
+        lock.lock()
+        defer { lock.unlock() }
+        if let cached = _systemLanguageCache {
+            return cached
+        }
+        let resolved = resolve()
+        _systemLanguageCache = resolved
+        return resolved
+    }
+
+    func clearSystemLanguageCache() {
+        lock.lock()
+        defer { lock.unlock() }
+        _systemLanguageCache = nil
+    }
+
+    /// 观察者注册双检(锁内): 已注册则 no-op; 否则在锁内执行 factory
+    /// 注册并保存 token, 并发调用也只会注册一次。
+    func ensureObserver(register factory: () -> NSObjectProtocol) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard _localeChangeObserverToken == nil else { return }
+        _localeChangeObserverToken = factory()
     }
 }

@@ -65,6 +65,37 @@ struct SearchIndexTests {
         #expect(index.query("nonexistent") == [])
     }
 
+    @Test("变音符不敏感: 无变音查询命中带变音名称")
+    func diacriticInsensitiveMatch() {
+        let cafeID = AppID("/Applications/Cafe.app")!
+        var index = SearchIndex()
+        index.index(
+            cafeID,
+            displayName: "Café",
+            bundleIdentifier: nil,
+            customName: nil
+        )
+        #expect(index.query("cafe") == [cafeID])
+        #expect(index.query("CAFÉ") == [cafeID])
+    }
+
+    @Test("大小写 + 变音符组合")
+    func caseAndDiacriticCombined() {
+        let resumeID = AppID("/Applications/Resume.app")!
+        var index = SearchIndex()
+        index.index(
+            resumeID,
+            displayName: "Résumé Assistant",
+            bundleIdentifier: "com.example.Resume",
+            customName: nil
+        )
+        #expect(index.query("resume") == [resumeID])
+        #expect(index.query("RÉSUMÉ") == [resumeID])
+        #expect(index.query("résumé assistant") == [resumeID])
+        // 变音符敏感差一字符: 省略一个重音但仍折叠命中
+        #expect(index.query("resume a") == [resumeID])
+    }
+
     @Test("remove 后不再命中")
     func removeApp() {
         var index = makeIndex()

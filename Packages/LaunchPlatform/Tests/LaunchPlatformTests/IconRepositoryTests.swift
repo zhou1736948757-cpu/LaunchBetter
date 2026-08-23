@@ -253,6 +253,26 @@ struct IconRepositoryTests {
         #expect(await provider.callCount == 1, "恢复走磁盘,不实时提取")
     }
 
+    @Test("F5 shutdown 等待后台 prune 完成(预置旧文件被清理)")
+    func shutdownWaitsForPrune() async throws {
+        let provider = TestIconProvider()
+        let root = try tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        // 在 repository 构造之前预置 60 天前的旧缓存文件:
+        // 保证 prune 无论何时运行都会看到它, 断言不依赖启动竞态。
+        let sub = root.appendingPathComponent("hash123", isDirectory: true)
+        try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: true)
+        let old = sub.appendingPathComponent("96-2-old.png")
+        try Data("old".utf8).write(to: old)
+        let oldDate = Date().addingTimeInterval(-60 * 24 * 3600)
+        try FileManager.default.setAttributes([.modificationDate: oldDate], ofItemAtPath: old.path)
+
+        let repo = makeRepository(provider: provider, root: root)
+        await repo.shutdown()
+
+        #expect(!FileManager.default.fileExists(atPath: old.path), "shutdown 返回前 prune 必须已完成并删除旧文件")
+    }
+
     @Test("内存压力: trim keeping 保留可见页, critical 全清")
     func memoryPressure() async throws {
         let provider = TestIconProvider()

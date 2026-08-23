@@ -244,6 +244,40 @@ struct L10nTests {
         #expect(L10n.t(.folderContentsHelp) == "文件夹内容和操作")
     }
 
+    @Test("locale-change notification invalidates cache; explicit language unaffected (L13)")
+    func localeChangeNotificationKeepsExplicitLanguage() {
+        let previous = L10n.currentLanguage
+        defer { L10n.configure(language: previous) }
+
+        L10n.configure(language: .english)
+        #expect(L10n.t(.folderContentsHelp) == "Folder contents and actions")
+
+        // 系统语言变更通知应让缓存失效(不崩、不改变显式语言的结果)。
+        NotificationCenter.default.post(
+            name: NSLocale.currentLocaleDidChangeNotification, object: nil
+        )
+        #expect(L10n.t(.folderContentsHelp) == "Folder contents and actions")
+
+        // 显式语言切换后值仍正确。
+        L10n.configure(language: .traditionalChinese)
+        #expect(L10n.t(.folderContentsHelp) == "檔案夾內容與操作")
+        L10n.configure(language: .english)
+        #expect(L10n.t(.folderContentsHelp) == "Folder contents and actions")
+    }
+
+    @Test("configure twice for same language keeps values correct (L13 cache)")
+    func repeatedConfigureKeepsValuesCorrect() {
+        let previous = L10n.currentLanguage
+        defer { L10n.configure(language: previous) }
+
+        // 模拟语言设置的重复应用: 每次 configure 都应失效缓存并给出正确值。
+        for _ in 0..<3 {
+            L10n.configure(language: .simplifiedChinese)
+            #expect(L10n.t(.folderContentsHelp) == "文件夹内容和操作")
+            #expect(L10n.format(.launchApp, "Safari") == "点击启动 Safari")
+        }
+    }
+
     @Test("an open folder refreshes localized presentation without rebuilding")
     func openFolderRefreshesLocalizedPresentation() throws {
         let previous = L10n.currentLanguage

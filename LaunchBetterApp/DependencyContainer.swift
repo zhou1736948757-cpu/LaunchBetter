@@ -33,6 +33,12 @@ public final class DependencyContainer {
         return controller
     }
 
+    /// L3: 退出 flush 桥——passthrough 到 store 的同步等待桥
+    /// (applicationWillTerminate 专用, 2s 上限)。
+    public func flushMetadataForTermination() {
+        store.flushMetadataForTermination()
+    }
+
     public init() {
         let bundleID = Bundle.main.bundleIdentifier ?? "dev.launchbetter.LaunchBetter"
         let supportDir = ApplicationSupport.directory(bundleIdentifier: bundleID)
@@ -170,10 +176,11 @@ public final class DependencyContainer {
         )
         // 启动即后台预渲染壁纸(首显时直接命中缓存, 热启动 <100ms 目标)
         if let mainScreen = NSScreen.main {
+            // L6: 壁纸预热使用用户配置的模糊半径(而非硬编码 30)。
             let prewarmRequest = WallpaperProvider.RenderRequest(
                 screenFrame: mainScreen.frame,
                 backingScale: mainScreen.backingScaleFactor,
-                blurRadius: 30
+                blurRadius: Double(store.config.wallpaperBlurRadius)
             )
             if CommandLine.arguments.contains("--perf") {
                 print("PERF prewarmRequest frame=\(mainScreen.frame) scale=\(mainScreen.backingScaleFactor)")
@@ -225,8 +232,14 @@ public final class DependencyContainer {
         // 启动时按配置应用一次登录项(开机自动启动)。SMAppService status/register
         // 是同步 XPC(实测 5-50ms), 移出首帧关键路径; MainActor hop 后执行,
         // 失败非致命。
-        Task { @MainActor [loginItem, launchAtLogin = store.config.launchAtLogin] in
-            loginItem.apply(launchAtLogin)
+        // F1: 捕获 weak store, sleep 后重读当前配置——避免 1s 延迟期间用户
+        // 修改设置后旧值回写。
+        Task { @MainActor [weak store, loginItem] in
+            // M8: SMAppService 延迟到首帧后——status/register 是同步 XPC
+            // (实测 5-50ms), 再移出首帧关键路径; 失败非致命语义不变。
+            try? await Task.sleep(for: .seconds(1))
+            guard let store else { return }
+            loginItem.apply(store.config.launchAtLogin)
         }
         // 启动器右上角齿轮 → 打开设置: 首次点击触发惰性构建, 之后复用。
         windowController.onOpenSettings = { [weak self, weak windowController] sourcePoint in

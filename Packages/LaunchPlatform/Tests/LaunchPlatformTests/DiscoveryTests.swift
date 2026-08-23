@@ -130,7 +130,7 @@ struct AppDiscoveryServiceTests {
         let dir = try tempDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }
         try makeFakeApp(in: dir, name: "NoName", bundleID: "com.test.NoName")
-        var plist: [String: Any] = ["CFBundleIdentifier": "com.test.OnlyFile"]
+        let plist: [String: Any] = ["CFBundleIdentifier": "com.test.OnlyFile"]
         let appURL = dir.appendingPathComponent("OnlyFile.app")
         let contents = appURL.appendingPathComponent("Contents")
         try FileManager.default.createDirectory(at: contents, withIntermediateDirectories: true)
@@ -282,6 +282,90 @@ struct AppDiscoveryServiceTests {
 
         let record = try #require(AppDiscoveryService.makeRecord(from: appURL))
         #expect(record.localizedNames.isEmpty)
+    }
+
+    @Test("makeRecord 复用 previousRecord: Info.plist mtime 未变跳过 lproj 重读")
+    func reusesPreviousRecordWhenPlistUnchanged() throws {
+        let dir = try tempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let appURL = dir.appendingPathComponent("T.app")
+        let contents = appURL.appendingPathComponent("Contents")
+        try FileManager.default.createDirectory(at: contents, withIntermediateDirectories: true)
+        let plistXML = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+            + "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" "
+            + "\"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">"
+            + "<plist version=\"1.0\"><dict><key>CFBundleName</key><string>T</string>"
+            + "<key>CFBundleIdentifier</key><string>com.t</string></dict></plist>"
+        let plistURL = contents.appendingPathComponent("Info.plist")
+        try Data(plistXML.utf8).write(to: plistURL)
+
+        let fixedOld = Date(timeIntervalSince1970: 1_600_000_000)
+        try FileManager.default.setAttributes(
+            [.modificationDate: fixedOld], ofItemAtPath: plistURL.path
+        )
+
+        // 无 previousRecord: 正常扫描; 无 lproj → 空本地化名。
+        let fresh = try #require(AppDiscoveryService.makeRecord(from: appURL))
+        #expect(fresh.localizedNames.isEmpty)
+        #expect(fresh.infoPlistModificationDate == fixedOld)
+
+        // 同 appID + 相同 plistDate 的 previousRecord → 直接复用 localizedNames。
+        let previous = AppRecord(
+            id: fresh.id,
+            url: fresh.url,
+            bundleIdentifier: "com.t",
+            displayName: "T",
+            infoPlistModificationDate: fixedOld,
+            iconContentVersion: .empty,
+            localizedNames: ["en": "Old"]
+        )
+        let reused = try #require(
+            AppDiscoveryService.makeRecord(from: appURL, previousRecord: previous)
+        )
+        #expect(reused.localizedNames == ["en": "Old"], "plist 未变时必须复用本地化名")
+        #expect(reused.infoPlistModificationDate == fixedOld)
+        // 其余字段仍从本次读取的 plist 实时计算。
+        #expect(reused.bundleIdentifier == "com.t")
+        #expect(reused.displayName == "T")
+        #expect(reused.id == fresh.id)
+
+        // Info.plist mtime 变化 → 重新扫描, 不再复用。
+        let newDate = Date(timeIntervalSince1970: 1_700_000_000)
+        try FileManager.default.setAttributes(
+            [.modificationDate: newDate], ofItemAtPath: plistURL.path
+        )
+        let rescanned = try #require(
+            AppDiscoveryService.makeRecord(from: appURL, previousRecord: previous)
+        )
+        #expect(rescanned.localizedNames != ["en": "Old"], "plist 变化后必须重新扫描")
+        #expect(rescanned.localizedNames.isEmpty)
+        #expect(rescanned.infoPlistModificationDate == newDate)
+    }
+
+    @Test("nil==nil 修复: previousRecord 日期为 nil 时不得复用 localizedNames")
+    func doesNotReuseWhenPreviousDateIsNil() throws {
+        let dir = try tempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let appURL = try makeFakeApp(in: dir, name: "NilDate", bundleID: "com.test.NilDate")
+
+        // 旧记录缺日期信号(infoPlistModificationDate == nil): 即使本次 plistDate 也为 nil,
+        // 也不能因 nil==nil 误复用 —— 否则 lproj 里的本地化名更新永远不会被重扫读到。
+        let fresh = try #require(AppDiscoveryService.makeRecord(from: appURL))
+        let previous = AppRecord(
+            id: fresh.id,
+            url: fresh.url,
+            bundleIdentifier: "com.test.NilDate",
+            displayName: "NilDate",
+            infoPlistModificationDate: nil,
+            iconContentVersion: .empty,
+            localizedNames: ["en": "Stale Name"]
+        )
+        let record = try #require(
+            AppDiscoveryService.makeRecord(from: appURL, previousRecord: previous)
+        )
+        #expect(record.localizedNames != ["en": "Stale Name"], "previous 日期为 nil 必须重扫, 不得复用")
+        #expect(record.localizedNames.isEmpty)
+        #expect(record.infoPlistModificationDate == fresh.infoPlistModificationDate)
     }
 }
 

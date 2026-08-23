@@ -1,5 +1,4 @@
 import AppKit
-import CoreText
 import LaunchCore
 
 /// 设置"隐藏应用"表格行: 最左侧真实 app 图标, 右侧名称。
@@ -136,67 +135,15 @@ final class SettingsHiddenRowCell: NSTableCellView {
         )
     }
 
+    /// 稳定占位(M2): 与卡片/detail 行共用 `AppLibraryIconPlaceholder.image`,
+    /// 经共享缓存复用渲染结果; 像素计算语义与旧的私有实现一致
+    /// (pixels = pointSize × scale, 色板/字号/布局照旧)。
     private func showPlaceholder(appID: AppID, name: String, pointSize: Int, scale: Int) {
-        iconView.image = Self.placeholderImage(
+        iconView.image = AppLibraryIconPlaceholder.image(
             appID: appID,
             name: name,
-            pointSize: CGFloat(pointSize),
+            pointSize: pointSize,
             scale: scale
         )
-    }
-
-    /// 稳定占位: 同一 AppID 恒同色同字母(与主网格占位风格一致), 不串 app。
-    private static func placeholderImage(
-        appID: AppID,
-        name: String,
-        pointSize: CGFloat,
-        scale: Int
-    ) -> NSImage {
-        let pixels = Int(pointSize * CGFloat(scale))
-        guard pixels > 0,
-              let context = CGContext(
-                data: nil,
-                width: pixels,
-                height: pixels,
-                bitsPerComponent: 8,
-                bytesPerRow: pixels * 4,
-                space: CGColorSpaceCreateDeviceRGB(),
-                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-              ) else {
-            return NSImage(size: NSSize(width: pointSize, height: pointSize))
-        }
-        let hue = CGFloat(stableColorIndex(for: appID)) / 12
-        let fill = NSColor(hue: hue, saturation: 0.45, brightness: 0.55, alpha: 1)
-        context.setFillColor(fill.cgColor)
-        context.fill(CGRect(x: 0, y: 0, width: pixels, height: pixels))
-
-        let letter = String(name.prefix(1)).uppercased()
-        let fontSize = pointSize * 0.55 * CGFloat(scale)
-        let attributed = NSAttributedString(
-            string: letter,
-            attributes: [
-                .font: NSFont.systemFont(ofSize: fontSize, weight: .semibold),
-                .foregroundColor: NSColor.white,
-            ]
-        )
-        let line = CTLineCreateWithAttributedString(attributed)
-        let bounds = CTLineGetBoundsWithOptions(line, .useGlyphPathBounds)
-        context.textPosition = CGPoint(
-            x: (CGFloat(pixels) - bounds.width) / 2 - bounds.minX,
-            y: (CGFloat(pixels) - bounds.height) / 2 - bounds.minY
-        )
-        CTLineDraw(line, context)
-        guard let cgImage = context.makeImage() else {
-            return NSImage(size: NSSize(width: pointSize, height: pointSize))
-        }
-        return NSImage(cgImage: cgImage, size: NSSize(width: pointSize, height: pointSize))
-    }
-
-    private static func stableColorIndex(for appID: AppID) -> Int {
-        var hash: UInt64 = 5381
-        for byte in appID.rawValue.utf8 {
-            hash = hash &* 33 &+ UInt64(byte)
-        }
-        return Int(hash % 12)
     }
 }

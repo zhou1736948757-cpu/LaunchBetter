@@ -186,7 +186,7 @@ struct IncrementalReconcileTests {
         let actor = AppCatalogActor(
             store: CatalogSnapshotStore(directory: dir),
             sources: [source],
-            discoverSources: probe.discover
+            discoverSources: { urls in probe.discover(urls) }
         )
         _ = await actor.start()
 
@@ -214,7 +214,7 @@ struct IncrementalReconcileTests {
         let actor = AppCatalogActor(
             store: CatalogSnapshotStore(directory: dir),
             sources: [source],
-            discoverSources: probe.discover,
+            discoverSources: { urls in probe.discover(urls) },
             discoverAppRoot: { _ in b }
         )
         _ = await actor.start()

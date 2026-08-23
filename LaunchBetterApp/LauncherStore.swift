@@ -75,6 +75,9 @@ public final class LauncherStore: LauncherStoring, LayoutMutationCompleting, Set
     private var metadataSnapshot: AppLibraryMetadataSnapshot
     /// memory-only App Library model cache(仅随 Catalog/Config/Metadata 变化重建)。
     private var libraryModelCache: AppLibraryModel
+    /// L12: Library model 惰性重建标记。init 不再 eager 构建; 首个
+    /// appLibraryModel() accessor 调用时经此标记重建一次。
+    private var libraryModelDirty = true
     /// 结构变更一次只允许一个 in-flight，避免旧 display 索引应用到更新后的 actor layout。
     private var layoutMutationInFlight = false
     /// FSEvents callbacks are coalesced into one generation-checked drain so
@@ -157,7 +160,9 @@ public final class LauncherStore: LauncherStoring, LayoutMutationCompleting, Set
             now: Date()
         )
         // 使 Page 1 fallback 使用对账后的 layout。
-        rebuildLibraryModel()
+        // L12: Library model 惰性构建——不 eager 重建; 保留占位 model, 仅标记
+        // dirty, 首个 appLibraryModel() 访问(UI 取模型)时按需重建。
+        libraryModelDirty = true
         rebuildCatalogIndex()
         rebuildSearchIndex()
 
@@ -198,10 +203,12 @@ public final class LauncherStore: LauncherStoring, LayoutMutationCompleting, Set
     }
 
     private func applySnapshot(_ snapshot: CatalogSnapshot) {
-        // All catalog/layout publication goes through one generation-checked
-        // persistence drain. The parameter documents the triggering snapshot;
-        // the drain deliberately fetches the actor's newest authoritative value.
-        _ = snapshot
+        // H2: 启动冗余刷新短路——传入快照与当前缓存相等(CatalogSnapshot 已
+        // Equatable)直接返回: 正常启动 seed == actor.start() 快照时不再做
+        // rebuildCatalogIndex/rebuildSearchIndex/bumpRevision/notify/全量
+        // Diffable apply。不同时才进入 generation-checked 持久化 drain
+        // (drain 仍拉取 actor 最新权威值)。
+        guard snapshot != catalogSnapshot else { return }
         catalogDidChangeExternally()
     }
 
@@ -299,8 +306,9 @@ public final class LauncherStore: LauncherStoring, LayoutMutationCompleting, Set
         )
     }
 
-    /// 用当前 Catalog/Config/Metadata 重建 Library model cache。
+    /// 用当前 Catalog/Config/Metadata 重建 Library model cache(L12: 重建后清 dirty)。
     private func rebuildLibraryModel() {
+        libraryModelDirty = false
         libraryModelCache = Self.buildLibraryModel(
             catalog: catalogSnapshot,
             layout: layout,
@@ -314,15 +322,35 @@ public final class LauncherStore: LauncherStoring, LayoutMutationCompleting, Set
     private func applyMetadataSnapshot(_ snapshot: AppLibraryMetadataSnapshot) {
         guard snapshot != metadataSnapshot else { return }
         metadataSnapshot = snapshot
-        rebuildLibraryModel()
+        // L12: 不再 eager 重建——仅标记 dirty + bump + notify; UI 经
+        // appLibraryModel() accessor 惰性重建。
+        libraryModelDirty = true
         bumpRevision()
         notifyDataChange()
+    }
+
+    /// L3/F2: 进程退出同步桥——等待 metadata 全部 pending 写完成(含 coalesced 最新
+    /// 状态), 上限 1 秒(超时仅告警, 不阻断退出)。仅 applicationWillTerminate 调用;
+    /// 直接捕获 actor 而非 self(不持有存储本身), 绝不使用 DispatchQueue.main.sync。
+    public func flushMetadataForTermination() {
+        let metadataStore = self.metadataStore
+        let semaphore = DispatchSemaphore(value: 0)
+        Task.detached {
+            await metadataStore.flush()
+            semaphore.signal()
+        }
+        if semaphore.wait(timeout: .now() + 1) == .timedOut {
+            print("METADATA flush timeout on termination")
+        }
     }
 
     // MARK: - AppLibraryDataProviding
 
     public func appLibraryModel() -> AppLibraryModel {
-        libraryModelCache
+        if libraryModelDirty {
+            rebuildLibraryModel()
+        }
+        return libraryModelCache
     }
 
     // MARK: - AppLibraryCategoryOverriding (PA2)

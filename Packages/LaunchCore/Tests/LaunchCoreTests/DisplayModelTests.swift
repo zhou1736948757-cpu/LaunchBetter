@@ -167,4 +167,31 @@ struct DisplayModelTests {
         // 文件夹内应用不占页面槽位, 不计入 visibleAppIDs
         #expect(display.visibleAppIDs == [ids[0], ids[3]])
     }
+
+    @Test("flatSlots/visibleAppIDs 存储化: 直构 init 与派生 init 语义一致")
+    func storedFlatSlotsSemantics() {
+        let ids = apps(3)
+        let f = folderID("F")
+        // 直构 init: flatSlots = pages.flatMap, visibleAppIDs 为显示顺序 app
+        let direct = DisplayModel(
+            pages: [[.app(ids[0]), .folder(f)], [.app(ids[1]), .app(ids[2])]],
+            pageCapacity: 2
+        )
+        #expect(direct.flatSlots == [
+            .app(ids[0]), .folder(f), .app(ids[1]), .app(ids[2]),
+        ])
+        #expect(direct.visibleAppIDs == [ids[0], ids[1], ids[2]])
+
+        // 派生 init: flatSlots 与 pages flatMap 一致(含过滤)
+        var cfg = config()
+        cfg.hiddenAppIDs = [ids[1]]
+        let derived = DisplayModel(
+            catalog: catalog(ids.map(\.rawValue)),
+            layout: layout(pages: [ids.map(LayoutItem.app)]),
+            config: cfg
+        )
+        #expect(derived.flatSlots == [.app(ids[0]), .app(ids[2])])
+        #expect(derived.flatSlots == derived.pages.flatMap { $0 })
+        #expect(derived.visibleAppIDs == [ids[0], ids[2]])
+    }
 }
