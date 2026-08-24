@@ -730,7 +730,7 @@ public final class LauncherStore: LauncherStoring, LayoutMutationCompleting, Set
     }
 
     public func moveToTrash(_ appID: AppID) {
-        guard let record = catalogSnapshot.app(with: appID) else { return }
+        guard let record = catalogIndex[appID] else { return }
         NSWorkspace.shared.recycle([record.url]) { _, error in
             if let error {
                 print("TRASH failed \(error)")
@@ -752,7 +752,7 @@ public final class LauncherStore: LauncherStoring, LayoutMutationCompleting, Set
 
     /// 应用图标内容版本(图标缓存身份信号源)。
     public func iconContentVersion(for appID: AppID) -> IconContentVersion {
-        catalogSnapshot.app(with: appID)?.iconContentVersion ?? .empty
+        catalogIndex[appID]?.iconContentVersion ?? .empty
     }
 }
 
