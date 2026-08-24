@@ -105,7 +105,7 @@ struct FolderExitMouseSessionTests {
             drag.beginFolderExitDrag(
                 app: store.appID,
                 from: store.folderID,
-                sourceImage: nil,
+                representation: nil,
                 at: NSPoint(x: 400, y: 300)
             )
         )

@@ -29,7 +29,7 @@ struct DragFrameIsolationTests {
         let rootBegin = try Self.section(
             source,
             from: "func beginDrag(",
-            to: "/// 文件夹子项越过卡片后启动的专用 session"
+            to: "/// 文件夹子项 handoff 的语义化入口"
         )
         let folderBegin = try Self.section(
             source,

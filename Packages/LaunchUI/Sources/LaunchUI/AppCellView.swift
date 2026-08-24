@@ -16,20 +16,6 @@ struct DragVisualRepresentation {
         self.rasterScale = rasterScale.isFinite && rasterScale > 0 ? rasterScale : 1
     }
 
-    /// 兼容旧 folder-child API: 旧接口只传 CGImage, 从当前屏幕推导其 raster scale。
-    static func legacy(image: CGImage?) -> DragVisualRepresentation? {
-        guard let image else { return nil }
-        let scale = max(1, NSScreen.main?.backingScaleFactor ?? 2)
-        let logicalSize = CGSize(
-            width: CGFloat(image.width) / scale,
-            height: CGFloat(image.height) / scale
-        )
-        return DragVisualRepresentation(
-            image: image,
-            logicalSize: logicalSize,
-            rasterScale: scale
-        )
-    }
 }
 
 /// 应用/文件夹单元格: 图标或文件夹缩略图 + 标签。

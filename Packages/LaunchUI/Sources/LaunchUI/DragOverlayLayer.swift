@@ -101,14 +101,6 @@ final class DragOverlayLayer {
         layer.isHidden = false
     }
 
-    /// 保留 FolderViewController 现有的 folder-child 调用签名。
-    func configure(label: String, sourceImage: CGImage?) {
-        configure(
-            label: label,
-            representation: DragVisualRepresentation.legacy(image: sourceImage)
-        )
-    }
-
     private func fittedIconFrame(for logicalSize: CGSize?) -> CGRect {
         guard let logicalSize,
               logicalSize.width > 0,

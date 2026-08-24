@@ -141,27 +141,6 @@ final class DragController {
         sampleBuffer.write(point, session: sessionID)
     }
 
-    /// 文件夹子项越过卡片后启动的专用 session。
-    /// 源 App 尚不在主网格 display 中, 因此只显示主网格 overlay/插入指示器;
-    /// 目的地仍统一由 GridViewController.dragDestination(from:) 计算。
-    @discardableResult
-    func beginFolderExitDrag(
-        app: AppID,
-        from folder: FolderID,
-        sourceImage: CGImage?,
-        at point: NSPoint,
-        inputSource: DragInputSource = .mouse
-    ) -> Bool {
-        // 保留旧 folder-child 调用签名; 内部立即转成语义化表示。
-        beginFolderExitDrag(
-            app: app,
-            from: folder,
-            representation: DragVisualRepresentation.legacy(image: sourceImage),
-            at: point,
-            inputSource: inputSource
-        )
-    }
-
     /// 文件夹子项 handoff 的语义化入口。DragController 不处理文件夹渲染细节。
     @discardableResult
     func beginFolderExitDrag(

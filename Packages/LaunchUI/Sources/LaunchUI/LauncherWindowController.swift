@@ -1160,11 +1160,11 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         folderView.onBack = { [weak self] in
             self?.closeFolderView()
         }
-        folderView.onDragExit = { [weak self] app, folder, sourceImage, point in
+        folderView.onDragExit = { [weak self] app, folder, representation, point in
             self?.dragController?.beginFolderExitDrag(
                 app: app,
                 from: folder,
-                sourceImage: sourceImage,
+                representation: representation,
                 at: point
             ) ?? false
         }

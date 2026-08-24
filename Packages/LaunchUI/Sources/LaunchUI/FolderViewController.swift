@@ -80,7 +80,7 @@ final class FolderViewController: NSViewController, NSTextFieldDelegate {
 
     var onBack: (() -> Void)?
     /// 文件夹拖拽越过卡片后交给窗口控制器, 后续事件仍来自同一 mouse session。
-    var onDragExit: ((AppID, FolderID, CGImage?, NSPoint) -> Bool)?
+    var onDragExit: ((AppID, FolderID, DragVisualRepresentation?, NSPoint) -> Bool)?
     var onDragExitMove: ((NSPoint) -> Void)?
     var onDragExitEnd: ((NSPoint, @escaping (Bool) -> Void) -> Void)?
 
@@ -443,7 +443,7 @@ final class FolderViewController: NSViewController, NSTextFieldDelegate {
         draggingOutside = !folderInteractionRect.contains(view.convert(point, from: nil))
         dragOverlay.configure(
             label: store.displayName(for: app),
-            sourceImage: (collectionView.item(at: indexPath) as? AppCellView)?.visibleIconImage
+            representation: (collectionView.item(at: indexPath) as? AppCellView)?.dragRepresentation()
         )
         view.layer?.addSublayer(dragOverlay.layer)
         view.layer?.addSublayer(insertionIndicator.layer)
@@ -565,13 +565,13 @@ final class FolderViewController: NSViewController, NSTextFieldDelegate {
         guard !folderExitHandedOff,
               let app = draggingApp,
               folderExitLifecycle.begin() else { return }
-        let sourceImage = (collectionView.item(
+        let representation = (collectionView.item(
             at: IndexPath(item: draggingSourceIndex ?? 0, section: 0)
-        ) as? AppCellView)?.visibleIconImage
+        ) as? AppCellView)?.dragRepresentation()
         clearLocalDragVisuals()
         draggingOutside = true
         setFolderChromeVisible(false)
-        let started = onDragExit?(app, folderID, sourceImage, point) ?? false
+        let started = onDragExit?(app, folderID, representation, point) ?? false
         guard started else {
             folderExitLifecycle.cancel()
             setFolderChromeVisible(true)
