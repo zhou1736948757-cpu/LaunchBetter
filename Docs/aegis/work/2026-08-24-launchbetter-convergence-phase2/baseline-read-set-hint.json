@@ -1,0 +1,8 @@
+{
+  "schemaVersion": "aegis.schema.v0",
+  "candidateDocs": [
+    "HEAD 3116188; Docs/aegis/work/2026-08-24-launchbetter-convergence/*; Docs/Tasks/performance-architecture-convergence.md; AGENTS.md; MEMORY.md; module-boundary ADRs; phase-04 icon pipeline; stage-02 interaction report."
+  ],
+  "whyRelevant": "These files define Phase 1 frozen metrics, ownership constraints, dependency direction, stale-result protection, and manual gates.",
+  "missingAuthority": []
+}

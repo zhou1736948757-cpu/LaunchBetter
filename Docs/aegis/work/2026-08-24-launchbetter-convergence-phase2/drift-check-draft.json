@@ -1,0 +1,15 @@
+{
+  "schemaVersion": "aegis.schema.v0",
+  "taskId": "launchbetter-convergence-phase2",
+  "taskIntentRef": "docs/aegis/work/2026-08-24-launchbetter-convergence-phase2/task-intent-draft.json",
+  "baselineRefs": [
+    "HEAD 3116188; Docs/aegis/work/2026-08-24-launchbetter-convergence/*; Docs/Tasks/performance-architecture-convergence.md; AGENTS.md; MEMORY.md; module-boundary ADRs; phase-04 icon pipeline; stage-02 interaction report."
+  ],
+  "scopeStatus": "not-yet-verified",
+  "compatStatus": "not-yet-verified",
+  "retirementStatus": "not-yet-verified",
+  "newRiskSignals": [
+    "PageVisual, Wallpaper, Store, scale/drag and retirement paths are ownership-sensitive; only one production writer at a time."
+  ],
+  "decision": "needs-baseline-readback"
+}

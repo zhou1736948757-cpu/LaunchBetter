@@ -1,0 +1,19 @@
+{
+  "schemaVersion": "aegis.schema.v0",
+  "requestedOutcome": "Close deferred Phase 2 runtime ownership, UI decomposition, semantic duplication, scale/drag/accessibility, wallpaper and legacy retirement debt without regression.",
+  "goal": "Execute the user-approved LaunchBetter Convergence Phase 2 plan from the frozen Phase 1 HEAD.",
+  "successEvidence": [
+    "All scoped ownership/duplication items either implemented and reviewed or source-evidenced as not applicable; package tests, Debug/Release builds, runtime probes, diff hygiene and final evidence report pass."
+  ],
+  "stopCondition": "Stop for user decision on product behavior change, persistence/data deletion, external contract, unrelated dirty work, new package/global abstraction, or repeated verification failure.",
+  "nonGoals": [
+    "Do not redo Phase 1 Catalog O(1), settings lookup, folder metrics, revision gate or compositor data-refresh fix."
+  ],
+  "scope": "P2-A through P2-I only; no product redesign, no new package, no SwiftUI grid rewrite, no broad dependency upgrades, no Launchpad_Back edits.",
+  "changeKinds": [
+    "architecture-convergence"
+  ],
+  "riskHints": [
+    "PageVisual, Wallpaper, Store, scale/drag and retirement paths are ownership-sensitive; only one production writer at a time."
+  ]
+}

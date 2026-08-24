@@ -1,0 +1,16 @@
+{
+  "schemaVersion": "aegis.schema.v0",
+  "affectedLayers": [
+    "LaunchUI, LaunchPlatform, LaunchBetterApp, tests and Docs/aegis work records."
+  ],
+  "owners": [
+    "Chief coordinator; Worker Ollama/deepseek-v4-flash:0731; Reviewer Ollama/minimax-m2.7."
+  ],
+  "invariants": [
+    "Single writer for overlapping production files; PagingInteractionController remains sole motion writer; Core remains pure; stale generation and cancellation guards remain; cache/source identity stays explicit."
+  ],
+  "compatBoundary": "No persistence/schema migration; no public contract deletion without current call-site evidence and explicit confirmation where external consumers are possible.",
+  "nonGoals": [
+    "Do not redo Phase 1 Catalog O(1), settings lookup, folder metrics, revision gate or compositor data-refresh fix."
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "schemaVersion": "aegis.schema.v0",
+  "taskId": "launchbetter-convergence-phase2",
+  "currentTodo": "P2-A lazy FolderThumbnailView implementation",
+  "completedTodos": [
+    "Baseline readback; helper-backed intent/checkpoint; P2-A read-only audit"
+  ],
+  "activeSlice": "Worker 4d6e7c8b implementing AppCell lazy folder hierarchy and focused tests",
+  "evidenceRefs": [
+    "Worker 3548801c report: AppCellView.swift:62 eager allocation; 12 hierarchy objects/cell; KEEP SINGLE CELL; minimal boundary source+tests"
+  ],
+  "blockedOn": "Await implementer and two review stages; no known external blocker",
+  "nextStep": "Run Spec Reviewer, then Code-quality Reviewer, then fresh LaunchUI focused verification and scoped commit",
+  "updatedAt": "2026-08-24"
+}

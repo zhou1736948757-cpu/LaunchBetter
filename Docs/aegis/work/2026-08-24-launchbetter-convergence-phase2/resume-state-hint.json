@@ -1,0 +1,17 @@
+{
+  "schemaVersion": "aegis.schema.v0",
+  "taskId": "launchbetter-convergence-phase2",
+  "lastCheckpointRef": "docs/aegis/work/2026-08-24-launchbetter-convergence-phase2/todo-checkpoint-draft.json",
+  "resumeInstruction": "Re-read this checkpoint and verify worktree before accepting implementation; only Worker owns source edits until reviews finish",
+  "knownPartialWork": [
+    "Baseline readback; helper-backed intent/checkpoint; P2-A read-only audit"
+  ],
+  "mustReadBeforeContinuing": [
+    "docs/aegis/work/2026-08-24-launchbetter-convergence-phase2/10-intent.md",
+    "docs/aegis/work/2026-08-24-launchbetter-convergence-phase2/20-checkpoint.md",
+    "docs/aegis/work/2026-08-24-launchbetter-convergence-phase2/todo-checkpoint-draft.json"
+  ],
+  "unsafeToAssume": [
+    "Do not combine placeholder/drag/page visual changes into this slice"
+  ]
+}

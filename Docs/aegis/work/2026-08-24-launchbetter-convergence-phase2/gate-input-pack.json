@@ -1,0 +1,10 @@
+{
+  "schemaVersion": "aegis.schema.v0",
+  "baselineRefs": [
+    "HEAD 3116188; Docs/aegis/work/2026-08-24-launchbetter-convergence/*; Docs/Tasks/performance-architecture-convergence.md; AGENTS.md; MEMORY.md; module-boundary ADRs; phase-04 icon pipeline; stage-02 interaction report."
+  ],
+  "impactStatement": "docs/aegis/work/2026-08-24-launchbetter-convergence-phase2/impact-statement-draft.json",
+  "compatPlan": "No persistence/schema migration; no public contract deletion without current call-site evidence and explicit confirmation where external consumers are possible.",
+  "retirementPlan": "not-yet-verified",
+  "evidenceBundle": []
+}
