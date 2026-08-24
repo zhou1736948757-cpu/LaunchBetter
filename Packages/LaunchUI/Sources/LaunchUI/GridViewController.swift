@@ -629,6 +629,9 @@ final class GridViewController: NSViewController {
             dragController?.invalidateActiveSessionForDisplayChange()
             folderTransitionRevision.invalidate()
             lastAppliedRevision = store.displayRevision
+            // External data changes can arrive during a swipe; retire the
+            // presentation-only compositor before replacing its page model.
+            shutdownPageCompositor()
             applyLatestData()
             if L10n.currentLanguage != lastAppliedLanguage {
                 lastAppliedLanguage = L10n.currentLanguage

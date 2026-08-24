@@ -478,6 +478,35 @@ struct PageCompositorGridIntegrationTests {
         #expect(grid.pageCompositorLiveOpacityForDiag == 1)
     }
 
+    @Test("数据刷新: active compositor 在替换 page model 前收口")
+    func dataRefreshShutsDownPageCompositor() async throws {
+        let store = CompositorIntegrationStore()
+        let grid = makeGrid(store)
+        let window = makeWindow(for: grid)
+        defer { window.orderOut(nil); window.contentView = nil }
+
+        grid.refresh()
+        grid.goToPage(1, animated: false)
+        let pageWidth = grid.geometry.pageWidth
+        await waitPrepared(grid)
+
+        grid.pagingProbeGesture(deltaXs: [-80, -140])
+        #expect(grid.pageCompositorActiveForDiag)
+        #expect(grid.pageCompositorLiveOpacityForDiag == 0)
+
+        // Simulate an external catalog revision while the user is swiping.
+        store.revision &+= 1
+        grid.refresh()
+
+        #expect(!grid.pageCompositorActiveForDiag)
+        #expect(grid.pageCompositorLiveOpacityForDiag == 1)
+        #expect(grid.pageCompositorLayerFramesForDiag.isEmpty)
+        #expect(
+            grid.clipOffsetXForDiag == CGFloat(grid.currentPageValue) * pageWidth,
+            "refresh leaves the live clip aligned to the current page"
+        )
+    }
+
     // MARK: - 500 轮压力
 
     @Test("500 轮: 无泄漏 / 无残留层 / 无中间态; 缓存 ≤ 3")
