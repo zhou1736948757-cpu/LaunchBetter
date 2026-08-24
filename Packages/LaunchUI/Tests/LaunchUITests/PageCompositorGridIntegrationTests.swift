@@ -65,6 +65,19 @@ struct PageCompositorGridIntegrationTests {
         return grid.pagingProbePhase() == "idle"
     }
 
+    /// 等待 working set 三页齐备(重试版)。
+    ///
+    /// 并行 suite 会瞬时翻转全局 `L10n.currentLanguage`; 准备期间的实时语言
+    /// 复验(FX-F FIX-2)会按规范丢弃该轮视觉(产品语义正确, 下一轮自动重建)。
+    /// 本助手在语言翻转恢复后重试 prepare, 直到缓存 3 页齐备, 让断言聚焦
+    /// 最终语义而非单轮时序。注意: 断言"复验失败中间态"的用例不得使用。
+    private func waitPrepared(_ grid: GridViewController, maxAttempts: Int = 8) async {
+        for _ in 0..<maxAttempts {
+            await grid.waitForPageVisualPrepareForDiag()
+            if grid.pageVisualCacheCountForDiag == 3 { return }
+        }
+    }
+
     private func makeGrid(_ store: CompositorIntegrationStore) -> GridViewController {
         let grid = GridViewController(
             store: store, iconProvider: CompositorIntegrationIconProvider()
@@ -92,7 +105,7 @@ struct PageCompositorGridIntegrationTests {
 
         grid.refresh()
         grid.goToPage(1, animated: false)
-        await grid.waitForPageVisualPrepareForDiag()
+        await waitPrepared(grid)
         #expect(grid.pageVisualCacheCountForDiag == 3, "视觉仍按 working set 准备")
         #expect(!grid.pageCompositorEligibleForDiag, "稀疏页(< 阈值)不可合成")
 
@@ -117,7 +130,7 @@ struct PageCompositorGridIntegrationTests {
 
         grid.goToPage(1, animated: false)
         #expect(grid.currentPageValue == 1)
-        await grid.waitForPageVisualPrepareForDiag()
+        await waitPrepared(grid)
         #expect(grid.pageCompositorEligibleForDiag, "中间普通页 + 视觉齐备 → 可合成")
 
         // 挂起(Folder/Settings 共用 suspendPagingForSurface)→ 不可合成。
@@ -171,7 +184,7 @@ struct PageCompositorGridIntegrationTests {
         #expect(!grid.pageCompositorEligibleForDiag, "Library↔Page1 边界不支持合成(用 live)")
 
         grid.goToPage(1, animated: false)
-        await grid.waitForPageVisualPrepareForDiag()
+        await waitPrepared(grid)
         #expect(grid.pageCompositorEligibleForDiag, "layout page 1 两侧都是普通页 → 可合成")
     }
 
@@ -191,7 +204,7 @@ struct PageCompositorGridIntegrationTests {
         let pageWidth = grid.geometry.pageWidth
         #expect(grid.readPagingOffset() == pageWidth, "未激活 = clip offset(跳页后)")
 
-        await grid.waitForPageVisualPrepareForDiag()
+        await waitPrepared(grid)
         grid.pagingProbeGesture(deltaXs: [-100, -150])
         #expect(grid.pagingProbePhase() == "settling")
         #expect(grid.pageCompositorActiveForDiag)
@@ -219,7 +232,7 @@ struct PageCompositorGridIntegrationTests {
         let pageWidth = grid.geometry.pageWidth
         #expect(grid.clipOffsetXForDiag == pageWidth)
 
-        await grid.waitForPageVisualPrepareForDiag()
+        await waitPrepared(grid)
         #expect(grid.pageCompositorEligibleForDiag)
 
         // 手势左滑 → 目标 Page2。
@@ -272,7 +285,7 @@ struct PageCompositorGridIntegrationTests {
         grid.refresh()
         grid.goToPage(1, animated: false)
         let pageWidth = grid.geometry.pageWidth
-        await grid.waitForPageVisualPrepareForDiag()
+        await waitPrepared(grid)
 
         grid.pagingProbeGesture(deltaXs: [-180, -240])
         #expect(grid.pagingProbePhase() == "settling")
@@ -314,7 +327,7 @@ struct PageCompositorGridIntegrationTests {
         grid.refresh()
         grid.goToPage(1, animated: false)
         let pageWidth = grid.geometry.pageWidth
-        await grid.waitForPageVisualPrepareForDiag()
+        await waitPrepared(grid)
 
         // 第一次手势 → settling(compositor 已激活)。
         grid.pagingProbeGesture(deltaXs: [-200, -200])
@@ -353,7 +366,7 @@ struct PageCompositorGridIntegrationTests {
         grid.refresh()
         grid.goToPage(2, animated: false)
         let pageWidth = grid.geometry.pageWidth
-        await grid.waitForPageVisualPrepareForDiag()
+        await waitPrepared(grid)
 
         // 事件级手势: 前移过半 → 反向 → 归零(位移净 0 → finishWithoutSettle)。
         grid.pagingProbeFeed(makeScroll(dx: -80, phase: .began)!)
@@ -393,7 +406,7 @@ struct PageCompositorGridIntegrationTests {
         grid.refresh()
         grid.goToPage(2, animated: false)
         let pageWidth = grid.geometry.pageWidth
-        await grid.waitForPageVisualPrepareForDiag()
+        await waitPrepared(grid)
         grid.pageCompositor.metrics.enabled = true
 
         // 前移 → 反向 → 继续前移(净 -420 → settle Page3)。
@@ -432,7 +445,7 @@ struct PageCompositorGridIntegrationTests {
         grid.refresh()
         grid.goToPage(1, animated: false)
         let pageWidth = grid.geometry.pageWidth
-        await grid.waitForPageVisualPrepareForDiag()
+        await waitPrepared(grid)
 
         // tracking 中(compositor active, offset 已移动)。
         grid.pagingProbeFeed(makeScroll(dx: -80, phase: .began)!)
@@ -480,7 +493,7 @@ struct PageCompositorGridIntegrationTests {
         for round in 0..<500 {
             let targetPage = round % 2 == 0 ? 1 : 2
             grid.goToPage(targetPage, animated: false)
-            await grid.waitForPageVisualPrepareForDiag()
+            await waitPrepared(grid)
             #expect(grid.pageCompositorEligibleForDiag)
 
             // 事件级手势(交替方向) + 中间帧: 激活 → 移动 → 反向 → 净 0 收口。
@@ -510,6 +523,70 @@ struct PageCompositorGridIntegrationTests {
             #expect(grid.pageVisualCacheCountForDiag <= 3, "第 \(round) 轮: 缓存有界")
             #expect(grid.currentPageValue == targetPage, "第 \(round) 轮: 语义页一致")
         }
+    }
+
+    // MARK: - 每页独立 iconEpoch
+
+    @Test("每页独立 epoch: prepare 后缓存 3 页, 各页 key.iconEpoch 互不相同")
+    func perPageIconEpochKeysIndependent() async throws {
+        let store = CompositorIntegrationStore()
+        let grid = makeGrid(store)
+        let window = makeWindow(for: grid)
+        defer { window.orderOut(nil); window.contentView = nil }
+
+        grid.refresh()
+        grid.goToPage(1, animated: false)
+        await waitPrepared(grid)
+
+        // 3 页均已 prepare 且驻留缓存(LRU 上限 3)。
+        let keys = grid.pageVisualKeysForDiag
+        #expect(keys.count == 3, "prepare 后缓存 3 页")
+        #expect(keys.map(\.pageIndex).sorted() == [0, 1, 2])
+
+        // 每页图标集合不同(页内 3 个唯一 app)→ 各页独立 epoch。
+        // 若退回"整体单一 epoch", 三页键会共享同一 iconEpoch。
+        let epochs = Set(keys.map(\.iconEpoch))
+        #expect(epochs.count == 3, "各页 key.iconEpoch 独立(相邻页集合不同)")
+    }
+
+    // MARK: - prepare 快照复验(FX-F FIX-2)
+
+    @Test("快照复验: 解析期间 displayRevision 变化 → 该页视觉不插入; 稳定轮重建成功")
+    func snapshotRecheckDropsStaleVisualsOnce() async throws {
+        let store = SnapshotRecheckStore()
+        let folderChildIDs = Set(store.folderChildrenPayload.values.flatMap { $0 })
+        let provider = SnapshotBumpIconProvider(store: store, childIDs: folderChildIDs)
+        let grid = GridViewController(store: store, iconProvider: provider)
+        grid.pageVisualCompositorEnabled = true
+        grid.pageVisualMinItemsPerPage = 1
+        let window = makeWindow(for: grid)
+        defer { window.orderOut(nil); window.contentView = nil }
+
+        grid.refresh()
+        grid.goToPage(1, animated: false)
+
+        // 第 1 轮: 页 0/1(普通 app)在提升前已解析并入缓存; 页 2 是文件夹页,
+        // 其子项图标请求只可能来自 resolveIcons(单元格只配置可见页 1,
+        // prewarm 跳过 folder 项)—— 解析瞬间 revision 被提升 → 该页插入前
+        // 复验(store.displayRevision == capturedRevision)失败 → 视觉丢弃。
+        // 注意: 这里**不能**用 waitPrepared(它重试到 3 页齐备, 会吞掉
+        // 本用例要断言的"复验失败不插入"中间态)。
+        await grid.waitForPageVisualPrepareForDiag()
+        #expect(provider.didBump, "文件夹子项图标请求只来自 resolveIcons")
+        #expect(
+            grid.pageVisualCacheCountForDiag == 2,
+            "复验失败的页(2)不插入, 其余两页已按起点快照键插入"
+        )
+        #expect(grid.pageVisualKeysForDiag.map(\.pageIndex).sorted() == [0, 1])
+        #expect(!grid.pageCompositorEligibleForDiag, "缺页 → working set 不齐备")
+
+        // 第 2 轮(revision 已稳定, 不再提升): 旧键 revision 不匹配 → 全部
+        // 重新构建并插入, working set 齐备。
+        grid.refresh()
+        await waitPrepared(grid)
+        #expect(grid.pageVisualCacheCountForDiag == 3)
+        #expect(grid.pageVisualKeysForDiag.map(\.pageIndex).sorted() == [0, 1, 2])
+        #expect(grid.pageCompositorEligibleForDiag)
     }
 
     // MARK: - live 降级空白页回归(v0.5.x 类 bug)
@@ -614,6 +691,108 @@ private final class CompositorLeadingStore: CompositorIntegrationStore, AppLibra
 @MainActor
 private final class CompositorIntegrationIconProvider: IconImageProviding {
     func icon(for appID: AppID, pointSize: Int, scale: Int) async -> CGImage? {
+        let context = CGContext(
+            data: nil, width: 16, height: 16, bitsPerComponent: 8,
+            bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        )!
+        let hue = CGFloat(abs(appID.rawValue.hashValue) % 12) / 12
+        context.setFillColor(
+            NSColor(hue: hue, saturation: 0.6, brightness: 0.7, alpha: 1).cgColor
+        )
+        context.fill(CGRect(x: 0, y: 0, width: 16, height: 16))
+        return context.makeImage()
+    }
+
+    func trimMemoryForHidden() {}
+}
+
+/// FX-F FIX-2 seam: 页 2 是文件夹页; 其子项图标请求**只可能来自 resolveIcons**
+/// (单元格只配置可见页, prewarm 跳过 folder 项)—— provider 首次为子项取
+/// 图标时提升 store.displayRevision, 精确模拟"解析期间数据变化"。
+@MainActor
+private final class SnapshotRecheckStore: LauncherStoring {
+    var revision: UInt64 = 1
+
+    var onDataChange: (() -> Void)?
+    var searchQuery = ""
+    let gridColumns = 3
+    let gridRows = 2
+    let iconSize = 64
+    let wallpaperBlurRadius = 30
+    let searchBarWidth = 320
+    var displayRevision: UInt64 { revision }
+
+    let pages: [[DisplayModel.DisplayItem]]
+    let folderChildrenPayload: [FolderID: [AppID]]
+
+    init() {
+        let folderID = FolderID(normalized: "/folders/snapshot-recheck")
+        pages = [
+            (0..<3).map { .app(AppID("/Applications/RecheckA0\($0).app")!) },
+            (0..<3).map { .app(AppID("/Applications/RecheckA1\($0).app")!) },
+            [.folder(folderID)],
+        ]
+        folderChildrenPayload = [
+            folderID: [
+                AppID("/Applications/RecheckChild0.app")!,
+                AppID("/Applications/RecheckChild1.app")!,
+            ],
+        ]
+    }
+
+    @discardableResult
+    func addDataObserver(_ observer: @escaping () -> Void) -> UUID { UUID() }
+    func removeDataObserver(_ token: UUID) {}
+
+    func displayModel() -> DisplayModel {
+        DisplayModel(
+            pages: pages,
+            pageCapacity: gridColumns * gridRows,
+            folderChildrenPayload: folderChildrenPayload
+        )
+    }
+
+    func searchResults() -> [DisplayModel.DisplayItem]? { nil }
+    func displayName(for appID: AppID) -> String { appID.rawValue }
+    func folderName(for folderID: FolderID) -> String { folderID.rawValue }
+    func launch(_ appID: AppID) {}
+    func createFolder(name: String, appIDs: [AppID]) {}
+    func renameFolder(_ id: FolderID, to name: String) {}
+    func dissolveFolder(_ id: FolderID) {}
+    func addToFolder(app: AppID, folder: FolderID) {}
+    func moveOutOfFolder(
+        app: AppID,
+        from folder: FolderID,
+        toDisplayIndex: Int,
+        completion: @escaping (Bool) -> Void
+    ) { completion(false) }
+    func reorderFolderApp(app: AppID, in folder: FolderID, toIndex: Int) {}
+    func folderNames() -> [FolderID: String] { [:] }
+    func folderChildren(_ id: FolderID) -> [AppID]? { folderChildrenPayload[id] }
+    func applyDragDrop(_ mutation: LayoutTransaction.LayoutMutation) {}
+    func setHidden(_ appID: AppID, hidden: Bool) {}
+    func setCustomName(_ appID: AppID, name: String?) {}
+    func moveToTrash(_ appID: AppID) {}
+    func isHidden(_ appID: AppID) -> Bool { false }
+}
+
+@MainActor
+private final class SnapshotBumpIconProvider: IconImageProviding {
+    private let store: SnapshotRecheckStore
+    private let childIDs: Set<AppID>
+    private(set) var didBump = false
+
+    init(store: SnapshotRecheckStore, childIDs: Set<AppID>) {
+        self.store = store
+        self.childIDs = childIDs
+    }
+
+    func icon(for appID: AppID, pointSize: Int, scale: Int) async -> CGImage? {
+        if !didBump, childIDs.contains(appID) {
+            didBump = true
+            store.revision &+= 1
+        }
         let context = CGContext(
             data: nil, width: 16, height: 16, bitsPerComponent: 8,
             bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),

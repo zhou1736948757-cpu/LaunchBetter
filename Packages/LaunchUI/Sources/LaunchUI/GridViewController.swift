@@ -966,7 +966,19 @@ final class GridViewController: NSViewController {
     /// settle 目标页回调与 navigate/goToPage 会先后各调一次本函数
     /// (PA1 前 = 双份 O(n) displayModel 构建 + ~70 个 Task 派生落在 settle
     /// 首帧前), revision 未变时第二次是纯重复。
+    ///
+    /// 并发: 相邻两页全部 app ID 收集成单个数组后, 用**有界 TaskGroup**
+    /// 预热(每批 ≤8 个在途)——替代 N 个裸 Task, 消除 settle 首帧的批量
+    /// 任务派生开销。
+    ///
+    /// 可取消: 连续调度只保留最后一个在途 prewarm(先 cancel 旧任务再替换),
+    /// 避免新旧预热重叠; 任务结束(含被取消)后在 MainActor 内确认自己仍是
+    /// 当前代际才清空引用。
     private var lastPrewarmKey: (page: Int, revision: UInt64, pointSize: Int, scale: Int)?
+    /// 在途 prewarm 任务(新调度先取消旧任务)。
+    private var pagePrewarmTask: Task<Void, Never>?
+    /// prewarm 代际: 每次调度递增; 结束收尾只清理自己那一代。
+    private var pagePrewarmGeneration = 0
 
     private func prewarmAdjacentPages(_ page: Int) {
         guard currentSurface != .appLibrary else { return }
@@ -983,16 +995,43 @@ final class GridViewController: NSViewController {
         }
         lastPrewarmKey = (page, revision, pointSize, scale)
         let display = store.displayModel()
+        // 相邻两页全部 app IDs(保持页面顺序、页内顺序)。
+        var ids: [AppID] = []
         for p in [page - 1, page + 1] where p >= 0 && p < display.pages.count {
-            let apps = display.pages[p].compactMap { item -> AppID? in
-                if case .app(let id) = item { return id }
-                return nil
-            }
-            for id in apps {
-                // 异步预热入内存缓存(已命中者 O(1); 未命中走存储库管道, 不阻塞主线程)
-                Task(priority: .utility) { [weak iconProvider] in
-                    _ = await iconProvider?.icon(for: id, pointSize: pointSize, scale: scale)
+            for item in display.pages[p] {
+                if case .app(let id) = item {
+                    ids.append(id)
                 }
+            }
+        }
+        // 取消在途旧 prewarm, 只保留当前这一代(Task 继承 MainActor 隔离,
+        // 收尾可安全写回 pagePrewarmTask)。
+        pagePrewarmTask?.cancel()
+        pagePrewarmGeneration &+= 1
+        let generation = pagePrewarmGeneration
+        pagePrewarmTask = Task(priority: .utility) { [weak self, weak iconProvider] in
+            guard let provider = iconProvider else { return }
+            // 有界 TaskGroup: 每批 ≤8 个在途(一批 addTask 后逐个 consume
+            // 完再开下一批), 预热不阻塞主线程、不一次性派生全量任务。
+            // IconImageProviding 声明为 Sendable → 发送闭包可直接强捕获。
+            await withTaskGroup(of: Void.self) { group in
+                let strideCount = 8
+                var index = 0
+                while index < ids.count {
+                    let end = min(index + strideCount, ids.count)
+                    for offset in index..<end {
+                        let id = ids[offset]
+                        group.addTask {
+                            _ = await provider.icon(for: id, pointSize: pointSize, scale: scale)
+                        }
+                    }
+                    for _ in index..<end { _ = await group.next() }
+                    index = end
+                }
+            }
+            // 收尾(含正常/取消): 自己仍是当前代际才清空, 不误清新任务。
+            if let self, generation == self.pagePrewarmGeneration {
+                self.pagePrewarmTask = nil
             }
         }
     }
@@ -1246,9 +1285,13 @@ final class GridViewController: NSViewController {
         paging.onWillBeginGesture = { [weak self] in
             self?.tryActivatePageCompositor()
         }
-        // P2: 运动停止(idle)→ 收掉 compositor(同步 clip → reveal)。
+        // P2: 运动停止(idle)→ 收掉 compositor(同步 clip → reveal), 并重试
+        // 防抖丢弃的视觉准备: 100ms 防抖醒来时 phase 非 idle 而丢掉的 prepare,
+        // 会在下一次真正 idle 时补跑(schedulePageVisualPrepare 内部已有
+        // generation + 取消旧任务机制, 重复调度安全)。
         paging.onPhaseIdle = { [weak self] in
             self?.finalizePageCompositor()
+            self?.schedulePageVisualPrepare()
         }
         // P2: settle 收敛 → idle 准备相邻页视觉。
         paging.onSettleComplete = { [weak self] in
@@ -1481,10 +1524,11 @@ final class GridViewController: NSViewController {
 
     /// 为当前 working set(previous/current/next)准备/复用页面视觉。
     ///
-    /// 两阶段(idle):
-    /// 1. 整体解析 working set 图标 → 单一 iconEpoch(可用集合的稳定哈希)。
+    /// 逐页(idle):
+    /// 1. 每页独立解析图标 → 该页 iconEpoch(页内可用集合的稳定哈希)。
     /// 2. 逐页冻结请求 → 后台光栅化 → 键复验后插入缓存。
-    /// 图标集合变化(迟到图标)→ 新 epoch → 旧键失效, 下次 idle 重建。
+    /// 图标集合变化(迟到图标)→ 该页新 epoch → 旧键失效, 下次 idle 只重建
+    /// 受影响页。
     ///
     /// 串行化: 多个调用方(防抖 Task / 测试 seam)并发进入时共享同一在途任务,
     /// 保证语言快照与缓存键自洽(并发 prepare 会让语言代数与插入键失配)。
@@ -1505,32 +1549,37 @@ final class GridViewController: NSViewController {
         guard pageVisualCompositorEnabled, isViewLoaded, collectionView != nil else { return }
         let display = store.displayModel()
         guard currentPage >= 1, currentPage < display.pages.count else { return }
+        // 全程快照: 数据修订在准备起点捕获一次, 之后所有键构建与插入复验
+        // 都基于它(不再实时读 store.displayRevision)。
+        let capturedRevision = store.displayRevision
         let g = geometry
         guard g.pageWidth > 0, g.gridWidth > 0, g.gridHeight > 0 else { return }
         let scale = currentBackingScale
         // 语言代数在准备起点快照一次: 本次 working set 的键/激活检查共用同一值,
         // 自洽(语言切换会走 Settings/refresh 链路 → shutdown + purge + 重建)。
+        // 提交时机: 全部页面处理成功且无复验失败之后(guard 早退/复验失败不更新)。
         let languageRevision = Self.languageRevision()
-        lastPreparedLanguageRevision = languageRevision
 
-        // 阶段 1: 解析 working set 全部图标 → 单一 epoch。
+        // 逐页独立解析图标 → 每页独立 iconEpoch: 迟到图标只触发对应页的新
+        // epoch 重建, 不再牵动整个 working set(缓存键按页独立)。
         let pages = [currentPage - 1, currentPage, currentPage + 1].filter {
             $0 >= 0 && $0 < display.pages.count
         }
-        let iconSet = await pageVisualRenderer.resolveIcons(
-            pages: pages.map { ($0, display.pages[$0]) },
-            folderChildrenPayload: display.folderChildrenPayload,
-            geometry: g,
-            scale: scale,
-            iconProvider: iconProvider
-        )
-        let iconEpoch = pageVisualRenderer.epoch(for: iconSet)
-
-        // 阶段 2: 逐页渲染(缓存命中跳过)。
+        // 任一页插入前复验失败 → 本次语言代数不提交(等下一次完整成功)。
+        var recheckFailed = false
         for page in pages {
+            let iconSet = await pageVisualRenderer.resolveIcons(
+                page: page,
+                items: display.pages[page],
+                folderChildrenPayload: display.folderChildrenPayload,
+                geometry: g,
+                scale: scale,
+                iconProvider: iconProvider
+            )
+            let iconEpoch = pageVisualRenderer.epoch(for: iconSet)
             let key = pageVisualRenderer.makeKey(
                 page: page,
-                displayRevision: store.displayRevision,
+                displayRevision: capturedRevision,
                 geometry: g,
                 scale: scale,
                 languageRevision: languageRevision,
@@ -1545,7 +1594,7 @@ final class GridViewController: NSViewController {
                 folderName: { [weak self] id in self?.store.folderName(for: id) ?? "" },
                 geometry: g,
                 scale: scale,
-                displayRevision: store.displayRevision,
+                displayRevision: capturedRevision,
                 languageRevision: languageRevision,
                 icons: iconSet,
                 iconEpoch: iconEpoch
@@ -1554,19 +1603,30 @@ final class GridViewController: NSViewController {
                 durationMs: (CACurrentMediaTime() - start) * 1000
             )
             if let visual {
-                // 复验: 渲染期间数据/几何已变 → 键不匹配, 丢弃(下次重建)。
+                // 插入前最终复验: 快照期间数据/语言/几何任一变化 → 直接丢弃
+                // (不插入)。currentKey == visual.key 已含几何匹配(shapshot 键
+                // vs 实时几何); displayRevision/languageRevision 不在键比较中
+                // (键用的是快照值), 需显式校验快照保持。
                 let currentKey = pageVisualRenderer.makeKey(
                     page: page,
-                    displayRevision: store.displayRevision,
+                    displayRevision: capturedRevision,
                     geometry: self.geometry,
                     scale: scale,
                     languageRevision: languageRevision,
                     iconEpoch: iconEpoch
                 )
-                if currentKey == visual.key {
+                if currentKey == visual.key,
+                   store.displayRevision == capturedRevision,
+                   Self.languageRevision() == languageRevision {
                     pageVisualCache.insert(visual)
+                } else {
+                    recheckFailed = true
                 }
             }
+        }
+        // 语言代数提交: 全部页面处理成功且无复验失败(guard 早退/复验失败不更新)。
+        if !recheckFailed {
+            lastPreparedLanguageRevision = languageRevision
         }
     }
 
@@ -1615,6 +1675,8 @@ final class GridViewController: NSViewController {
     var visibleItemsCountForDiag: Int { collectionView.visibleItems().count }
     var pageVisualCacheCountForDiag: Int { pageVisualCache.visualCount }
     var pageVisualCacheTotalBytesForDiag: Int { pageVisualCache.totalBytes }
+    /// 缓存键快照(LRU 序; 测试验证每页独立 iconEpoch 用)。
+    var pageVisualKeysForDiag: [PageVisualKey] { pageVisualCache.keysForDiag }
 
     /// 真实 clip 水平偏移(测试/诊断)。
     var clipOffsetXForDiag: CGFloat {

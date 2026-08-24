@@ -181,4 +181,36 @@ struct PageVisualCacheTests {
         #expect(visuals.map(\.page) == [0, 1, 2])
         #expect(visuals.map(\.visual.key.pageIndex) == [0, 1, 2])
     }
+
+    @Test("ignoringIconEpoch: 同页多 epoch 时返回最后插入的视觉(即使 epoch 数值更小)")
+    func ignoringIconEpochPrefersLatestInsertion() {
+        let cache = PageVisualCache()
+        // 同一页/数据/几何/scale/语言: 先插入 iconEpoch=100 的视觉,
+        // 后插入 iconEpoch=1 的视觉(新视觉可能带着数值更小的 epoch)。
+        cache.insert(visual(for: key(page: 0, iconEpoch: 5)))
+        cache.insert(visual(for: key(page: 1, iconEpoch: 100)))
+        cache.insert(visual(for: key(page: 1, iconEpoch: 1)))
+        #expect(cache.visualCount == 3)
+
+        let visuals = cache.workingSetVisualsIgnoringIconEpoch(
+            centerPage: 1, pageCount: 3, displayRevision: 7, geometry: geometry,
+            backingScale: 2, languageRevision: 1
+        )
+        #expect(visuals.map(\.page) == [0, 1])
+        guard let page1 = visuals.first(where: { $0.page == 1 }) else {
+            Issue.record("page 1 视觉缺失")
+            return
+        }
+        #expect(
+            page1.visual.key.iconEpoch == 1,
+            "同页多 epoch → 必须选最后插入的视觉(单调插入序最大), 而非 epoch 数值更大者"
+        )
+        #expect(
+            cache.isWorkingSetReadyIgnoringIconEpoch(
+                centerPage: 1, pageCount: 3, displayRevision: 7,
+                geometry: geometry, backingScale: 2, languageRevision: 1
+            ) == false,
+            "page 2 缺失 → 不齐备(选择逻辑不影响就绪判定)"
+        )
+    }
 }

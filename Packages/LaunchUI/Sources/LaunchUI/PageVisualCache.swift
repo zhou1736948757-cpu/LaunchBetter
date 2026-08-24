@@ -14,6 +14,11 @@ final class PageVisualCache {
     private var storage: [PageVisualKey: PageVisual] = [:]
     /// LRU 访问序(末尾 = 最近使用)。
     private var accessOrder: [PageVisualKey] = []
+    /// 单调插入序: 每次实际存储递增(覆盖同 key 也递增)。
+    /// `storedVisual` 据此选"最后插入"的视觉, 不依赖 iconEpoch 数值比较。
+    private var insertionSequence: UInt64 = 0
+    /// 每个已存储 key 的插入序(与 storage 增删保持一致)。
+    private var insertionSequences: [PageVisualKey: UInt64] = [:]
 
     private(set) var totalBytes = 0
     private(set) var hitCount = 0
@@ -51,10 +56,14 @@ final class PageVisualCache {
             totalBytes -= previous.bytes
             storage.removeValue(forKey: key)
             accessOrder.removeAll { $0 == key }
+            // 覆盖同 key: 移除旧插入序条目(新视觉将获得更新的序)。
+            insertionSequences.removeValue(forKey: key)
         }
         storage[key] = visual
         totalBytes += visual.bytes
         accessOrder.append(key)
+        insertionSequence &+= 1
+        insertionSequences[key] = insertionSequence
         let scale = Int(visual.rasterScale.rounded())
         rasterScales.insert(scale)
 
@@ -71,6 +80,7 @@ final class PageVisualCache {
         guard let visual = storage.removeValue(forKey: key) else { return nil }
         totalBytes -= visual.bytes
         accessOrder.removeAll { $0 == key }
+        insertionSequences.removeValue(forKey: key)
         refreshRasterScales()
         return visual
     }
@@ -79,6 +89,7 @@ final class PageVisualCache {
     func removeAll() {
         storage.removeAll()
         accessOrder.removeAll()
+        insertionSequences.removeAll()
         totalBytes = 0
         rasterScales.removeAll()
     }
@@ -230,6 +241,10 @@ final class PageVisualCache {
     }
 
     /// 任意代数下匹配数据/几何/scale/语言的已存储视觉。
+    ///
+    /// 多个匹配时返回 **最后插入** 的视觉(单调插入序最大者)。字典序遍历
+    /// 不稳定, 显式取最大插入序保证确定性; 不做 iconEpoch 数值比较(新视觉
+    /// 可能带着数值更小的 epoch 后插入)。相同插入序时任取其一。
     private func storedVisual(
         page: Int,
         displayRevision: UInt64,
@@ -237,14 +252,21 @@ final class PageVisualCache {
         backingScale: Int,
         languageRevision: UInt64
     ) -> PageVisual? {
+        var best: (key: PageVisualKey, visual: PageVisual)?
         for (key, visual) in storage
         where key.pageIndex == page
             && key.displayRevision == displayRevision
             && key.geometry == geometry
             && key.backingScale == backingScale
             && key.languageRevision == languageRevision {
-            return visual
+            if let current = best {
+                if (insertionSequences[key] ?? 0) > (insertionSequences[current.key] ?? 0) {
+                    best = (key, visual)
+                }
+            } else {
+                best = (key, visual)
+            }
         }
-        return nil
+        return best?.visual
     }
 }

@@ -5,8 +5,10 @@ import LaunchCore
 ///
 /// 由应用层适配器实现(内部调用 LaunchPlatform.IconRepository)。
 /// LaunchUI 不依赖 LaunchPlatform(架构约束),只依赖本协议。
+/// Sendable: 实现类均为 @MainActor final class(全局 actor 隔离类天然
+/// Sendable),协议级声明让 withTaskGroup 发送闭包可强捕获该存在类型。
 @MainActor
-public protocol IconImageProviding: AnyObject {
+public protocol IconImageProviding: AnyObject, Sendable {
     /// 返回应用图标(按 IconKey 变体: 尺寸/缩放/内容版本)。
     /// nil = 暂无可用图标(单元格保留占位)。
     func icon(for appID: AppID, pointSize: Int, scale: Int) async -> CGImage?

@@ -32,19 +32,18 @@ struct PageVisualIconSet: Sendable {
     let appIcons: [AppID: CGImage]
     let folderIcons: [FolderID: [CGImage?]]
 
-    /// 全部可用图标 ID(普通 App + 文件夹可见子项)。
-    var availableIDs: Set<AppID> {
-        let ids = Set(appIcons.keys)
-        for (folderID, icons) in folderIcons {
-            for (index, icon) in icons.enumerated() where icon != nil {
-                // 保持与解析顺序一致的可判定性: 这里只需 ID 集合,
-                // 不依赖 child 顺序。
-                _ = index
-                _ = folderID
-                break
-            }
-        }
-        return ids
+    /// 全部可用图标 ID(普通 App + 文件夹可见子项): 所有已解析到非 nil
+    /// 图标的 AppID 并集。图标代数 epoch 的唯一输入。
+    let availableIDs: Set<AppID>
+
+    init(
+        appIcons: [AppID: CGImage],
+        folderIcons: [FolderID: [CGImage?]],
+        availableIDs: Set<AppID>
+    ) {
+        self.appIcons = appIcons
+        self.folderIcons = folderIcons
+        self.availableIDs = availableIDs
     }
 }
 
@@ -54,8 +53,9 @@ struct PageVisualIconSet: Sendable {
 /// 文件夹(≤9 子图标缩略)。图标未就绪 → 稳定占位(与 live 一致: 色块 + 首字母);
 /// 绝不在手势中触盘/读 Info.plist(渲染请求在 idle 时冻结)。
 ///
-/// 图标代数: working set 图标先整体解析, epoch = 可用图标集合的稳定哈希。
-/// 任何"迟到图标到达"都会改变集合 → 新 epoch → 旧视觉失效, 下次 idle 重建。
+/// 图标代数: 每页独立解析图标, epoch = 该页可用图标集合的稳定哈希。
+/// 任何"迟到图标到达"都会改变该页集合 → 新 epoch → 旧视觉失效, 下次 idle 重建
+/// (只重建受影响页)。
 @MainActor
 final class PageVisualRenderer {
     /// 与 AppCellView 一致的稳定色块索引。
@@ -104,41 +104,111 @@ final class PageVisualRenderer {
         return hash
     }
 
-    /// 解析一个 working set 的全部图标(主线程, 仅内存/缓存管道; idle 调用)。
+    /// 单页图标请求计划(有界 TaskGroup 的输入; 保持页内请求顺序)。
+    private enum IconRequest: Sendable {
+        case app(AppID)
+        case folderChild(folderID: FolderID, appID: AppID, index: Int)
+
+        var appID: AppID {
+            switch self {
+            case .app(let id): return id
+            case .folderChild(_, let id, _): return id
+            }
+        }
+    }
+
+    /// 解析单页全部图标(idle 调用; 请求并发执行, 不触碰视图树)。
+    ///
+    /// 并发策略: 先收集唯一请求(普通 app 集合去重; 每个 folder 取
+    /// children.prefix(9)), 再用 `withTaskGroup` 并发请求——每批最多 8 个
+    /// 在途(一批 addTask 后逐个 `await group.next()` 消耗完再开下一批)。
+    /// 结果装回 appIcons / [FolderID: [CGImage?]]; availableIDs = 所有得到
+    /// 非 nil 图标的 app/child ID 并集。iconProvider 为 nil 或几何无效时
+    /// 返回空集(调用方保持占位语义)。
     func resolveIcons(
-        pages: [(page: Int, items: [DisplayModel.DisplayItem])],
+        page: Int,
+        items: [DisplayModel.DisplayItem],
         folderChildrenPayload: [FolderID: [AppID]],
         geometry: GridGeometry,
         scale: Int,
         iconProvider: (any IconImageProviding)?
     ) async -> PageVisualIconSet {
         guard let iconProvider, geometry.iconSize > 0 else {
-            return PageVisualIconSet(appIcons: [:], folderIcons: [:])
+            return PageVisualIconSet(appIcons: [:], folderIcons: [:], availableIDs: [])
         }
         let pointSize = max(1, Int(geometry.iconSize.rounded(.down)))
-        var appIcons: [AppID: CGImage] = [:]
-        var folderIcons: [FolderID: [CGImage?]] = [:]
-        for item in pages.flatMap(\.items) {
+
+        // 1. 收集唯一请求(保持页内首次出现顺序): 普通 app 去重; 每个 folder
+        //    取 children.prefix(9)(子项数组保持 payload 顺序)。
+        var requests: [IconRequest] = []
+        var seenAppIDs: Set<AppID> = []
+        var folderChildren: [FolderID: [AppID]] = [:]
+        for item in items {
             switch item {
             case .app(let appID):
-                if let image = await iconProvider.icon(
-                    for: appID, pointSize: pointSize, scale: scale
-                ) {
-                    appIcons[appID] = image
+                if seenAppIDs.insert(appID).inserted {
+                    requests.append(.app(appID))
                 }
             case .folder(let folderID):
-                let children = folderChildrenPayload[folderID] ?? []
-                var icons: [CGImage?] = []
-                for child in children.prefix(9) {
-                    let image = await iconProvider.icon(
-                        for: child, pointSize: pointSize, scale: scale
-                    )
-                    icons.append(image)
+                let children = Array(folderChildrenPayload[folderID]?.prefix(9) ?? [])
+                if !children.isEmpty {
+                    folderChildren[folderID] = children
                 }
-                folderIcons[folderID] = icons
             }
         }
-        return PageVisualIconSet(appIcons: appIcons, folderIcons: folderIcons)
+        // 文件夹子项追加进请求计划(按 folderID 排序保证确定性; index 记录槽位)。
+        for folderID in folderChildren.keys.sorted(by: { $0.rawValue < $1.rawValue }) {
+            guard let children = folderChildren[folderID] else { continue }
+            for (index, child) in children.enumerated() {
+                requests.append(.folderChild(folderID: folderID, appID: child, index: index))
+            }
+        }
+
+        // 2. 有界并发: 每批 ≤8 个在途; 一批全部消耗完再开下一批。
+        var results: [CGImage?] = Array(repeating: nil, count: requests.count)
+        let strideCount = 8
+        var start = 0
+        while start < requests.count {
+            let end = min(start + strideCount, requests.count)
+            await withTaskGroup(of: (Int, CGImage?).self) { group in
+                for requestIndex in start..<end {
+                    let request = requests[requestIndex]
+                    // IconImageProviding 声明为 Sendable → 发送闭包可直接
+                    // 强捕获 provider(实现类均 @MainActor final class)。
+                    group.addTask {
+                        let image = await iconProvider.icon(
+                            for: request.appID, pointSize: pointSize, scale: scale
+                        )
+                        return (requestIndex, image)
+                    }
+                }
+                while let (finishedIndex, image) = await group.next() {
+                    results[finishedIndex] = image
+                }
+            }
+            start = end
+        }
+
+        // 3. 装回 appIcons / folderIcons; availableIDs = 非 nil 图标 ID 并集。
+        //    每个 folder 恒有定长数组(长度 = children.prefix(9) 数), 未解析项
+        //    为 nil —— 与旧实现一致, 渲染器按位取用, 不改变像素输出。
+        var appIcons: [AppID: CGImage] = [:]
+        var folderIcons: [FolderID: [CGImage?]] = [:]
+        for (folderID, children) in folderChildren {
+            folderIcons[folderID] = Array(repeating: nil, count: children.count)
+        }
+        var availableIDs: Set<AppID> = []
+        for (index, request) in requests.enumerated() {
+            guard let image = results[index] else { continue }
+            availableIDs.insert(request.appID)
+            switch request {
+            case .app(let appID):
+                appIcons[appID] = image
+            case .folderChild(let folderID, _, let childIndex):
+                folderIcons[folderID]?[childIndex] = image
+            }
+        }
+        return PageVisualIconSet(appIcons: appIcons, folderIcons: folderIcons, availableIDs: availableIDs)
     }
 
     /// 准备一张页面视觉(idle 调用)。图标由调用方预先解析(epoch 与之对应)。
