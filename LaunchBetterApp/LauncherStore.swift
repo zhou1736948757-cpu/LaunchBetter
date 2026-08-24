@@ -100,7 +100,7 @@ public final class LauncherStore: LauncherStoring, LayoutMutationCompleting, Set
     public var wallpaperBlurRadius: Int { config.wallpaperBlurRadius }
     public var searchBarWidth: Int { config.searchBarWidth }
 
-    /// 显示修订号: 目录/布局/配置/搜索任一变化即递增(Stage 1 §30)。
+    /// 显示修订号: 目录/布局/网格可见配置/搜索变化时递增(Stage 1 §30)。
     public private(set) var displayRevision: UInt64 = 0
 
     /// 诊断(§65-66): 搜索索引重建次数 / onDataChange 通知次数。
@@ -679,6 +679,15 @@ public final class LauncherStore: LauncherStoring, LayoutMutationCompleting, Set
             config.customDisplayNames != self.config.customDisplayNames
             || config.language != self.config.language
             || config.hiddenAppIDs != self.config.hiddenAppIDs
+        // Only grid-visible data invalidates the display revision. Wallpaper, chrome,
+        // activation, and source callbacks have their own immediate-effect paths.
+        let gridDataChanged =
+            config.gridColumns != self.config.gridColumns
+            || config.gridRows != self.config.gridRows
+            || config.iconSize != self.config.iconSize
+            || config.hiddenAppIDs != self.config.hiddenAppIDs
+            || config.customDisplayNames != self.config.customDisplayNames
+            || config.language != self.config.language
         do {
             try settingsStore.save(config)
         } catch {
@@ -696,9 +705,13 @@ public final class LauncherStore: LauncherStoring, LayoutMutationCompleting, Set
         if customSourcesChanged {
             onCustomSourcesChange?(config.customSourceDirectories)
         }
-        bumpRevision()
+        if gridDataChanged {
+            bumpRevision()
+        }
         onConfigChange?(config)
-        notifyDataChange()
+        if gridDataChanged {
+            notifyDataChange()
+        }
     }
 
     public var allApps: [(id: AppID, name: String)] {
