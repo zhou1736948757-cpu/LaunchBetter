@@ -213,6 +213,105 @@ struct SettingsWindowControllerTests {
         #expect(try table(identifier: "settings.hiddenApps", in: window).numberOfRows == 1)
     }
 
+    // MARK: - P0-03 呈现快照查找
+
+    @Test("hidden rows resolve names from the presentation snapshot without per-row allApps scans")
+    func hiddenRowLookupUsesSnapshot() throws {
+        let apps = (0..<20).map { AppID(normalized: "/Applications/App\($0).app") }
+        let hidden = Array(apps.prefix(5))
+        let handler = CountingSettingsHandlerStub(
+            config: AppConfiguration(hiddenAppIDs: hidden, language: .english),
+            allApps: apps.map { ($0, "App \($0.rawValue)") }
+        )
+        let controller = SettingsWindowController(handler: handler)
+        let window = try #require(controller.window)
+        let table = try table(identifier: "settings.hiddenApps", in: window)
+
+        // 构建期快照 = 恰好 1 次 allApps 访问。
+        #expect(handler.allAppsAccessCount == 1)
+
+        // 渲染全部隐藏行: 名称全部来自快照, 不再触发 allApps。
+        for row in 0..<hidden.count {
+            let cell = try #require(
+                table.view(atColumn: 0, row: row, makeIfNecessary: true) as? SettingsHiddenRowCell
+            )
+            #expect(cell.nameLabel.stringValue == "App \(hidden[row].rawValue)")
+        }
+        #expect(handler.allAppsAccessCount == 1)
+
+        // 再次呈现: 只多 1 次快照刷新。
+        controller.present()
+        #expect(handler.allAppsAccessCount == 2)
+    }
+
+    @Test("available hidden apps refresh from the snapshot after add, remove, and external config change")
+    func availableHiddenAppsRefreshWithSnapshot() throws {
+        let first = AppID(normalized: "/Applications/First.app")
+        let second = AppID(normalized: "/Applications/Second.app")
+        let handler = SettingsHandlerStub(
+            config: AppConfiguration(language: .english),
+            allApps: [(first, "First"), (second, "Second")]
+        )
+        let panels = SettingsPanelStub()
+        let controller = SettingsWindowController(
+            handler: handler,
+            iconProvider: nil,
+            sourcePanelPresenter: panels.sourcePresenter,
+            hiddenPanelPresenter: panels.hiddenPresenter
+        )
+        let window = try #require(controller.window)
+        let contentView = try #require(window.contentView)
+        let add = try #require(descendant(
+            of: NSButton.self,
+            identifier: "addHidden",
+            in: contentView
+        ))
+
+        // 初始: 两个都可隐藏。
+        #expect(add.sendAction(add.action, to: add.target))
+        #expect(panels.hiddenApps.map(\.id) == [first, second])
+        panels.completeHidden(first)
+
+        // 隐藏 first 后: 只剩 second 可隐藏。
+        #expect(add.sendAction(add.action, to: add.target))
+        #expect(panels.hiddenApps.map(\.id) == [second])
+        panels.completeHidden(nil)
+
+        // 移除隐藏行后: 两个都恢复可隐藏。
+        controller.removeHiddenApp(at: 0)
+        #expect(add.sendAction(add.action, to: add.target))
+        #expect(panels.hiddenApps.map(\.id) == [first, second])
+        panels.completeHidden(nil)
+
+        // 外部配置变化(如上下文菜单隐藏)后呈现: 快照随呈现刷新。
+        handler.replaceConfig(AppConfiguration(
+            hiddenAppIDs: [second],
+            language: .english
+        ))
+        controller.present()
+        #expect(add.sendAction(add.action, to: add.target))
+        #expect(panels.hiddenApps.map(\.id) == [first])
+        panels.completeHidden(nil)
+    }
+
+    @Test("custom-name changes refresh hidden row names on next presentation")
+    func customNameRefreshOnPresentation() throws {
+        let appID = AppID(normalized: "/Applications/Custom.app")
+        let handler = CountingSettingsHandlerStub(
+            config: AppConfiguration(hiddenAppIDs: [appID], language: .english),
+            allApps: [(appID, "Old Name")]
+        )
+        let controller = SettingsWindowController(handler: handler)
+        let window = try #require(controller.window)
+        let table = try table(identifier: "settings.hiddenApps", in: window)
+
+        #expect(try rowText(in: table, row: 0) == "Old Name")
+
+        handler.updateAllApps([(appID, "New Name")])
+        controller.present()
+        #expect(try rowText(in: table, row: 0) == "New Name")
+    }
+
     @Test("add controls do not present duplicate sheets and hidden add disables when no candidates remain")
     func addControlsGateDuplicateSheetsAndEmptyHiddenCandidates() throws {
         let appID = AppID(normalized: "/Applications/Only.app")
@@ -929,6 +1028,40 @@ private final class SettingsHandlerStub: SettingsHandling {
 
     func replaceConfig(_ config: AppConfiguration) {
         self.config = config
+    }
+}
+
+/// P0-03: 记录 allApps 访问次数 + 可变名称(自定义名同步语义验证)。
+@MainActor
+private final class CountingSettingsHandlerStub: SettingsHandling {
+    private(set) var config: AppConfiguration
+    private var backingAllApps: [(id: AppID, name: String)]
+    private(set) var allAppsAccessCount = 0
+
+    init(
+        config: AppConfiguration,
+        allApps: [(id: AppID, name: String)] = []
+    ) {
+        self.config = config
+        self.backingAllApps = allApps
+    }
+
+    var allApps: [(id: AppID, name: String)] {
+        allAppsAccessCount += 1
+        return backingAllApps
+    }
+
+    func save(_ config: AppConfiguration) {
+        self.config = config
+        L10n.configure(language: config.language)
+    }
+
+    func replaceConfig(_ config: AppConfiguration) {
+        self.config = config
+    }
+
+    func updateAllApps(_ apps: [(id: AppID, name: String)]) {
+        backingAllApps = apps
     }
 }
 

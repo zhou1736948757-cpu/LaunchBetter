@@ -448,11 +448,35 @@ public final class SettingsWindowController: NSWindowController {
         let savedConfig = handler.config
         sourcesData = savedConfig.customSourceDirectories
         hiddenData = savedConfig.hiddenAppIDs
+        refreshHiddenPresentationSnapshot()
         if reloadTables {
             sourcesList?.reloadData()
             hiddenList?.reloadData()
             refreshRemoveButtonEnabledState()
         }
+    }
+
+    /// 呈现作用域的隐藏表面快照(P0-03): 单次 `handler.allApps` 构建
+    /// AppID → 显示名 查找表 + 隐藏成员集合, 供 `availableHiddenApps` 与
+    /// 隐藏行配置使用, 消除逐行/逐次 O(n) 扫描(旧实现 O(n²))。
+    ///
+    /// 刷新点 = 呈现同步(`synchronizeSavedListsForPresentation`)与初始构建
+    /// (`buildHiddenSection`), 覆盖全部 hiddenData 变化路径(commit 后同步、
+    /// 外部配置变化后呈现、语言重建)。自定义名/配置变化语义与旧实现一致:
+    /// 每次呈现/保存后重新读取 `handler.allApps`。
+    private var hiddenPresentationApps: [(id: AppID, name: String)] = []
+    private var hiddenAppNameByID: [AppID: String] = [:]
+    private var hiddenIDSet: Set<AppID> = []
+
+    private func refreshHiddenPresentationSnapshot() {
+        hiddenPresentationApps = handler.allApps
+        // uniquingKeysWith 取首个, 与旧实现 `first { $0.id == appID }` 语义一致
+        // (防御重复 ID, 不崩溃)。
+        hiddenAppNameByID = Dictionary(
+            hiddenPresentationApps.map { ($0.id, $0.name) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        hiddenIDSet = Set(hiddenData)
     }
 
     /// 选择变化/列表刷新后同步移除按钮的可用状态(不依赖事件时序)。
@@ -462,8 +486,9 @@ public final class SettingsWindowController: NSWindowController {
         addHiddenButton?.isEnabled = !availableHiddenApps.isEmpty
     }
 
+    /// 可隐藏应用 = 快照中未被隐藏的应用(保持 handler.allApps 顺序)。
     var availableHiddenApps: [(id: AppID, name: String)] {
-        handler.allApps.filter { !hiddenData.contains($0.id) }
+        hiddenPresentationApps.filter { !hiddenIDSet.contains($0.id) }
     }
 
     private func positionWindowForFreshPresentationIfNeeded(
@@ -839,6 +864,7 @@ public final class SettingsWindowController: NSWindowController {
 
     private func buildHiddenSection() -> NSStackView {
         hiddenData = config.hiddenAppIDs
+        refreshHiddenPresentationSnapshot()
         let scroll = NSScrollView()
         scroll.heightAnchor.constraint(equalToConstant: 260).isActive = true
         scroll.widthAnchor.constraint(equalToConstant: 300).isActive = true
@@ -1185,15 +1211,16 @@ extension SettingsWindowController: NSTableViewDataSource, NSTableViewDelegate {
 
         guard hiddenData.indices.contains(row) else { return nil }
         let appID = hiddenData[row]
-        let app = handler.allApps.first { $0.id == appID }
+        // P0-03: 名称/存在性来自呈现快照(O(1)), 不再逐行扫描 handler.allApps。
+        let name = hiddenAppNameByID[appID]
         let cell = tableView.makeView(
             withIdentifier: SettingsHiddenRowCell.reuseIdentifier,
             owner: self
         ) as? SettingsHiddenRowCell ?? SettingsHiddenRowCell(frame: .zero)
         cell.configure(
             appID: appID,
-            name: app?.name ?? appID.rawValue,
-            provider: app == nil ? nil : iconProvider,
+            name: name ?? appID.rawValue,
+            provider: name == nil ? nil : iconProvider,
             pointSize: Self.hiddenIconPointSize,
             scale: hiddenIconScale
         )
