@@ -283,7 +283,7 @@ public final class WallpaperProvider: @unchecked Sendable {
     // MARK: - 渲染
 
     /// 共享 CIContext(文档保证线程安全, 可跨线程复用), 避免每次模糊渲染新建。
-    nonisolated(unsafe) private static let ciContext = CIContext(options: [.useSoftwareRenderer: false])
+    private static let ciContext = CIContext(options: [.useSoftwareRenderer: false])
 
     /// cover 缩放居中裁剪 + 高斯模糊。
     static func render(
