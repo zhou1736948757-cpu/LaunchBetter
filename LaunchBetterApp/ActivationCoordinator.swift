@@ -75,7 +75,9 @@ public final class ActivationCoordinator {
         let corners = hotCornerConfigSnapshot
         let point = NSEvent.mouseLocation
         var detected = "outside"
-        if let screen = NSScreen.screens.first(where: { $0.frame.contains(point) }) {
+        if let screen = NSScreen.screens.first(where: {
+            HotCornerMonitor.screenFrameContains($0.frame, point: point)
+        }) {
             let f = screen.frame
             let top = f.maxY - point.y < 24, bottom = point.y - f.minY < 24
             let left = point.x - f.minX < 24, right = f.maxX - point.x < 24

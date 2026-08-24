@@ -55,7 +55,10 @@ public final class LauncherWindow: NSWindow {
         guard let point else { return nil }
         for screen in NSScreen.screens {
             let frame: NSRect = screen.frame
-            if frame.contains(point) {
+            // 含边界：鼠标压在屏幕最顶/最右边时 Cocoa 坐标 == frame.maxY/maxX，
+            // CGRect.contains 会漏掉这些点（热角场景常见）。
+            if point.x >= frame.minX, point.x <= frame.maxX,
+               point.y >= frame.minY, point.y <= frame.maxY {
                 return screen
             }
         }

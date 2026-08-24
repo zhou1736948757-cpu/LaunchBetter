@@ -43,10 +43,22 @@ public final class HotCornerMonitor: @unchecked Sendable {
         lock.unlock()
     }
 
+    /// 屏幕命中判定：包含 min/max 边界。
+    ///
+    /// `CGRect.contains` 不含 maxX/maxY。鼠标压到屏幕最顶/最右边时，
+    /// `NSEvent.mouseLocation` 会返回恰好等于 frame.maxY/maxX 的坐标，
+    /// 用 contains 会把热角整体漏掉（旧版实现用 <= 包含边界）。
+    public static func screenFrameContains(_ frame: NSRect, point: NSPoint) -> Bool {
+        point.x >= frame.minX && point.x <= frame.maxX
+            && point.y >= frame.minY && point.y <= frame.maxY
+    }
+
     private func tick() {
         let corners = config()
         let point = NSEvent.mouseLocation
-        guard let screen = NSScreen.screens.first(where: { $0.frame.contains(point) }) else {
+        guard let screen = NSScreen.screens.first(where: {
+            Self.screenFrameContains($0.frame, point: point)
+        }) else {
             return
         }
         let frame = screen.frame
