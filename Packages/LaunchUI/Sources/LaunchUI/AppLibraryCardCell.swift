@@ -69,11 +69,9 @@ enum AppLibraryIconPlaceholder {
     }
 
     static func stableColorIndex(for appID: AppID) -> Int {
-        var hash: UInt64 = 5381
-        for byte in appID.rawValue.utf8 {
-            hash = hash &* 33 &+ UInt64(byte)
-        }
-        return Int(hash % 12)
+        // 与主网格/FolderView 的规范一致: unicode scalar 值求和 mod 12,
+        // 保证同一 AppID 在所有 surface 上回退到同一色块(12 桶不变)。
+        abs(appID.rawValue.unicodeScalars.reduce(0) { $0 &+ Int($1.value) }) % 12
     }
 }
 

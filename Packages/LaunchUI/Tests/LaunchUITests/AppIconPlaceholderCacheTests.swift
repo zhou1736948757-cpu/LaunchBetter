@@ -70,4 +70,20 @@ struct AppIconPlaceholderCacheTests {
         #expect(pixels.width == 64)
         #expect(pixels.height == 64)
     }
+
+    @Test("stableColorIndex matches canonical sum-of-scalars (same AppID across surfaces)")
+    func stableColorIndexMatchesCanonicalSumOfScalars() {
+        // 主网格/FolderView 的规范: unicode scalar 值求和 mod 12。App Library
+        // 必须与之一致, 保证同一 AppID 在所有 surface 上回退到同一色块。
+        let ids = [
+            appID,
+            AppID(normalized: "/Applications/Safari.app"),
+            AppID(normalized: "/Applications/Notes.app"),
+            AppID(normalized: "/Applications/Xcode.app"),
+        ]
+        for id in ids {
+            let canonical = abs(id.rawValue.unicodeScalars.reduce(0) { $0 &+ Int($1.value) }) % 12
+            #expect(AppLibraryIconPlaceholder.stableColorIndex(for: id) == canonical)
+        }
+    }
 }

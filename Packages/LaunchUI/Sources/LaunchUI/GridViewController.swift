@@ -266,8 +266,6 @@ final class GridViewController: NSViewController {
     private var lastAppliedLanguage = L10n.currentLanguage
     /// 最近一次用来配置 AppCell/预热图标的有效 pointSize, 防止布局回调循环 reload。
     private var lastConfiguredEffectivePointSize: Int?
-    /// 退出搜索后恢复的页码。
-    private var pagedPageBeforeSearch = 0
 
     /// 搜索模式(诊断/拖拽开关)。
     var isSearchMode: Bool { searchMode }

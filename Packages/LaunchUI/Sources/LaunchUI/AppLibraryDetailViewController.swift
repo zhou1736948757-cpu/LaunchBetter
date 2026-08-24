@@ -243,6 +243,11 @@ final class AppLibraryDetailRowCell: NSCollectionViewItem {
         rowRoot.onMouseUp = { [weak self] in
             self?.dispatchSelection()
         }
+        // 每次 mouseUp(含超阈值远释放)都恢复行 transform, 避免按压态残留;
+        // 选中仍由 onMouseUp 在 6pt 阈值内单独分发。
+        rowRoot.onMouseUpAlways = { [weak self] in
+            self?.endPress()
+        }
         rowRoot.onRightMouseDown = { [weak self] point in
             self?.handleRightClick(at: point)
         }
@@ -341,6 +346,12 @@ final class AppLibraryDetailRowCell: NSCollectionViewItem {
         animateTransform(CATransform3DMakeScale(MotionTokens.titlePressScale, MotionTokens.titlePressScale, 1))
     }
 
+    /// 恢复按压态: 每次 mouseUp 都调用(含超阈值远释放), 保证 transform 不残留。
+    private func endPress() {
+        guard !reducedMotion else { return }
+        animateTransform(CATransform3DIdentity)
+    }
+
     private func applyIcon(_ image: CGImage?) {
         if let image {
             appliedCGImage = image
@@ -398,14 +409,16 @@ private final class LibraryDetailRootView: NSView {
     }
 }
 
-/// detail 行根视图: 转发 mouseDown/mouseUp; 超过 6pt 位移的 mouseUp 不转发。
-/// 右键(rightMouseDown)单独转发给行 cell(分类菜单入口)。
+/// detail 行根视图: 转发 mouseDown/mouseUp; 超过 6pt 位移的 mouseUp 不转发选中。
+/// 每次 mouseUp(含远释放/无配对)都触发 onMouseUpAlways(恢复行 transform),
+/// 选中仅由 onMouseUp 在 6pt 阈值内分发。右键(rightMouseDown)单独转发给行 cell。
 @MainActor
 private final class DetailRowRootView: NSView {
     private static let pressClickThreshold: CGFloat = 6
 
     var onMouseDown: (() -> Void)?
     var onMouseUp: (() -> Void)?
+    var onMouseUpAlways: (() -> Void)?
     var onRightMouseDown: ((NSPoint) -> Void)?
     private var mouseDownPoint: NSPoint?
 
@@ -416,6 +429,8 @@ private final class DetailRowRootView: NSView {
 
     override func mouseUp(with event: NSEvent) {
         guard let start = mouseDownPoint else {
+            // 无配对 mouseUp: 仍恢复 transform, 保持状态安全。
+            onMouseUpAlways?()
             onMouseUp?()
             return
         }
@@ -423,6 +438,8 @@ private final class DetailRowRootView: NSView {
         let point = convert(event.locationInWindow, from: nil)
         let dx = point.x - start.x
         let dy = point.y - start.y
+        // 每次配对 mouseUp 都恢复 transform(含远释放), 避免按压态残留。
+        onMouseUpAlways?()
         if dx * dx + dy * dy <= Self.pressClickThreshold * Self.pressClickThreshold {
             onMouseUp?()
         }

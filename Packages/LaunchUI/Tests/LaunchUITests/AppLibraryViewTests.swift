@@ -288,6 +288,109 @@ struct AppLibraryViewTests {
         #expect(controller.presentedDetail != nil)
     }
 
+    @Test("far-release mouseUp restores the row transform (no stuck press state)")
+    func detailRowFarReleaseRestoresTransform() throws {
+        var launched: [AppID] = []
+        let controller = AppLibraryViewController(
+            model: makeModel(),
+            displayName: { $0.rawValue },
+            iconProvider: nil,
+            onLaunch: { launched.append($0) }
+        )
+        let window = host(controller)
+        defer { window.orderOut(nil); window.contentView = nil }
+
+        try openProductivityDetail(in: controller)
+        let detail = try #require(controller.presentedDetail)
+        window.layoutIfNeeded()
+        controller.view.layoutSubtreeIfNeeded()
+        detail.view.layoutSubtreeIfNeeded()
+        detail.collectionView.layoutSubtreeIfNeeded()
+        let row = try #require(
+            detail.collectionView.visibleItems()
+                .compactMap { $0 as? AppLibraryDetailRowCell }.first
+        )
+        let downPoint = row.view.convert(
+            CGPoint(x: row.view.bounds.midX, y: row.view.bounds.midY), to: nil
+        )
+        row.view.mouseDown(with: mouseEvent(.leftMouseDown, at: downPoint, window: window))
+        // 非 Reduce Motion 下按压应缩放; Reduce Motion 下 beginPress 跳过, 不断言中间态。
+        if !MotionEnvironment.reduceMotion {
+            #expect(!CATransform3DEqualToTransform(row.view.layer?.transform ?? CATransform3DIdentity, CATransform3DIdentity))
+        }
+        row.view.mouseUp(
+            with: mouseEvent(.leftMouseUp, at: CGPoint(x: downPoint.x + 100, y: downPoint.y), window: window)
+        )
+        // 远释放不选中, 但 transform 必须恢复恒等(不残留按压态)。
+        #expect(launched.isEmpty)
+        #expect(CATransform3DEqualToTransform(row.view.layer?.transform ?? CATransform3DIdentity, CATransform3DIdentity))
+    }
+
+    @Test("within-threshold click mouseUp restores the row transform")
+    func detailRowClickRestoresTransform() throws {
+        var launched: [AppID] = []
+        let controller = AppLibraryViewController(
+            model: makeModel(),
+            displayName: { $0.rawValue },
+            iconProvider: nil,
+            onLaunch: { launched.append($0) }
+        )
+        let window = host(controller)
+        defer { window.orderOut(nil); window.contentView = nil }
+
+        try openProductivityDetail(in: controller)
+        let detail = try #require(controller.presentedDetail)
+        window.layoutIfNeeded()
+        controller.view.layoutSubtreeIfNeeded()
+        detail.view.layoutSubtreeIfNeeded()
+        detail.collectionView.layoutSubtreeIfNeeded()
+        let row = try #require(
+            detail.collectionView.visibleItems()
+                .compactMap { $0 as? AppLibraryDetailRowCell }.first
+        )
+        let downPoint = row.view.convert(
+            CGPoint(x: row.view.bounds.midX, y: row.view.bounds.midY), to: nil
+        )
+        row.view.mouseDown(with: mouseEvent(.leftMouseDown, at: downPoint, window: window))
+        row.view.mouseUp(
+            with: mouseEvent(.leftMouseUp, at: CGPoint(x: downPoint.x + 4, y: downPoint.y - 4), window: window)
+        )
+        // 阈值内点击选中, 且 transform 恢复恒等(不残留按压态)。
+        #expect(launched == [p1])
+        #expect(CATransform3DEqualToTransform(row.view.layer?.transform ?? CATransform3DIdentity, CATransform3DIdentity))
+    }
+
+    @Test("unpaired mouseUp restores transform and still selects")
+    func detailRowUnpairedMouseUpRestoresTransform() throws {
+        var launched: [AppID] = []
+        let controller = AppLibraryViewController(
+            model: makeModel(),
+            displayName: { $0.rawValue },
+            iconProvider: nil,
+            onLaunch: { launched.append($0) }
+        )
+        let window = host(controller)
+        defer { window.orderOut(nil); window.contentView = nil }
+
+        try openProductivityDetail(in: controller)
+        let detail = try #require(controller.presentedDetail)
+        window.layoutIfNeeded()
+        controller.view.layoutSubtreeIfNeeded()
+        detail.view.layoutSubtreeIfNeeded()
+        detail.collectionView.layoutSubtreeIfNeeded()
+        let row = try #require(
+            detail.collectionView.visibleItems()
+                .compactMap { $0 as? AppLibraryDetailRowCell }.first
+        )
+        let point = row.view.convert(
+            CGPoint(x: row.view.bounds.midX, y: row.view.bounds.midY), to: nil
+        )
+        // 无配对 mouseDown 的 mouseUp: 保持既有选中行为, 且 transform 保持恒等(安全)。
+        row.view.mouseUp(with: mouseEvent(.leftMouseUp, at: point, window: window))
+        #expect(launched == [p1])
+        #expect(CATransform3DEqualToTransform(row.view.layer?.transform ?? CATransform3DIdentity, CATransform3DIdentity))
+    }
+
     @Test("mouseDown then mouseUp within 6pt of a detail row still selects")
     func detailRowMouseUpWithinThresholdSelects() throws {
         var launched: [AppID] = []
