@@ -23,3 +23,12 @@ Entries are workspace records, not authoritative runtime decisions.
 | 2026-08-24 | artifact | docs/aegis/work/2026-08-24-launchbetter-convergence-phase2/resume-state-hint.json | 2026-08-24-launchbetter-convergence-phase2 resume state hint |
 | 2026-08-25 | artifact | docs/aegis/work/2026-08-24-launchbetter-convergence-phase2/gate-input-pack.json | 2026-08-24-launchbetter-convergence-phase2 gate input pack |
 | 2026-08-25 | work | docs/aegis/work/2026-08-24-launchbetter-convergence-phase2/proof-bundle.md | 2026-08-24-launchbetter-convergence-phase2 proof bundle |
+| 2026-08-25 | work | docs/aegis/work/2026-08-25-launchbetter-convergence-phase3/10-intent.md | LaunchBetter Convergence Phase 3 intent |
+| 2026-08-25 | work | docs/aegis/work/2026-08-25-launchbetter-convergence-phase3/20-checkpoint.md | LaunchBetter Convergence Phase 3 checkpoint |
+| 2026-08-25 | work | docs/aegis/work/2026-08-25-launchbetter-convergence-phase3/90-evidence.md | LaunchBetter Convergence Phase 3 evidence |
+| 2026-08-25 | work | docs/aegis/work/2026-08-25-launchbetter-convergence-phase3/95-retirement.md | LaunchBetter Convergence Phase 3 retirement |
+| 2026-08-25 | work | docs/aegis/work/2026-08-25-launchbetter-convergence-phase3/99-reflection.md | LaunchBetter Convergence Phase 3 reflection |
+| 2026-08-25 | work | docs/aegis/work/2026-08-25-launchbetter-convergence-phase3/PAGE_VISUAL_OWNERSHIP.md | PageVisual ownership audit |
+| 2026-08-25 | work | docs/aegis/work/2026-08-25-launchbetter-convergence-phase3/WINDOW_OWNERSHIP.md | Window ownership audit |
+| 2026-08-25 | work | docs/aegis/work/2026-08-25-launchbetter-convergence-phase3/LAUNCHER_STORE_OWNERSHIP.md | LauncherStore ownership audit |
+| 2026-08-25 | work | docs/aegis/work/2026-08-25-launchbetter-convergence-phase3/PUBLICATION_RUNTIME_AUDIT.md | Publication and runtime gate audit |
