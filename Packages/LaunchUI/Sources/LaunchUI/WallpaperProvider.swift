@@ -41,8 +41,17 @@ public final class WallpaperProvider: @unchecked Sendable {
         }
     }
 
+    /// 归一化渲染请求: 仅保留影响渲染输出的参数(像素尺寸/缩放/模糊),
+    /// 忽略 screenFrame.origin —— 窗口位置变化不应使内存缓存失效。
+    struct NormalizedRenderRequest: Sendable, Equatable, Hashable {
+        let pixelWidth: Int
+        let pixelHeight: Int
+        let scale: CGFloat
+        let blurRadius: Double
+    }
+
     private struct CacheKey: Sendable, Equatable, Hashable {
-        let request: RenderRequest
+        let request: NormalizedRenderRequest
         let sourceIdentity: SourceIdentity
     }
 
@@ -54,6 +63,18 @@ public final class WallpaperProvider: @unchecked Sendable {
     /// 渲染分辨率系数(模糊背景低分辨率不可感知, 0.25x 减少 16 倍像素工作量)。
     private static let renderScaleFactor: CGFloat = 0.25
 
+    /// 把请求归一化为实际渲染参数(与 `render` 的入参一致), 用作内存缓存身份。
+    /// 忽略 screenFrame.origin: 相同像素尺寸/缩放/模糊的请求共享同一缓存条目。
+    static func normalizedRequest(for request: RenderRequest) -> NormalizedRenderRequest {
+        let scale = request.backingScale * renderScaleFactor
+        return NormalizedRenderRequest(
+            pixelWidth: Int(request.screenFrame.width * scale),
+            pixelHeight: Int(request.screenFrame.height * scale),
+            scale: scale,
+            blurRadius: request.blurRadius * Double(renderScaleFactor)
+        )
+    }
+
     public init(cachesURL: URL) {
         self.cachesURL = cachesURL
     }
@@ -61,11 +82,14 @@ public final class WallpaperProvider: @unchecked Sendable {
     /// 渲染模糊壁纸(同步, 后台线程调用)。
     /// 路径: 内存缓存 → 磁盘缓存 → 渲染(半分辨率, in-flight 去重)+ 双缓存。
     public func blurredWallpaper(for request: RenderRequest) -> CGImage? {
-        guard let wallpaper = wallpaperSourceURL() else {
+        guard let wallpaper = wallpaperSourceURL(for: request) else {
             return nil
         }
         let sourceIdentity = Self.sourceIdentity(for: wallpaper)
-        let cacheKey = CacheKey(request: request, sourceIdentity: sourceIdentity)
+        let cacheKey = CacheKey(
+            request: Self.normalizedRequest(for: request),
+            sourceIdentity: sourceIdentity
+        )
 
         condition.lock()
         // in-flight 去重: 同一 key 并发请求共享一次渲染(预渲染与首显竞争场景)
@@ -132,9 +156,9 @@ public final class WallpaperProvider: @unchecked Sendable {
 
     /// 内存缓存命中(主线程安全; 未命中返回 nil)。
     public func cachedWallpaper(for request: RenderRequest) -> CGImage? {
-        guard let wallpaper = wallpaperSourceURL() else { return nil }
+        guard let wallpaper = wallpaperSourceURL(for: request) else { return nil }
         let cacheKey = CacheKey(
-            request: request,
+            request: Self.normalizedRequest(for: request),
             sourceIdentity: Self.sourceIdentity(for: wallpaper)
         )
         condition.lock()
@@ -194,13 +218,48 @@ public final class WallpaperProvider: @unchecked Sendable {
 
     // MARK: - 壁纸来源
 
-    private func wallpaperSourceURL() -> URL? {
-        for screen in NSScreen.screens {
+    /// 为请求所代表的目标显示器选择壁纸来源。
+    /// 请求 frame 是窗口内容 bounds(origin 为窗口局部坐标), 因此按尺寸匹配屏幕;
+    /// 目标屏无壁纸时回退到任意有壁纸的屏幕(保持原有兜底行为)。
+    private func wallpaperSourceURL(for request: RenderRequest) -> URL? {
+        let screens = NSScreen.screens
+        if let index = Self.targetScreenIndex(
+            for: request,
+            availableFrames: screens.map(\.frame)
+        ), screens.indices.contains(index),
+           let url = NSWorkspace.shared.desktopImageURL(for: screens[index]) {
+            return url
+        }
+        for screen in screens {
             if let url = NSWorkspace.shared.desktopImageURL(for: screen) {
                 return url
             }
         }
         return nil
+    }
+
+    /// 确定性屏幕选择: 在可用屏幕中挑出 frame 尺寸与请求 frame 尺寸最接近的,
+    /// 平局取靠前者(确定性, 不依赖 NSScreen.main)。无屏幕返回 nil。
+    static func targetScreenIndex(
+        for request: RenderRequest,
+        availableFrames: [CGRect]
+    ) -> Int? {
+        guard let first = availableFrames.first else { return nil }
+        let requestSize = request.screenFrame.size
+        var bestIndex = 0
+        var bestDistance = Self.sizeDistance(first.size, requestSize)
+        for (index, frame) in availableFrames.enumerated().dropFirst() {
+            let distance = Self.sizeDistance(frame.size, requestSize)
+            if distance < bestDistance {
+                bestDistance = distance
+                bestIndex = index
+            }
+        }
+        return bestIndex
+    }
+
+    private static func sizeDistance(_ a: CGSize, _ b: CGSize) -> CGFloat {
+        abs(a.width - b.width) + abs(a.height - b.height)
     }
 
     static func sourceIdentity(for sourceURL: URL) -> SourceIdentity {
@@ -222,6 +281,9 @@ public final class WallpaperProvider: @unchecked Sendable {
     }
 
     // MARK: - 渲染
+
+    /// 共享 CIContext(文档保证线程安全, 可跨线程复用), 避免每次模糊渲染新建。
+    nonisolated(unsafe) private static let ciContext = CIContext(options: [.useSoftwareRenderer: false])
 
     /// cover 缩放居中裁剪 + 高斯模糊。
     static func render(
@@ -280,10 +342,9 @@ public final class WallpaperProvider: @unchecked Sendable {
         guard let output = filter?.outputImage else { return scaled }
 
         // 裁剪回目标尺寸(模糊会扩展边缘)
-        let context2 = CIContext(options: [.useSoftwareRenderer: false])
         let cropRect = CGRect(x: 0, y: 0, width: pixelWidth, height: pixelHeight)
         let cropped = output.cropped(to: cropRect)
-        return context2.createCGImage(cropped, from: cropRect)
+        return Self.ciContext.createCGImage(cropped, from: cropRect)
     }
 }
 

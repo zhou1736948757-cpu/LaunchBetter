@@ -124,6 +124,86 @@ struct WallpaperProviderTests {
         #expect(originalName != cacheName(for: request, sourceIdentity: replaced))
     }
 
+    @Test("memory cache identity ignores screenFrame origin when render params match")
+    func cacheKeyIgnoresOrigin() {
+        let base = WallpaperProvider.RenderRequest(
+            screenFrame: CGRect(x: 0, y: 0, width: 1440, height: 900),
+            backingScale: 2,
+            blurRadius: 30
+        )
+        let moved = WallpaperProvider.RenderRequest(
+            screenFrame: CGRect(x: 120, y: -80, width: 1440, height: 900),
+            backingScale: 2,
+            blurRadius: 30
+        )
+        #expect(
+            WallpaperProvider.normalizedRequest(for: base)
+                == WallpaperProvider.normalizedRequest(for: moved)
+        )
+    }
+
+    @Test("memory cache identity distinguishes render-affecting parameters")
+    func cacheKeyDistinguishesRenderParams() {
+        let base = WallpaperProvider.RenderRequest(
+            screenFrame: CGRect(x: 0, y: 0, width: 1440, height: 900),
+            backingScale: 2,
+            blurRadius: 30
+        )
+        let differentBlur = WallpaperProvider.RenderRequest(
+            screenFrame: base.screenFrame,
+            backingScale: base.backingScale,
+            blurRadius: 40
+        )
+        let differentScale = WallpaperProvider.RenderRequest(
+            screenFrame: base.screenFrame,
+            backingScale: 1,
+            blurRadius: base.blurRadius
+        )
+        let differentSize = WallpaperProvider.RenderRequest(
+            screenFrame: CGRect(x: 0, y: 0, width: 1920, height: 1080),
+            backingScale: base.backingScale,
+            blurRadius: base.blurRadius
+        )
+        let baseKey = WallpaperProvider.normalizedRequest(for: base)
+        #expect(baseKey != WallpaperProvider.normalizedRequest(for: differentBlur))
+        #expect(baseKey != WallpaperProvider.normalizedRequest(for: differentScale))
+        #expect(baseKey != WallpaperProvider.normalizedRequest(for: differentSize))
+    }
+
+    @Test("source selection picks the screen matching the request frame size")
+    func sourceSelectionMatchesRequestSize() {
+        let request = WallpaperProvider.RenderRequest(
+            screenFrame: CGRect(x: 0, y: 0, width: 1440, height: 900),
+            backingScale: 2,
+            blurRadius: 30
+        )
+        let frames = [
+            CGRect(x: 0, y: 0, width: 1920, height: 1080),
+            CGRect(x: 1920, y: 0, width: 1440, height: 900),
+        ]
+        #expect(WallpaperProvider.targetScreenIndex(for: request, availableFrames: frames) == 1)
+    }
+
+    @Test("source selection is deterministic and safe with no screens")
+    func sourceSelectionDeterministicFallback() {
+        let request = WallpaperProvider.RenderRequest(
+            screenFrame: CGRect(x: 0, y: 0, width: 1440, height: 900),
+            backingScale: 2,
+            blurRadius: 30
+        )
+        // 单屏: 唯一候选
+        let single = [CGRect(x: 0, y: 0, width: 1920, height: 1080)]
+        #expect(WallpaperProvider.targetScreenIndex(for: request, availableFrames: single) == 0)
+        // 无屏幕: 安全回退
+        #expect(WallpaperProvider.targetScreenIndex(for: request, availableFrames: []) == nil)
+        // 平局(同尺寸): 确定性取靠前者
+        let tie = [
+            CGRect(x: 0, y: 0, width: 1440, height: 900),
+            CGRect(x: 1440, y: 0, width: 1440, height: 900),
+        ]
+        #expect(WallpaperProvider.targetScreenIndex(for: request, availableFrames: tie) == 0)
+    }
+
     private func renderRequest() -> WallpaperProvider.RenderRequest {
         WallpaperProvider.RenderRequest(
             screenFrame: CGRect(x: 0, y: 0, width: 1440, height: 900),
