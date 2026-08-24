@@ -1656,6 +1656,43 @@ struct AppLibraryViewTests {
         let after = cardCells(controller).map(\.cardID)
         #expect(after == before, "即时刷新路径不得扰动卡片身份/布局")
     }
+
+    // MARK: - L5 detail Reduce Motion 快照
+
+    @Test("detail caches Reduce Motion once at load; rows reuse the snapshot (L5)")
+    func detailReduceMotionSnapshotCachedAtLoad() throws {
+        let live = MotionEnvironment.reduceMotion
+        let override = !live
+
+        // 直接构造 detail, 在 loadView 前注入与实时系统值不同的快照,
+        // 使断言可证伪: 若行配置逐行查询系统, 行值会等于 live 而非 override。
+        let detail = AppLibraryDetailViewController(
+            title: "Productivity",
+            appIDs: [p1, p2, p3, p4],
+            displayName: { $0.rawValue },
+            iconProvider: nil,
+            onSelect: { _ in },
+            onClose: {},
+            onCategoryMenu: nil
+        )
+        detail.setReloadReduceMotionForTesting(override)
+        let window = host(detail)
+        defer { window.orderOut(nil); window.contentView = nil }
+
+        // 控制器诊断与可见行都等于注入的覆盖值, 且与实时系统值不同。
+        #expect(detail.reloadReduceMotionForDiag == override)
+        #expect(detail.reloadReduceMotionForDiag != live)
+
+        window.layoutIfNeeded()
+        detail.view.layoutSubtreeIfNeeded()
+        detail.collectionView.layoutSubtreeIfNeeded()
+        let row = try #require(
+            detail.collectionView.visibleItems()
+                .compactMap { $0 as? AppLibraryDetailRowCell }.first
+        )
+        #expect(row.reducedMotionForDiag == override)
+        #expect(row.reducedMotionForDiag != live)
+    }
 }
 
 /// 可控图标 provider: 记录请求; 可选挂起每个 AppID 的请求, 由测试 release。

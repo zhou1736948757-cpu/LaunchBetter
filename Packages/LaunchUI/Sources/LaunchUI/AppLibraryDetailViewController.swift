@@ -34,6 +34,21 @@ public final class AppLibraryDetailViewController: NSViewController {
     private let detailCollectionView = LibraryCollectionView()
     private var dataSource: NSCollectionViewDiffableDataSource<Int, AppID>?
 
+    /// Reduce Motion 快照(L5): 每个行 cell configure 都读
+    /// `MotionEnvironment.reduceMotion`(内部 3 次 NSWorkspace 查询)太贵。
+    /// 在 loadView(本 detail 每次打开新建控制器, 无独立 reload API)读取一次缓存,
+    /// 行配置复用该值。
+    ///
+    /// [DEFER BASIS] 系统设置变更时, 已呈现的 detail 停留在本次 load 快照上,
+    /// 直到关闭重开才刷新。触发/owner: 后续 live 刷新应仿照
+    /// AppLibraryViewController 的 F9 路径——注册
+    /// `MotionEnvironment.displayOptionsDidChange` 观察者, 在回调里重读快照并
+    /// 重放 diffable snapshot(需先为 detail 引入 reload 入口)。当前 detail 无
+    /// reload API 且每次打开新建, 故不在此引入观察者/共享抽象。
+    private var reloadReduceMotion = false
+    /// 测试 seam 标记: 已注入覆盖值时, loadView 不再读取系统值。
+    private var reloadReduceMotionOverridden = false
+
     public init(
         title: String,
         appIDs: [AppID],
@@ -58,6 +73,12 @@ public final class AppLibraryDetailViewController: NSViewController {
     }
 
     public override func loadView() {
+        // L5: load 级入口读取一次系统动效快照, 行配置复用缓存值,
+        // 避免每个 cell configure 重复 NSWorkspace 查询。
+        // 测试 seam 已注入覆盖值时保持覆盖值(生产路径不注入, 仍读取一次系统值)。
+        if !reloadReduceMotionOverridden {
+            reloadReduceMotion = MotionEnvironment.reduceMotion
+        }
         detailRootView.wantsLayer = true
         detailRootView.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.35).cgColor
         detailRootView.onEscape = { [weak self] in
@@ -111,7 +132,7 @@ public final class AppLibraryDetailViewController: NSViewController {
                 name: self.displayName(appID),
                 provider: self.iconProvider,
                 backingScale: self.currentBackingScale,
-                reducedMotion: MotionEnvironment.reduceMotion,
+                reducedMotion: self.reloadReduceMotion,
                 onSelect: { [weak self] selected in
                     self?.handleSelect(selected)
                 },
@@ -151,6 +172,17 @@ public final class AppLibraryDetailViewController: NSViewController {
 
     /// 测试 seam: 集合视图。
     var collectionView: NSCollectionView { detailCollectionView }
+
+    /// 测试 seam(L5): 当前缓存的 Reduce Motion 快照值。
+    var reloadReduceMotionForDiag: Bool { reloadReduceMotion }
+
+    /// 测试 seam(L5): 在 loadView 前注入缓存的 Reduce Motion 快照,
+    /// 使测试能构造与实时系统值不同的快照, 验证行配置确实复用缓存而非逐行查询。
+    /// 仅测试调用; 生产路径不调用, loadView 仍读取一次 MotionEnvironment.reduceMotion。
+    func setReloadReduceMotionForTesting(_ value: Bool) {
+        reloadReduceMotion = value
+        reloadReduceMotionOverridden = true
+    }
 
     /// 测试 seam: Escape 路径(与 keyDown(53)/cancelOperation 同一入口)。
     func handleEscape() {
@@ -235,6 +267,9 @@ final class AppLibraryDetailRowCell: NSCollectionViewItem {
     /// 测试 seam: 已应用的 provider 图标。
     private(set) var appliedCGImage: CGImage?
 
+    /// 测试 seam(L5): 本行配置时收到的 Reduce Motion 快照值。
+    private(set) var reducedMotionForDiag = false
+
     override func loadView() {
         rowRoot.wantsLayer = true
         rowRoot.onMouseDown = { [weak self] in
@@ -296,6 +331,7 @@ final class AppLibraryDetailRowCell: NSCollectionViewItem {
         representedAppID = appID
         self.backingScale = max(1, backingScale)
         self.reducedMotion = reducedMotion
+        reducedMotionForDiag = reducedMotion
         self.onSelect = onSelect
         self.onCategoryMenu = onCategoryMenu
         nameLabel.stringValue = name
