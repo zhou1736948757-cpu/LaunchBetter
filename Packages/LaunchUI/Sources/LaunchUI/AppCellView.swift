@@ -59,7 +59,10 @@ final class AppCellView: NSCollectionViewItem {
     /// Press feedback 的独立 visual owner。root.layer.transform 仍由拖拽排序拥有，
     /// iconLayer.transform 仍由 App→App 建夹高亮拥有，二者不与此层抢写。
     private let pressContainerView = NSView()
-    private let folderThumbnailView = FolderThumbnailView()
+    /// 文件夹缩略图视图懒分配: 普通 App 配置不实例化/不加入层级。
+    /// 仅 configureFolder 经 ensureFolderThumbnailView() 创建并复用同一实例;
+    /// App 配置(configure)经 releaseFolderThumbnailView() 真正移除并置 nil。
+    private var folderThumbnailView: FolderThumbnailView?
     private let label = NSTextField(labelWithString: "")
     private let letterLayer = CATextLayer()
     private var labelBottomConstraint: NSLayoutConstraint?
@@ -100,7 +103,7 @@ final class AppCellView: NSCollectionViewItem {
     /// 不触发新的图标请求, 也不访问磁盘。
     func dragRepresentation() -> DragVisualRepresentation? {
         if representedFolderID != nil {
-            return folderThumbnailView.dragRepresentation()
+            return folderThumbnailView?.dragRepresentation()
         }
 
         guard representedAppID != nil, let image = visibleIconImage else { return nil }
@@ -127,7 +130,7 @@ final class AppCellView: NSCollectionViewItem {
 
         let frame: CGRect
         if representedFolderID != nil {
-            guard !folderThumbnailView.isHidden else { return nil }
+            guard let folderThumbnailView, !folderThumbnailView.isHidden else { return nil }
             frame = folderThumbnailView.convert(folderThumbnailView.bounds, to: targetView)
         } else {
             guard representedAppID != nil, !iconLayer.isHidden else { return nil }
@@ -194,7 +197,7 @@ final class AppCellView: NSCollectionViewItem {
         }
         let sourceView: NSView
         if representedFolderID != nil {
-            guard !folderThumbnailView.isHidden else { return nil }
+            guard let folderThumbnailView, !folderThumbnailView.isHidden else { return nil }
             sourceView = folderThumbnailView
         } else {
             guard representedAppID != nil, !iconLayer.isHidden else { return nil }
@@ -212,7 +215,7 @@ final class AppCellView: NSCollectionViewItem {
     /// 真实 source 的圆角语义，供 proxy 几何起点使用。
     var transitionSourceCornerRadius: CGFloat {
         if representedFolderID != nil {
-            return folderThumbnailView.layer?.cornerRadius ?? 16
+            return folderThumbnailView?.layer?.cornerRadius ?? 16
         }
         return iconLayer.cornerRadius
     }
@@ -293,9 +296,6 @@ final class AppCellView: NSCollectionViewItem {
         iconLayer.masksToBounds = true
         pressContainerView.layer?.addSublayer(iconLayer)
 
-        folderThumbnailView.isHidden = true
-        pressContainerView.addSubview(folderThumbnailView)
-
         letterLayer.fontSize = 36
         letterLayer.alignmentMode = .center
         letterLayer.foregroundColor = NSColor.white.cgColor
@@ -361,8 +361,10 @@ final class AppCellView: NSCollectionViewItem {
         iconLayer.bounds = CGRect(origin: .zero, size: iconFrame.size)
         iconLayer.position = CGPoint(x: iconFrame.midX, y: iconFrame.midY)
         letterLayer.frame = iconFrame
-        folderThumbnailView.frame = iconFrame
-        folderThumbnailView.updateLayout()
+        if let folderThumbnailView {
+            folderThumbnailView.frame = iconFrame
+            folderThumbnailView.updateLayout()
+        }
         let scale = view.window?.backingScaleFactor ?? 2
         iconLayer.contentsScale = scale
         letterLayer.fontSize = size * 0.5
@@ -380,7 +382,9 @@ final class AppCellView: NSCollectionViewItem {
         representedFolderID = nil
         folderChildAppIDs = []
         iconProvider = nil
-        folderThumbnailView.reset()
+        // 复用只隐藏/重置已存在的缩略图, 不释放: 若复用为文件夹则复用同一实例;
+        // 若复用为 App 则由 configure() 在 beginConfiguration 之后显式 release。
+        folderThumbnailView?.reset()
         resetCreateFolderTargetHighlight()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -409,6 +413,9 @@ final class AppCellView: NSCollectionViewItem {
         iconProvider: (any IconImageProviding)?
     ) {
         beginConfiguration()
+        // App 配置: 显式释放文件夹缩略图层级(文件夹→App 复用/重配置时真正
+        // 移除并置 nil)。beginConfiguration 只隐藏/重置, 释放在此完成。
+        releaseFolderThumbnailView()
         // 极小可用高度下，分页网格会继续缩小图标以保证最后一行不越界。
         iconPointSize = max(1, pointSize)
         letterLayer.string = String(displayName.prefix(1)).uppercased()
@@ -465,6 +472,11 @@ final class AppCellView: NSCollectionViewItem {
     ) {
         beginConfiguration()
         iconPointSize = max(1, pointSize)
+        // 懒创建: 普通 App 配置不实例化; 文件夹配置在此创建唯一实例。
+        let thumbnail = ensureFolderThumbnailView()
+        // 新创建的缩略图立即按当前几何定位(不依赖后续 layout pass; 懒创建
+        // 发生在首次布局之后, 不能等 viewDidLayout 才给 frame)。
+        layoutIconAndLabel()
         label.stringValue = displayName
         view.setAccessibilityElement(true)
         view.setAccessibilityRole(.button)
@@ -486,7 +498,7 @@ final class AppCellView: NSCollectionViewItem {
 
         let scale = currentBackingScale
         lastRequestedScale = scale
-        folderThumbnailView.configure(
+        thumbnail.configure(
             iconCount: visibleChildren.count,
             scale: CGFloat(scale)
         )
@@ -510,8 +522,8 @@ final class AppCellView: NSCollectionViewItem {
         if let appID = representedAppID, let iconProvider {
             startAppIconRequest(appID, provider: iconProvider, scale: scale)
         } else if let folderID = representedFolderID, let iconProvider {
-            folderThumbnailView.updateScale(CGFloat(scale))
-            folderThumbnailView.clearIconContents()
+            folderThumbnailView?.updateScale(CGFloat(scale))
+            folderThumbnailView?.clearIconContents()
             startFolderIconRequests(
                 folderID: folderID,
                 children: folderChildAppIDs,
@@ -540,8 +552,32 @@ final class AppCellView: NSCollectionViewItem {
         representedFolderID = nil
         folderChildAppIDs = []
         iconProvider = nil
-        folderThumbnailView.reset()
+        // 只隐藏/重置已存在的缩略图, 不释放: 文件夹重配置经 ensure 复用同一实例;
+        // App 配置在 beginConfiguration 之后显式 release。
+        folderThumbnailView?.reset()
         iconLayer.isHidden = false
+    }
+
+    /// 懒创建文件夹缩略图视图并加入 pressContainer 层级; 若已存在则复用同一
+    /// 实例(文件夹重配置不销毁重建)。普通 App 配置不调用; 仅 configureFolder 调用。
+    private func ensureFolderThumbnailView() -> FolderThumbnailView {
+        if let folderThumbnailView { return folderThumbnailView }
+        let thumbnail = FolderThumbnailView()
+        thumbnail.isHidden = true
+        pressContainerView.addSubview(thumbnail)
+        folderThumbnailView = thumbnail
+        return thumbnail
+    }
+
+    /// 释放文件夹缩略图层级: reset 状态、从 superview 移除并置 nil, 使
+    /// NSVisualEffectView + container/sheen + 9 个图标 layer 真正被释放。
+    /// 仅 App 配置(configure)在 beginConfiguration 之后调用; 下一次文件夹
+    /// 配置经 ensure 重新创建。
+    private func releaseFolderThumbnailView() {
+        guard let folderThumbnailView else { return }
+        folderThumbnailView.reset()
+        folderThumbnailView.removeFromSuperview()
+        self.folderThumbnailView = nil
     }
 
     private func registerPendingDragGrabOffset(pointerInWindow: NSPoint) {
@@ -622,7 +658,7 @@ final class AppCellView: NSCollectionViewItem {
                       let self,
                       self.representedFolderID == folderID,
                       self.requestGeneration == expectedGeneration else { return }
-                self.folderThumbnailView.setIcon(image, at: index, scale: CGFloat(scale))
+                self.folderThumbnailView?.setIcon(image, at: index, scale: CGFloat(scale))
             }
         }
     }
