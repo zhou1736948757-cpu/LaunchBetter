@@ -105,14 +105,23 @@ final class PageVisualRenderer {
     }
 
     /// 单页图标请求计划(有界 TaskGroup 的输入; 保持页内请求顺序)。
+    /// 每个请求携带自己的 pointSize: 普通 app 按整格 iconSize, 文件夹子图标
+    /// 按缩略图实际显示尺寸(metrics.iconSide, P0-05)。
     private enum IconRequest: Sendable {
-        case app(AppID)
-        case folderChild(folderID: FolderID, appID: AppID, index: Int)
+        case app(AppID, pointSize: Int)
+        case folderChild(folderID: FolderID, appID: AppID, index: Int, pointSize: Int)
 
         var appID: AppID {
             switch self {
-            case .app(let id): return id
-            case .folderChild(_, let id, _): return id
+            case .app(let id, _): return id
+            case .folderChild(_, let id, _, _): return id
+            }
+        }
+
+        var pointSize: Int {
+            switch self {
+            case .app(_, let pointSize): return pointSize
+            case .folderChild(_, _, _, let pointSize): return pointSize
             }
         }
     }
@@ -136,7 +145,15 @@ final class PageVisualRenderer {
         guard let iconProvider, geometry.iconSize > 0 else {
             return PageVisualIconSet(appIcons: [:], folderIcons: [:], availableIDs: [])
         }
-        let pointSize = max(1, Int(geometry.iconSize.rounded(.down)))
+        // P0-05: 普通 app 按整格 iconSize 请求; 文件夹子图标按缩略图实际
+        // 显示尺寸请求(metrics.iconSide, 向下取整, 与 live AppCellView 同一
+        // 取整约定 → 同一 IconKey 缓存身份)。渲染器把文件夹缩略图绘制在
+        // 单元格 frame(cellSize 正方形)内, 故 side = cellSize。
+        let appPointSize = max(1, Int(geometry.iconSize.rounded(.down)))
+        let folderChildPointSize = max(
+            1,
+            Int(FolderThumbnailMetrics(side: geometry.cellSize).iconSide.rounded(.down))
+        )
 
         // 1. 收集唯一请求(保持页内首次出现顺序): 普通 app 去重; 每个 folder
         //    取 children.prefix(9)(子项数组保持 payload 顺序)。
@@ -147,10 +164,10 @@ final class PageVisualRenderer {
             switch item {
             case .app(let appID):
                 if seenAppIDs.insert(appID).inserted {
-                    requests.append(.app(appID))
+                    requests.append(.app(appID, pointSize: appPointSize))
                 }
             case .folder(let folderID):
-                let children = Array(folderChildrenPayload[folderID]?.prefix(9) ?? [])
+                let children = Array(folderChildrenPayload[folderID]?.prefix(FolderThumbnailMetrics.maxIconCount) ?? [])
                 if !children.isEmpty {
                     folderChildren[folderID] = children
                 }
@@ -160,7 +177,12 @@ final class PageVisualRenderer {
         for folderID in folderChildren.keys.sorted(by: { $0.rawValue < $1.rawValue }) {
             guard let children = folderChildren[folderID] else { continue }
             for (index, child) in children.enumerated() {
-                requests.append(.folderChild(folderID: folderID, appID: child, index: index))
+                requests.append(.folderChild(
+                    folderID: folderID,
+                    appID: child,
+                    index: index,
+                    pointSize: folderChildPointSize
+                ))
             }
         }
 
@@ -177,7 +199,7 @@ final class PageVisualRenderer {
                     // 强捕获 provider(实现类均 @MainActor final class)。
                     group.addTask {
                         let image = await iconProvider.icon(
-                            for: request.appID, pointSize: pointSize, scale: scale
+                            for: request.appID, pointSize: request.pointSize, scale: scale
                         )
                         return (requestIndex, image)
                     }
@@ -202,9 +224,9 @@ final class PageVisualRenderer {
             guard let image = results[index] else { continue }
             availableIDs.insert(request.appID)
             switch request {
-            case .app(let appID):
+            case .app(let appID, _):
                 appIcons[appID] = image
-            case .folderChild(let folderID, _, let childIndex):
+            case .folderChild(let folderID, _, let childIndex, _):
                 folderIcons[folderID]?[childIndex] = image
             }
         }
@@ -404,7 +426,10 @@ final class PageVisualRenderer {
             width: side,
             height: side
         )
-        let radius = min(18, max(10, side * 0.2))
+        // P0-04: 几何唯一真值来自 FolderThumbnailMetrics(与 live
+        // FolderThumbnailView 共用同一公式, 消除两处硬编码漂移)。
+        let metrics = FolderThumbnailMetrics(side: side)
+        let radius = metrics.radius
         let path = CGPath(
             roundedRect: thumbFrame, cornerWidth: radius, cornerHeight: radius, transform: nil
         )
@@ -438,29 +463,28 @@ final class PageVisualRenderer {
             )
         }
 
-        // 子图标网格(≤9): padding = side*0.11, gap = side*0.025, 圆角 = side*0.16。
-        let padding = max(5, side * 0.11)
-        let gap = max(2, side * 0.025)
-        let iconSide = max(1, (side - padding * 2 - gap * 2) / 3)
-        for (index, icon) in childIcons.prefix(9).enumerated() {
+        // 子图标网格(≤9): 几何来自 FolderThumbnailMetrics。rasterize 上下文
+        // 已翻转为 y-down(与 flipped 文档一致), top-down childFrame 直接映射
+        // (与旧实现逐位一致)。
+        for (index, icon) in childIcons.prefix(FolderThumbnailMetrics.maxIconCount).enumerated() {
             guard let icon else { continue }
-            let row = index / 3
-            let col = index % 3
-            let childFrame = CGRect(
-                x: thumbFrame.minX + padding + CGFloat(col) * (iconSide + gap),
-                y: thumbFrame.minY + padding + CGFloat(row) * (iconSide + gap),
-                width: iconSide,
-                height: iconSide
+            let childFrame = metrics.childFrame(index: index)
+            let childRect = CGRect(
+                x: thumbFrame.minX + childFrame.minX,
+                y: thumbFrame.minY + childFrame.minY,
+                width: childFrame.width,
+                height: childFrame.height
             )
             context.saveGState()
-            let childRadius = min(5, max(2, iconSide * 0.16))
             let childPath = CGPath(
-                roundedRect: childFrame, cornerWidth: childRadius, cornerHeight: childRadius,
+                roundedRect: childRect,
+                cornerWidth: metrics.childRadius,
+                cornerHeight: metrics.childRadius,
                 transform: nil
             )
             context.addPath(childPath)
             context.clip()
-            context.draw(icon, in: childFrame)
+            context.draw(icon, in: childRect)
             context.restoreGState()
         }
         context.restoreGState()

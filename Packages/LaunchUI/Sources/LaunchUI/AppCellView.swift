@@ -54,7 +54,6 @@ final class AppCellView: NSCollectionViewItem {
 
     /// 标签高度(pt)。
     private static let labelHeight: CGFloat = 13
-    private static let maxFolderIconCount = 9
 
     private let iconLayer = CALayer()
     /// Press feedback 的独立 visual owner。root.layer.transform 仍由拖拽排序拥有，
@@ -480,7 +479,7 @@ final class AppCellView: NSCollectionViewItem {
         // E13: 文件夹单元格不复用普通 App 图标层; 遮罩状态随占位信号恢复。
         updateIconMasking()
 
-        let visibleChildren = Array(children.prefix(Self.maxFolderIconCount))
+        let visibleChildren = Array(children.prefix(FolderThumbnailMetrics.maxIconCount))
         folderChildAppIDs = visibleChildren
         representedFolderID = folderID
         self.iconProvider = iconProvider
@@ -607,8 +606,14 @@ final class AppCellView: NSCollectionViewItem {
         scale: Int
     ) {
         let expectedGeneration = requestGeneration
-        let size = iconPointSize
-        folderIconRequestTasks = children.prefix(Self.maxFolderIconCount).enumerated().map {
+        // P0-05: 子图标按缩略图实际显示尺寸请求(metrics.iconSide, 向下取整,
+        // 与 PageVisualRenderer.resolveIcons 同一取整约定 → 同一 IconKey 缓存
+        // 身份)。旧实现按整格 iconPointSize 请求(~4.1× 线性超采)。
+        let size = max(
+            1,
+            Int(FolderThumbnailMetrics(side: CGFloat(iconPointSize)).iconSide.rounded(.down))
+        )
+        folderIconRequestTasks = children.prefix(FolderThumbnailMetrics.maxIconCount).enumerated().map {
             index, appID in
             Task { [weak self] in
                 guard !Task.isCancelled else { return }
@@ -650,8 +655,6 @@ final class AppCellView: NSCollectionViewItem {
 /// 缩略图误认为普通 App 单元格。所有尺寸都按当前 cell 的 point/Retina scale
 /// 重新计算，图标 layer 不跨 cell 共享。
 private final class FolderThumbnailView: NSVisualEffectView {
-    private static let maxIconCount = 9
-
     private let iconContainerLayer = CALayer()
     private let sheenLayer = CAGradientLayer()
     private var iconLayers: [CALayer] = []
@@ -674,7 +677,7 @@ private final class FolderThumbnailView: NSVisualEffectView {
         sheenLayer.endPoint = CGPoint(x: 0.8, y: 0)
         iconContainerLayer.addSublayer(sheenLayer)
 
-        for _ in 0..<Self.maxIconCount {
+        for _ in 0..<FolderThumbnailMetrics.maxIconCount {
             let iconLayer = CALayer()
             iconLayer.contentsGravity = .resizeAspect
             iconLayer.masksToBounds = true
@@ -697,7 +700,7 @@ private final class FolderThumbnailView: NSVisualEffectView {
     }
 
     func configure(iconCount: Int, scale: CGFloat) {
-        self.iconCount = min(max(0, iconCount), Self.maxIconCount)
+        self.iconCount = FolderThumbnailMetrics.clampedIconCount(iconCount)
         updateScale(scale)
         for iconLayer in iconLayers {
             iconLayer.contents = nil
@@ -737,28 +740,26 @@ private final class FolderThumbnailView: NSVisualEffectView {
 
     func updateLayout() {
         guard bounds.width > 0, bounds.height > 0 else { return }
-        let side = min(bounds.width, bounds.height)
-        let radius = min(18, max(10, side * 0.2))
-        layer?.cornerRadius = radius
+        // P0-04: 几何唯一真值来自 FolderThumbnailMetrics(与 PageVisualRenderer
+        // 共用同一公式, 消除两处硬编码漂移)。
+        let metrics = FolderThumbnailMetrics(side: min(bounds.width, bounds.height))
+        layer?.cornerRadius = metrics.radius
         iconContainerLayer.frame = bounds
-        iconContainerLayer.cornerRadius = radius
+        iconContainerLayer.cornerRadius = metrics.radius
         sheenLayer.frame = bounds
-        sheenLayer.cornerRadius = radius
+        sheenLayer.cornerRadius = metrics.radius
 
-        let padding = max(5, side * 0.11)
-        let gap = max(2, side * 0.025)
-        let iconSide = max(1, (side - (padding * 2) - (gap * 2)) / 3)
         for (index, iconLayer) in iconLayers.enumerated() {
-            let row = index / 3
-            let column = index % 3
+            let frame = metrics.childFrame(index: index)
+            // AppKit 非翻转视图: 子图标网格锚定到完整 bounds 底部(top-down
+            // childFrame 的 y 翻转; 非正方形 bounds 用 bounds.height 而非 side)。
             iconLayer.frame = CGRect(
-                x: padding + CGFloat(column) * (iconSide + gap),
-                y: bounds.height - padding - CGFloat(row + 1) * iconSide
-                    - CGFloat(row) * gap,
-                width: iconSide,
-                height: iconSide
+                x: frame.minX,
+                y: bounds.height - frame.maxY,
+                width: frame.width,
+                height: frame.height
             )
-            iconLayer.cornerRadius = min(5, max(2, iconSide * 0.16))
+            iconLayer.cornerRadius = metrics.childRadius
         }
     }
 
