@@ -120,6 +120,14 @@ public final class LauncherStore: LauncherStoring, LayoutMutationCompleting, Set
         }
     }
 
+    /// Library-only metadata 变更通知: 仅触发 dataObservers(如 Library host),
+    /// 不 bump displayRevision、不触发 grid onDataChange → 避免不必要的 grid 全量刷新。
+    private func notifyLibraryDataChange() {
+        for observer in Array(dataObservers.values) {
+            observer()
+        }
+    }
+
     public init(
         catalogActor: AppCatalogActor,
         layoutStore: LayoutStore,
@@ -322,11 +330,10 @@ public final class LauncherStore: LauncherStoring, LayoutMutationCompleting, Set
     private func applyMetadataSnapshot(_ snapshot: AppLibraryMetadataSnapshot) {
         guard snapshot != metadataSnapshot else { return }
         metadataSnapshot = snapshot
-        // L12: 不再 eager 重建——仅标记 dirty + bump + notify; UI 经
+        // L12: 不再 eager 重建——仅标记 dirty + notify; UI 经
         // appLibraryModel() accessor 惰性重建。
         libraryModelDirty = true
-        bumpRevision()
-        notifyDataChange()
+        notifyLibraryDataChange()
     }
 
     /// L3/F2: 进程退出同步桥——等待 metadata 全部 pending 写完成(含 coalesced 最新

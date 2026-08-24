@@ -151,6 +151,11 @@ final class GridViewController: NSViewController {
     /// 分页交互控制器(v0.1.6): 手势状态 + 唯一 offset writer。
     private let paging = PagingInteractionController()
 
+    /// Library-only 数据观察者 token(P3-I): 元数据变更(launch usage / category
+    /// override)经此触发 `hostItem.refreshModel()`, 与 grid `refresh()` 的
+    /// displayRevision 门解耦 —— 不 bump revision、不触发 grid 全量刷新。
+    private var libraryDataObserverToken: UUID?
+
     // MARK: - P2 Page Compositor(实验, 默认关)
 
     /// 页面视觉缓存(working set ≤ 3)与渲染器(纯内存, idle 准备)。
@@ -450,6 +455,15 @@ final class GridViewController: NSViewController {
 
     deinit {
         Self.tearDownMemoryPressureSource(memoryPressureSource)
+        // P3-I: 注销 Library-only 数据观察者(幂等)。
+        // 硬约束: 本控制器为 @MainActor 类, 所有引用均在主线程持有/释放,
+        // deinit 必在主线程执行(与 memoryPressureSource teardown 同一前提)。
+        // 若未来该类变为 nonisolated, 此处需改用 nonisolated 清理路径。
+        if let token = libraryDataObserverToken {
+            MainActor.assumeIsolated {
+                store.removeDataObserver(token)
+            }
+        }
     }
 
     override func viewDidLayout() {
@@ -515,6 +529,15 @@ final class GridViewController: NSViewController {
         // 不新建第二套 hide 实现。
         hostItem.onBlankClick = { [weak self] in
             self?.onClickBlank?()
+        }
+        // P3-I: Library-only 元数据变更(launch usage / category override)经
+        // dataObservers 触发 host live 刷新, 不依赖 grid refresh() 的
+        // displayRevision 门(该门只对 grid-visible 结构变更递增)。
+        if let existing = libraryDataObserverToken {
+            store.removeDataObserver(existing)
+        }
+        libraryDataObserverToken = store.addDataObserver { [weak self] in
+            self?.hostItem.refreshModel()
         }
     }
 
@@ -640,6 +663,9 @@ final class GridViewController: NSViewController {
             // App Library live 刷新(PA2): 数据变化时同步 Library 模型
             // (host 已 attach 且 session active 才生效; 未 attach 由
             // makeController 重新固定, 不 endSession 重建)。
+            // P3-I: 此处与 dataObserver 路径可能双重调用 refreshModel(),
+            // 但 updateModel 幂等(model != self.model guard)→ 第二次为 no-op。
+            // 保留此调用作为 defense-in-depth(observer 尚未注册时仍可刷新 Library)。
             hostItem.refreshModel()
         }
         schedulePageVisualPrepare()
