@@ -32,3 +32,6 @@ Entries are workspace records, not authoritative runtime decisions.
 | 2026-08-25 | work | docs/aegis/work/2026-08-25-launchbetter-convergence-phase3/WINDOW_OWNERSHIP.md | Window ownership audit |
 | 2026-08-25 | work | docs/aegis/work/2026-08-25-launchbetter-convergence-phase3/LAUNCHER_STORE_OWNERSHIP.md | LauncherStore ownership audit |
 | 2026-08-25 | work | docs/aegis/work/2026-08-25-launchbetter-convergence-phase3/PUBLICATION_RUNTIME_AUDIT.md | Publication and runtime gate audit |
+| 2026-08-25 | work | docs/aegis/work/2026-08-25-launchbetter-runtime-hardening/10-intent.md | LaunchBetter Runtime Hardening intent |
+| 2026-08-25 | work | docs/aegis/work/2026-08-25-launchbetter-runtime-hardening/90-evidence.md | LaunchBetter Runtime Hardening evidence |
+| 2026-08-25 | work | docs/aegis/work/2026-08-25-launchbetter-runtime-hardening/99-reflection.md | LaunchBetter Runtime Hardening reflection |
