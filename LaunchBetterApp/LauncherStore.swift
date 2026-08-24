@@ -325,7 +325,7 @@ public final class LauncherStore: LauncherStoring, LayoutMutationCompleting, Set
         )
     }
 
-    /// 应用 metadata 变更(actor 返回的最新已确认快照): 更新快照 → 重建 model → 通知。
+    /// 应用 metadata 变更(actor 返回的最新已确认快照): 更新快照 → 标记 dirty → Library-only 通知。
     /// 相同快照为 no-op(幂等); model 始终从当前 Catalog/Config 重建, 无陈旧覆盖。
     private func applyMetadataSnapshot(_ snapshot: AppLibraryMetadataSnapshot) {
         guard snapshot != metadataSnapshot else { return }
@@ -367,7 +367,7 @@ public final class LauncherStore: LauncherStoring, LayoutMutationCompleting, Set
     }
 
     /// 设置手动分类覆盖: 经 metadata actor 持久化 → 复用
-    /// `applyMetadataSnapshot → rebuildLibraryModel → notify` 链路。
+    /// `applyMetadataSnapshot → libraryModelDirty → notifyLibraryDataChange` 链路。
     /// 不写 LayoutStore、不重启、不重扫、无 Info.plist IO。
     public func setCategoryOverride(appID: AppID, category: AppLibraryCategory) async {
         applyMetadataSnapshot(
