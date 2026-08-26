@@ -1,26 +1,26 @@
 {
   "Main": {
     "role": "Main",
-    "task_id": "T-015",
+    "task_id": "T-017",
     "status": "IDLE",
-    "last_heartbeat": "2026-08-26T17:07:56+09:00"
+    "last_heartbeat": "2026-08-27T00:42:10+09:00"
   },
   "Worker": {
     "role": "Worker",
-    "task_id": "T-015",
+    "task_id": "T-017",
     "status": "IDLE",
-    "last_heartbeat": "2026-08-26T17:04:37+09:00"
+    "last_heartbeat": "2026-08-27T00:37:55+09:00"
   },
   "Reviewer": {
     "role": "Reviewer",
-    "task_id": "T-015",
+    "task_id": "T-017",
     "status": "IDLE",
-    "last_heartbeat": "2026-08-26T17:07:56+09:00"
+    "last_heartbeat": "2026-08-27T00:41:58+09:00"
   },
   "Chief": {
     "role": "Chief",
-    "task_id": "T-015",
+    "task_id": "T-017",
     "status": "ACTIVE",
-    "last_heartbeat": "2026-08-26T17:00:39+09:00"
+    "last_heartbeat": "2026-08-27T00:32:40+09:00"
   }
 }
