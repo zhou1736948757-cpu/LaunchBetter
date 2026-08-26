@@ -1,0 +1,23 @@
+{
+  "workflow": "chef-worker-reviewer-workflow",
+  "version": "1.4",
+  "workflow_status": "READY",
+  "tasks": {
+    "T-000": {
+      "status": "READY",
+      "worker_attempts": 0,
+      "review_attempts": 0,
+      "worker_failures": 0,
+      "expert_worker_required": false,
+      "chief_escalation_required": false,
+      "plan_level_issue": false,
+      "next_route": "Main",
+      "current_worker_kind": "normal",
+      "same_reviewer_policy": null,
+      "latest_runtime_update": "2026-08-26T13:39:02+09:00"
+    }
+  },
+  "active_agent_jobs": [],
+  "blockers": [],
+  "latest_runtime_update": "2026-08-26T13:39:02+09:00"
+}

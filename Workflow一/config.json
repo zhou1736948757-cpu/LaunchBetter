@@ -1,0 +1,13 @@
+{
+  "workflow": "chef-worker-reviewer-workflow",
+  "version": "1.4",
+  "configured_at": "2026-08-26T13:38:10+09:00",
+  "models": {
+    "main": "current-main-conversation",
+    "chief": "current-main-conversation",
+    "worker": "current-main-conversation",
+    "reviewer": "current-main-conversation"
+  },
+  "max_worker_concurrency": 3,
+  "thinking_depth": "high"
+}

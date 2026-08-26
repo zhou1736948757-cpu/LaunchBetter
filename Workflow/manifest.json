@@ -1,0 +1,21 @@
+{
+  "workflow": "chef-worker-reviewer-workflow",
+  "version": "1.4",
+  "project": "LaunchBetter",
+  "initialized_at": "2026-08-26T13:41:27+09:00",
+  "role_assignments": {
+    "main": "current-main-conversation",
+    "chief": "Chief",
+    "worker": "Worker",
+    "reviewer": "Reviewer"
+  },
+  "artifact_root": "Workflow",
+  "legacy_backup": "Workflow一",
+  "legacy_backup_read_only": true,
+  "runtime_config": "Workflow/config.json",
+  "plan": "Workflow/PLAN.md",
+  "main_brief": "Workflow/MAIN_BRIEF.md",
+  "state": "Workflow/STATE.json",
+  "events": "Workflow/events.jsonl",
+  "review_bundles": "Workflow/review-bundles/"
+}

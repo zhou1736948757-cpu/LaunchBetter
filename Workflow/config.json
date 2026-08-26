@@ -1,0 +1,13 @@
+{
+  "workflow": "chef-worker-reviewer-workflow",
+  "version": "1.4",
+  "configured_at": "2026-08-26T13:48:33+09:00",
+  "models": {
+    "main": "current-main-conversation",
+    "chief": "ollama/glm-5.2",
+    "worker": "ollama/deepseek-v4-flash:0731",
+    "reviewer": "ollama/minimax-m2.7"
+  },
+  "max_worker_concurrency": 2,
+  "thinking_depth": "max"
+}

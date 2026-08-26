@@ -489,3 +489,170 @@ v0.2.3 release commit (tag `v0.2.3`); 基线为 `v0.2.2` / `9ee1264`
 - 性能: 首次 show 36.2 ms、warm 2.2–5.6 ms；首次 wallpaper 232.8 ms、warm 2.1–5.5 ms。
 - 独立最终 Sol medium 审查: 0 blocker / 0 major / 0 minor。
 - Computer Use/屏幕捕获受 `.screenSaver`/权限链路限制；时间连续性、真实触控板甩动速度、120 Hz 手感均为 `MANUAL_PHYSICAL_GATE`，尚未验收。报告: `Docs/Reports/stage-d-motion-validation.md`。
+
+<!-- chef-worker-reviewer-workflow:memory:start -->
+## Workflow memory
+
+- Workflow version: `1.4` (fresh start 2026-08-26; previous run archived to `Workflow一/`)
+- Project: `LaunchBetter`
+- Initialized at: `2026-08-26T13:41:00+09:00` (fresh)
+- Reconfigured at: `2026-08-26T13:38:10+09:00` (superseded by fresh start)
+- Artifact root: `Workflow/`
+- Archive: `Workflow一/` (prior run T-001..T-012, ARCHIVE-NOTE.md included)
+- Source contract: `AGENTS.md`
+
+### Runtime configuration
+<!-- chef-worker-reviewer-workflow:runtime-config:start -->
+
+- Main/Orchestrator model declaration: `current-main-conversation` (current main conversation; routing may be unverified)
+- Chief model: `ollama/glm-5.2`
+- Worker model: `ollama/deepseek-v4-flash:0731`
+- Reviewer model: `ollama/minimax-m2.7`
+- Worker maximum concurrency: `2`
+- Default thinking depth: `max`
+- Configuration file: `Workflow/config.json`
+
+<!-- chef-worker-reviewer-workflow:runtime-config:end -->
+
+### Role assignments
+
+| Role | Owner / agent ID | Scope | Status |
+|---|---|---|---|
+| Main | `current-main-conversation` | Runtime center: dispatch, state, evidence | active |
+| Chief | `Chief` | planning, decisions, routing | idle |
+| Worker | `Worker` | bounded implementation tasks | idle |
+| Reviewer | `Reviewer` | independent verification | idle |
+
+### Current state
+
+- Workflow status: `PASSED` (T-013 closed 2026-08-26; T-014 record reconciliation closed with recorded deviation; T-015 acceptance-truthfulness correction closed 2026-08-26; automated acceptance complete; previous run archived to `Workflow一/`)
+- Active task: `none`
+- Next action: User supplies next development goal → Chief Initial Global Planning → `Workflow/PLAN.md` + initial task packets.
+- Blocker: `MANUAL_PHYSICAL_GATE` only (real-device 60/120 Hz trackpad/compositor validation — **OPEN / REQUIRED**; no physical validation performed)
+- Last verified: `2026-08-26T17:08:00+09:00`
+
+### Task ledger
+
+| Task ID | Objective | Owner | Status | Review | Evidence |
+|---|---|---|---|---|---|
+| `T-000` | Initialize workflow contract | Chief | `PASSED` | `N/A` | `AGENTS.md`, `Workflow/config.json`, `Workflow/manifest.json` |
+| `T-008` | Settle telemetry lifecycle correctness | Worker | `PASSED` | `T-008-R1-r1 PASS` | `Workflow/results/T-008.md`, `Workflow/reviews/T-008-R1-r1.md` |
+| `T-009` | Probe counter isolation and nonnegative semantics | Worker | `PASSED` | `T-009-r1 PASS` | `Workflow/results/T-009.md`, `Workflow/reviews/T-009-r1.md` |
+| `T-010` | Real active compositor interruption integration evidence | Worker | `PASSED` | `T-010-R2-r1 PASS` | `Workflow/results/T-010.md`, `Workflow/reviews/T-010-R2-r1.md` |
+| `T-011` | Strict callback ordering evidence | Worker | `PASSED` | `T-011-r1 PASS` | `Workflow/results/T-011.md`, `Workflow/reviews/T-011-r1.md` |
+| `T-012` | Final package/evidence verification before T-007 closure | Worker | `PASSED` | `T-012-r2 PASS; MANUAL_PHYSICAL_GATE open` | `Workflow/results/T-012.md` (canonical), `Workflow一/reviews/T-012-r2.md` |
+| `T-013` | Close final interruption evidence and normalize acceptance records | Worker | `PASSED` | `T-013-r1 PASS` | `Workflow/results/T-013.md`, `Workflow/reviews/T-013-r1.md` |
+| `T-014` | Final workflow state reconciliation (record-only) | Worker | `PASSED WITH RECORDED DEVIATION` | `T-014-r1 PASS; T-015-r1 PASS (AC2 lifecycle completeness NOT MET, Chief ACCEPT_RECORDED_DEVIATION)` | `Workflow/results/T-014.md`, `Workflow/reviews/T-014-r1.md`, `Workflow/decisions/T-015-t014-acceptance-deviation.md` |
+| `T-015` | T-014 acceptance-truthfulness correction & lifecycle recording discipline (record-only) | Worker | `PASSED` | `T-015-r1 PASS` | `Workflow/results/T-015.md`, `Workflow/reviews/T-015-r1.md` |
+| `T-007` | Corrected automated acceptance conclusion | Chief | `PASSED` | `T-013-r1 PASS; MANUAL_PHYSICAL_GATE open` | `Workflow/results/T-007.md` (canonical, precise diff attribution) |
+
+### Decisions
+
+No non-trivial decisions recorded yet.
+
+### Work log
+
+<!-- chef-worker-reviewer-workflow:work-log:start -->
+
+### 2026-08-25T19:36:39+09:00 — T-001
+- Role: `Worker`
+- Action: Implemented direction-aware two-page compositor + first page visual prepare
+- Result: All 445 LaunchUI tests pass, Reviewer PASS
+- Evidence: `Workflow/results/T-001.md`
+- Next: T-002 dispatch
+
+### 2026-08-25T19:36:39+09:00 — T-002
+- Role: `Worker`
+- Action: Disabled default diagnostics hot path + added activation reason telemetry
+- Result: All 453 LaunchUI tests pass, Reviewer PASS
+- Evidence: `Workflow/results/T-002.md`
+- Next: T-004 verification
+
+### 2026-08-25T19:36:39+09:00 — T-003
+- Role: `Worker`
+- Action: Added PagingFollowCurve opt-in damped experiment
+- Result: 10 new tests pass, Reviewer PASS, MANUAL_PHYSICAL_GATE
+- Evidence: `Workflow/results/T-003.md`
+- Next: T-004 verification
+
+### 2026-08-25T19:36:39+09:00 — T-004
+- Role: `Chief`
+- Action: Full verification: 802 tests pass across 3 packages, git diff clean
+- Result: All acceptance criteria met, MANUAL_PHYSICAL_GATE for trackpad
+- Evidence: `Workflow/results/T-004.md`
+- Next: Workflow complete
+
+### 2026-08-25T23:38:49+09:00 — T-005
+- Role: `Worker`
+- Action: Fixed PageVisual compositor placement gridOrigin alignment
+- Result: Coordinate tests and package verification passed; Reviewer PASS
+- Evidence: `Workflow/results/T-005.md`
+- Next: T-006 execution
+
+### 2026-08-25T23:38:50+09:00 — T-006
+- Role: `Chief`
+- Action: Accepted compositor interruption, telemetry, flag, damping, API repairs after review loop
+- Result: Final Reviewer PASS; Sol medium escalation ACCEPT; MANUAL_PHYSICAL_GATE remains
+- Evidence: `Workflow/reviews/T-006-final-r1.md`
+- Next: T-007 closure
+
+### 2026-08-25T23:38:50+09:00 — T-007
+- Role: `Chief`
+- Action: Completed final package verification
+- Result: LaunchCore 200, LaunchUI 459, LaunchPlatform 149; diff check clean
+- Evidence: `Workflow/results/T-007.md`
+- Next: Workflow complete with physical gate open
+
+### 2026-08-26T04:00:00+09:00 — T-012
+- Role: `Worker`
+- Action: Ran all required package, diff, and status verification commands; reconciled T-008 through T-011 evidence and reviews
+- Result: LaunchCore 200, LaunchUI 467, LaunchPlatform 149; diff check clean; T-010-R2 covered-reverse evidence PASS supersedes the earlier T-010-r1 FAIL; T-007 may be re-evaluated after final review; MANUAL_PHYSICAL_GATE remains open
+- Evidence: `Workflow/results/T-012.md`, `Workflow/reviews/T-010-R2-r1.md`
+- Next: Final Reviewer to certify corrected T-012, then update T-007 acceptance conclusion
+
+### 2026-08-26T04:30:00+09:00 — T-007 corrected closure
+- Role: `Chief`
+- Action: Reconciled T-008/T-009/T-010/T-011 evidence and corrected the reopened T-007 acceptance record
+- Result: Automated acceptance PASS; Core 200, UI 467, Platform 149; diff check clean; T-010-R2 PASS supersedes the earlier T-010-r1 FAIL; MANUAL_PHYSICAL_GATE remains open
+- Evidence: `Workflow/results/T-007.md`, `Workflow/reviews/T-012-r2.md`
+- Next: Real-device 60/120 Hz physical validation; do not claim subjective smoothness until performed
+
+### 2026-08-26T15:55:00+09:00 — T-013 closure
+- Role: `Main`
+- Action: Dispatched Worker (T-013-A last-page active-settle interruption test; T-013-B two telemetry E2E tests; T-013-C record normalization); verified production untouched (mtime + diff stat); independent Reviewer PASS (18/18)
+- Result: Automated acceptance PASS; Core 200, UI 470 (+3), Platform 149; diff check clean; last-page Page 2 → Page 3 active settle → mid-settle → Page 4-direction interruption → live fallback → Page 3 evidence closed; T-013 test/record-only; MANUAL_PHYSICAL_GATE remains open
+- Evidence: `Workflow/results/T-013.md`, `Workflow/reviews/T-013-r1.md`, `Workflow/results/T-007.md`, `Workflow/results/T-012.md`
+- Next: Real-device 60/120 Hz physical validation; do not claim subjective smoothness until performed
+
+### 2026-08-26T16:46:00+09:00 — T-014 closure
+- Role: `Main`
+- Action: Record-only final workflow state reconciliation: STATE fixed (T-000 PASSED, T-013 attempts 1/1 rebuilt from completion evidence, workflow PASSED); honest state_changed events appended (no backfilled dispatch/start); T-012-r2 Addendum 2 with nl -ba verified line numbers + stable section identifiers; T-000 configuration supersession decision; B1 evidence-scope addenda (T-013 result + review); independent Reviewer PASS (7/7)
+- Result: Record acceptance PASS; STATE/MEMORY/events consistent; no READY task coexists with PASSED workflow; git diff --check clean; HEAD==origin/main; no commit/push/tag/release; MANUAL_PHYSICAL_GATE remains open
+- Evidence: `Workflow/results/T-014.md`, `Workflow/reviews/T-014-r1.md`, `Workflow/decisions/T-000-configuration-supersession.md`
+- Next: Real-device 60/120 Hz physical validation; do not claim subjective smoothness until performed
+
+### 2026-08-26T17:08:00+09:00 — T-015 closure
+- Role: `Main`
+- Action: T-014 acceptance-truthfulness correction per user review: Chief Decision Delta ACCEPT_RECORDED_DEVIATION (T-014 AC2 timeline honesty PASS / lifecycle completeness NOT MET / no backfill of missing worker_dispatched/review_started; T-014 = PASSED WITH RECORDED DEVIATION); T-014 result 10-point Addendum; T-012-r2 Addendum 3 stable-reference policy (no live line numbers, resolve by heading + Task ID); T-013-r1 item 15 supersession note; Reviewer PASS 14/14 with Reviewer-owned confirmation; T-015 itself recorded the complete real lifecycle chain task_created → decision_recorded → worker_dispatched → worker_completed → review_started → review_passed → task_closed (events seq 13–19)
+- Result: Record acceptance PASS; all canonical records consistent; STATE/MEMORY/events aligned; git diff --check clean; HEAD==origin/main; no commit/push/tag/release; MANUAL_PHYSICAL_GATE remains OPEN/REQUIRED
+- Evidence: `Workflow/results/T-015.md`, `Workflow/reviews/T-015-r1.md`, `Workflow/decisions/T-015-t014-acceptance-deviation.md`
+- Next: Real-device 60/120 Hz physical validation; do not claim subjective smoothness until performed
+<!-- chef-worker-reviewer-workflow:work-log:end -->
+
+### Review findings
+
+No review findings recorded yet.
+
+### Risks and follow-ups
+
+- Confirm project-specific test commands before dispatching the first Worker task.
+- Keep detailed task, result, and review evidence in `Workflow/` and link to it here.
+
+### Update rules
+
+- Chief owns current state, task status, and decisions.
+- Worker appends implementation evidence and deviations.
+- Reviewer appends findings and verification results.
+- Keep entries concise, append-oriented, and free of secrets.
+- Do not delete resolved findings; mark them resolved with evidence.
+<!-- chef-worker-reviewer-workflow:memory:end -->
