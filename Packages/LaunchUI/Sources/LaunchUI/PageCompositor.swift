@@ -95,8 +95,11 @@ final class PageCompositorMetrics {
 /// - `finishSettle` / `abort` / `shutdown`: 同步 clip → reveal → 移除层。
 @MainActor
 final class PageCompositor {
-    /// 诊断事件环上限(M3): eventsForDiag 每帧 append 且永不清理,
-    /// 长时间会话会无限增长。超过该值丢弃最旧事件, 保留最近窗口。
+    /// 诊断事件开关(默认关; 测试/诊断 probe 显式开启才记录)。
+    /// 默认产品路径 diagnosticsEnabled == false, 完全不进入记录逻辑。
+    var diagnosticsEnabled = false
+
+    /// 诊断事件环上限(M3): 固定容量环形缓冲, 超过上限覆盖最旧事件。
     private static let maxDiagEvents = 64
     /// 一页视觉的放置信息(baseFrame 为宿主层坐标, y-up; 水平随 offset 漂移)。
     struct Placement {
@@ -130,13 +133,33 @@ final class PageCompositor {
     private var lastAppliedOffset: CGFloat = 0
     private var lastDirectionSign: CGFloat = 0
 
-    private(set) var eventsForDiag: [Event] = []
+    /// 固定容量环形缓冲(默认产品路径 diagnosticsEnabled == false, 不进入记录逻辑)。
+    private var diagBuffer: [Event?] = Array(repeating: nil, count: PageCompositor.maxDiagEvents)
+    private var diagStart = 0
+    private var diagCount = 0
 
-    /// 有界诊断事件记录: append 后超出上限移除最旧事件。
+    /// 有界诊断事件(按时间序; 仅 diagnosticsEnabled 时非空)。
+    var eventsForDiag: [Event] {
+        guard diagnosticsEnabled else { return [] }
+        var result: [Event] = []
+        result.reserveCapacity(diagCount)
+        for i in 0..<diagCount {
+            if let event = diagBuffer[(diagStart + i) % Self.maxDiagEvents] {
+                result.append(event)
+            }
+        }
+        return result
+    }
+
+    /// 有界诊断事件记录: 固定容量环形缓冲, 不调用 Array.removeFirst()。
     private func recordEvent(_ event: Event) {
-        eventsForDiag.append(event)
-        if eventsForDiag.count > Self.maxDiagEvents {
-            eventsForDiag.removeFirst(eventsForDiag.count - Self.maxDiagEvents)
+        guard diagnosticsEnabled else { return }
+        if diagCount < Self.maxDiagEvents {
+            diagBuffer[(diagStart + diagCount) % Self.maxDiagEvents] = event
+            diagCount += 1
+        } else {
+            diagBuffer[diagStart] = event
+            diagStart = (diagStart + 1) % Self.maxDiagEvents
         }
     }
 
@@ -190,7 +213,8 @@ final class PageCompositor {
     /// 每帧唯一 offset 写入: 只移动层, 不写 clip。
     func applyOffset(_ offset: CGFloat) {
         guard isActive else { return }
-        let start = CACurrentMediaTime()
+        // 默认产品路径 metrics.enabled == false: 不计算 frame apply duration。
+        let start = metrics.enabled ? CACurrentMediaTime() : 0
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         let drift = offset - startOffset
@@ -211,8 +235,21 @@ final class PageCompositor {
         }
         lastAppliedOffset = offset
         currentOffset = offset
-        metrics.recordFrameApply(durationUs: (CACurrentMediaTime() - start) * 1_000_000)
-        recordEvent(.applied(offset: offset))
+        if metrics.enabled {
+            metrics.recordFrameApply(durationUs: (CACurrentMediaTime() - start) * 1_000_000)
+        }
+        if diagnosticsEnabled {
+            recordEvent(.applied(offset: offset))
+        }
+    }
+
+    /// Whether the active presentation contains every requested page.
+    /// This is a production coverage query; diagnostic page-index access remains
+    /// intentionally separate.
+    func covers(pages: Set<Int>) -> Bool {
+        guard isActive else { return false }
+        let covered = Set(placements.map(\.page))
+        return pages.isSubset(of: covered)
     }
 
     /// settle 完成: 禁隐式动画下把真实 clip 同步到精确目标 → reveal live →
@@ -263,6 +300,11 @@ final class PageCompositor {
 
     /// 当前层 frame(宿主坐标; 测试/探针)。
     var layerFramesForDiag: [CGRect] { layers.map(\.frame) }
+
+    /// 当前合成层对象身份(测试/探针); 用于证明 covered interruption 未重建层。
+    var layerObjectIdentifiersForDiag: [ObjectIdentifier] {
+        layers.map(ObjectIdentifier.init)
+    }
 
     /// 当前层页索引(与 placements 对齐)。
     var pageIndicesForDiag: [Int] { placements.map(\.page) }

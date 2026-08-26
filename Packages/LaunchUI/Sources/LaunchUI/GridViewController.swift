@@ -1,6 +1,19 @@
 import AppKit
 import LaunchCore
 
+/// Runtime diagnostic switches owned by the paging controller wiring.
+/// Keeping flag interpretation here gives tests a real configuration seam
+/// without depending on the process-wide CommandLine arguments.
+struct PagingDiagnosticsConfiguration: Equatable, Sendable {
+    let pageCompositorEnabled: Bool
+    let pagingFeelTelemetryEnabled: Bool
+
+    init(arguments: [String]) {
+        pageCompositorEnabled = arguments.contains("--pagecompositor")
+        pagingFeelTelemetryEnabled = arguments.contains("--pagingfeeltelemetry")
+    }
+}
+
 /// 外层 diffable data source 的 item 包装(Stage E8)。
 ///
 /// - `.appLibrary`: 物理 section 0 的 Library host, 恒单 item。
@@ -163,6 +176,15 @@ final class GridViewController: NSViewController {
     private let pageVisualRenderer = PageVisualRenderer()
     /// presentation-only 合成器: PagingInteractionController 仍是唯一运动引擎。
     let pageCompositor = PageCompositor()
+
+    /// T-002: 激活原因遥测(默认关; `--pagingfeeltelemetry` 开启)。观察者, 不改变激活判断。
+    let pageCompositorActivationTelemetry = PageCompositorActivationTelemetry()
+
+    /// T-002: 本次手势起点快照的 paging 计数(用于按手势差分 displayFrame/scrollWrite)。
+    private var compositorTelemetryStartDisplayFrames = 0
+    private var compositorTelemetryStartScrollWrites = 0
+    private var telemetryCompletionReason: GestureTelemetryCompletionReason = .settled
+    private var telemetrySettleDurationMs: Double?
 
     /// 分页合成架构(v0.5.0 起默认启用, 用户决策 2026-08-21): Idle 用真实 Cell,
     /// Tracking/Settling 只移动当前页+目标页的预渲染合成表面(PageVisual);
@@ -1284,6 +1306,28 @@ final class GridViewController: NSViewController {
 
     // MARK: - 分页交互(v0.1.6 PART A)
 
+    /// Called by the real launcher show lifecycle. Refreshes do not reset this.
+    func beginShowSession() {
+        pageCompositorActivationTelemetry.beginShowSession()
+    }
+
+    /// Applies only the two independent paging diagnostic switches.
+    /// This is the same seam used by setupPagingController and by behavior tests.
+    func applyPagingDiagnosticsConfiguration(_ configuration: PagingDiagnosticsConfiguration) {
+        pageCompositor.metrics.enabled = configuration.pageCompositorEnabled
+        pageCompositor.diagnosticsEnabled = configuration.pageCompositorEnabled
+        pageCompositorActivationTelemetry.enabled = configuration.pagingFeelTelemetryEnabled
+        paging.onDisplayLinkTick = configuration.pagingFeelTelemetryEnabled
+            ? { [weak self] in
+                self?.pageCompositorActivationTelemetry.recordDisplayLinkInterval()
+            }
+            : nil
+    }
+
+    var pagingDisplayLinkTelemetryEnabledForDiag: Bool {
+        paging.onDisplayLinkTick != nil
+    }
+
     /// 接线 PagingInteractionController 到本网格(唯一 offset writer 注入)。
     private func setupPagingController() {
         paging.linkView = view
@@ -1308,9 +1352,33 @@ final class GridViewController: NSViewController {
             guard let self else { return }
             self.applySettledPhysicalPage(page)
         }
-        // P2: 手势起点激活 compositor(在 baseOffset 读取前; 零跳变)。
-        paging.onWillBeginGesture = { [weak self] in
-            self?.tryActivatePageCompositor()
+        // P2: 水平轴锁定后、首个非零水平位移时按方向激活 compositor(在首次
+        // offset 写入前; 零跳变)。垂直/未定轴/零位移手势不触发。
+        paging.onWillStartHorizontalTracking = { [weak self] direction in
+            self?.recordPagingEventForDiag("directionCallback")
+            self?.tryActivatePageCompositor(direction: direction)
+        }
+        paging.onInteractionCancelled = { [weak self] in
+            guard let self else { return }
+            self.telemetryCompletionReason = .cancelled
+            self.telemetrySettleDurationMs = nil
+            self.flushCompositorActivationTelemetry()
+        }
+        paging.onSettleLifecycle = { [weak self] lifecycle in
+            guard let self else { return }
+            switch lifecycle {
+            case .settled(let duration):
+                self.telemetryCompletionReason = .settled
+                self.telemetrySettleDurationMs = duration * 1000
+            case .interrupted(let duration):
+                self.telemetryCompletionReason = .interrupted
+                self.telemetrySettleDurationMs = duration * 1000
+                self.flushCompositorActivationTelemetry()
+            case .cancelled(let duration):
+                self.telemetryCompletionReason = .cancelled
+                self.telemetrySettleDurationMs = duration.map { $0 * 1000 }
+                self.flushCompositorActivationTelemetry()
+            }
         }
         // P2: 运动停止(idle)→ 收掉 compositor(同步 clip → reveal), 并重试
         // 防抖丢弃的视觉准备: 100ms 防抖醒来时 phase 非 idle 而丢掉的 prepare,
@@ -1318,6 +1386,7 @@ final class GridViewController: NSViewController {
         // generation + 取消旧任务机制, 重复调度安全)。
         paging.onPhaseIdle = { [weak self] in
             self?.finalizePageCompositor()
+            self?.flushCompositorActivationTelemetry()
             self?.schedulePageVisualPrepare()
         }
         // P2: settle 收敛 → idle 准备相邻页视觉。
@@ -1338,7 +1407,12 @@ final class GridViewController: NSViewController {
                 self.pageCompositorSyncLayoutCountForDiag += 1
             }
         }
-        pageCompositor.metrics.enabled = pageVisualCompositorEnabled
+        // `--pagecompositor` owns compositor metrics and per-frame events.
+        // Activation telemetry is intentionally independent: enabling
+        // `--pagingfeeltelemetry` must not add compositor diagnostics.
+        applyPagingDiagnosticsConfiguration(
+            PagingDiagnosticsConfiguration(arguments: CommandLine.arguments)
+        )
         // E13: --pagingtelemetry 遥测开关接线。应用保持正常交互运行,
         // 只开启分页帧间隔遥测(每手势写一行到 /tmp/lb-paging-telemetry.log)。
         // 该 flag 不在 ActivationCoordinator 的 non-interactive 列表中。
@@ -1350,6 +1424,11 @@ final class GridViewController: NSViewController {
         if CommandLine.arguments.contains("--pagingeventtrace") {
             PagingTraceLog.enabled = true
             paging.traceEnabled = true
+        }
+        // T-003: --pagingfeel-damped 归一化阻尼跟手曲线实验(默认关; 产品默认
+        // 仍为 linear 1.3)。交互式 A/B 实验, 未经真实触控板验证前不设为默认。
+        if CommandLine.arguments.contains("--pagingfeel-damped") {
+            paging.followCurve = .normalizedDamped(strength: PagingTuning.followSensitivity)
         }
     }
 
@@ -1369,6 +1448,7 @@ final class GridViewController: NSViewController {
     /// settle 期间真实 clip 在遮盖下渐进跟进(见 `advanceRealClipBehindCover`);
     /// 否则写真实 clip。
     private func routeScroll(_ offset: CGFloat) {
+        recordPagingEventForDiag("firstOffsetWrite")
         if pageCompositor.isActive {
             pageCompositor.applyOffset(offset)
             if paging.phase == .settling {
@@ -1412,74 +1492,196 @@ final class GridViewController: NSViewController {
         return display.pages[currentPage].count
     }
 
-    /// 激活条件: paged + 普通 Layout surface + 无 drag/Folder/Settings/Search/
-    /// Category detail + 非 Library 边界 + 页面达到密度门(默认 ≥20 项)+
-    /// 相邻页视觉齐备。未满足 → 本次手势 live 分页(降级, 绝不阻塞手势起点)。
-    private func compositorCanActivate() -> Bool {
+    /// 表面/状态/密度门(方向无关): paged + 普通 Layout surface + 无 drag/Folder/
+    /// Settings/Search/Category detail + 页面达到密度门(默认 ≥20 项)。
+    /// 未满足 → 本次手势 live 分页(降级, 绝不阻塞手势起点)。
+    private func compositorSurfaceGate() -> Bool {
         guard pageVisualCompositorEnabled,
               !pageCompositor.isActive,
               paging.isEnabled,
               !searchMode,
               currentSurface != .appLibrary,
               !(dragController?.isDragging ?? false),
-              // 边界规则: 上一表面必须是普通 layout 页。leading 未启用时页 0
-              // 无 previous;leading 启用时 layout page 0 的 previous 是 Library。
-              // working set 就绪检查(键数必须 = 3)天然排除这两种边界。
-              currentPage >= 1,
               currentPageItemCount >= pageVisualMinItemsPerPage else {
             return false
         }
-        return pageVisualCache.isWorkingSetReadyIgnoringIconEpoch(
-            centerPage: currentPage,
-            pageCount: pageCount,
-            displayRevision: store.displayRevision,
-            geometry: PageVisualGeometrySignature(geometry: geometry),
-            backingScale: currentBackingScale,
-            languageRevision: lastPreparedLanguageRevision
-        )
+        return true
     }
 
-    /// 手势起点尝试激活(仅 idle 准备, 零同步渲染)。
-    private func tryActivatePageCompositor() {
-        guard pageVisualCompositorEnabled, !pageCompositor.isActive else { return }
-        guard compositorCanActivate() else {
-            // 表面状态允许但视觉未齐备 → 降级计数(排除 Library 边界/稀疏页常态)。
-            if !searchMode, currentSurface != .appLibrary, currentPage >= 1,
-               currentPageItemCount >= pageVisualMinItemsPerPage {
-                pageCompositor.metrics.recordFallbackLive()
-            }
-            return
+    /// 诊断: 是否存在至少一个合法方向(普通 layout 邻页)且当前页与该邻页视觉齐备。
+    /// 不含页边界检查(激活时另判); 供 `pageCompositorEligibleForDiag` 与测试。
+    private func compositorCanActivate() -> Bool {
+        guard compositorSurfaceGate() else { return false }
+        return validDirectionTargets().contains { target in
+            visualsReady(for: [currentPage, target])
         }
+    }
+
+    /// 当前页的合法方向目标(普通 layout 邻页; 越界/App Library 排除)。
+    private func validDirectionTargets() -> [Int] {
+        var targets: [Int] = []
+        let next = currentPage + 1
+        if next < pageCount { targets.append(next) }
+        let prev = currentPage - 1
+        if prev >= 0 { targets.append(prev) }
+        return targets
+    }
+
+    /// 指定页集合的视觉是否齐备(忽略 iconEpoch; 顺序无关)。
+    private func visualsReady(for pages: [Int]) -> Bool {
         let scale = currentBackingScale
         let g = geometry
-        let visuals = pageVisualCache.workingSetVisualsIgnoringIconEpoch(
-            centerPage: currentPage,
-            pageCount: pageCount,
+        let visuals = pageVisualCache.visuals(
+            for: pages,
             displayRevision: store.displayRevision,
             geometry: PageVisualGeometrySignature(geometry: g),
             backingScale: scale,
             languageRevision: lastPreparedLanguageRevision
         )
-        guard visuals.count == 3 else { return }
+        return visuals.count == pages.count
+    }
+
+    /// 方向 → 目标普通 layout 页。
+    private func targetPage(for direction: PagingDirection) -> Int {
+        switch direction {
+        case .next: return currentPage + 1
+        case .previous: return currentPage - 1
+        }
+    }
+
+    /// 真实 clip 是否在页边界附近(页宽归一化 + 小容差; 无硬编码像素)。
+    /// 激活零跳变前提: 合成器把视觉摆在页边界, 若 clip 停在页中间(如 live
+    /// settle 被打断)则激活会跳变 → 必须 live 降级。
+    private func isNearPageBoundary(_ offset: CGFloat) -> Bool {
+        let pageWidth = geometry.pageWidth
+        guard pageWidth > 0 else { return true }
+        let page = offset / pageWidth
+        let nearest = page.rounded()
+        return abs(page - nearest) <= 0.01
+    }
+
+    /// 水平轴锁定后按方向尝试激活(仅 idle 准备, 零同步渲染)。
+    ///
+    /// 激活条件: 表面门通过 + 目标方向是合法普通 layout 邻页 + 真实 clip 在页
+    /// 边界附近 + 当前页与目标页视觉齐备。目标为 App Library / 越界 / clip 不在
+    /// 边界 / 视觉缺失 → live 降级(绝不阻塞手势起点)。compositor 已激活 → 不重建。
+    ///
+    /// T-002: 遥测为观察者, 只记录激活结果, 不改变任何激活判断。
+    private func tryActivatePageCompositor(direction: PagingDirection) {
+        // 方向回调每次手势至多一次 → 在此开始手势遥测并快照 paging 计数(按手势差分)。
+        compositorTelemetryStartDisplayFrames = paging.displayFrameCount
+        compositorTelemetryStartScrollWrites = paging.scrollWriteCount
+        telemetryCompletionReason = .settled
+        telemetrySettleDurationMs = nil
+        pageCompositorActivationTelemetry.beginGesture(startPage: currentPage, direction: direction)
+        pageCompositorActivationTelemetry.recordCacheVisualCount(pageVisualCache.visualCount)
+        pageCompositorActivationTelemetry.recordRequiredPages(2)
+
+        let targetPage = targetPage(for: direction)
+        if pageCompositor.isActive {
+            // A settle can be interrupted while the presentation still covers
+            // the old pair. Reuse it only when it covers the new pair too.
+            let required = Set([currentPage, targetPage])
+            if targetPage >= 0, targetPage < pageCount,
+               pageCompositor.covers(pages: required) {
+                recordActivationResult(.activeCoverageReuse)
+                return
+            }
+
+            // Abort before this gesture's first offset write. abort() syncs the
+            // clip to the compositor's exact currentOffset and reveals live;
+            // it performs no rasterization or cache wait.
+            pageCompositor.abort()
+            pageCompositor.metrics.recordFallbackLive()
+            recordActivationResult(.interruptionFallbackLive)
+            return
+        }
+
+        guard pageVisualCompositorEnabled else {
+            recordActivationResult(.disabled)
+            return
+        }
+        guard compositorSurfaceGate() else {
+            recordActivationResult(surfaceGateResult())
+            return
+        }
+        // 目标越界: only a configured leading surface makes a negative target
+        // App Library; otherwise it is an ordinary out-of-bounds target.
+        guard targetPage >= 0, targetPage < pageCount else {
+            let result: PageCompositorActivationResult =
+                leadingSurfaceEnabled && targetPage < 0
+                    ? .targetIsLibrary
+                    : .targetOutOfBounds
+            recordActivationResult(result)
+            return
+        }
+        guard isNearPageBoundary(realClipOffset()) else {
+            pageCompositor.metrics.recordFallbackLive()
+            recordActivationResult(.offsetNotAtBoundary)
+            return
+        }
+        let scale = currentBackingScale
+        let g = geometry
+        guard g.pageWidth.isFinite, g.pageWidth > 0 else {
+            recordActivationResult(.invalidGeometry)
+            return
+        }
+        let visuals = pageVisualCache.visuals(
+            for: [currentPage, targetPage],
+            displayRevision: store.displayRevision,
+            geometry: PageVisualGeometrySignature(geometry: g),
+            backingScale: scale,
+            languageRevision: lastPreparedLanguageRevision
+        )
+        guard visuals.count == 2 else {
+            pageCompositor.metrics.recordFallbackLive()
+            recordActivationResult(visualsMissingResult(visuals: visuals))
+            return
+        }
         if view.layer == nil { view.wantsLayer = true }
         if collectionView.layer == nil { collectionView.wantsLayer = true }
-        guard let hostLayer = view.layer, let liveLayer = collectionView.layer else { return }
+        guard let hostLayer = view.layer, let liveLayer = collectionView.layer else {
+            recordActivationResult(.invalidGeometry)
+            return
+        }
 
-        let placements = visuals.map { item in
+        var placements: [PageCompositor.Placement] = []
+        placements.reserveCapacity(visuals.count)
+        for item in visuals {
             let bounds = item.visual.logicalBounds
-            // 文档坐标 = leading 偏移 + 布局页索引偏移(Stage E: 普通页从
-            // 物理 1 开始, 页 n 的文档 x = leadingDocumentOffset + n*pageWidth)。
-            let documentPoint = CGPoint(
-                x: leadingDocumentOffset + CGFloat(item.page) * g.pageWidth + bounds.minX,
-                y: bounds.minY
+            guard bounds.width.isFinite, bounds.height.isFinite,
+                  bounds.width > 0, bounds.height > 0,
+                  bounds.minX.isFinite, bounds.minY.isFinite else {
+                recordActivationResult(.invalidGeometry)
+                return
+            }
+            let documentRect = CGRect(
+                x: leadingDocumentOffset
+                    + CGFloat(item.page) * g.pageWidth
+                    + g.gridOrigin.x
+                    + bounds.minX,
+                y: g.gridOrigin.y + bounds.minY,
+                width: bounds.width,
+                height: bounds.height
             )
-            // convert 走真实视图链(含 clip 滚动偏移): 激活帧位置 == live 位置。
-            let inHost = collectionView.convert(documentPoint, to: view)
-            return PageCompositor.Placement(
-                page: item.page,
-                baseFrame: CGRect(origin: inHost, size: bounds.size),
-                visual: item.visual
-            )
+            guard documentRect.origin.x.isFinite, documentRect.origin.y.isFinite,
+                  documentRect.width.isFinite, documentRect.height.isFinite else {
+                recordActivationResult(.invalidGeometry)
+                return
+            }
+            let inHost = collectionView.convert(documentRect, to: view)
+            guard inHost.origin.x.isFinite, inHost.origin.y.isFinite,
+                  inHost.width.isFinite, inHost.height.isFinite else {
+                recordActivationResult(.invalidGeometry)
+                return
+            }
+            placements.append(PageCompositor.Placement(
+                page: item.page, baseFrame: inHost, visual: item.visual
+            ))
+        }
+        guard !placements.isEmpty else {
+            recordActivationResult(.invalidGeometry)
+            return
         }
         pageCompositor.activate(
             placements: placements,
@@ -1488,6 +1690,49 @@ final class GridViewController: NSViewController {
             hostLayer: hostLayer,
             liveLayer: liveLayer
         )
+        guard pageCompositor.isActive else {
+            recordActivationResult(.invalidGeometry)
+            return
+        }
+        recordActivationResult(.activated)
+    }
+
+    /// T-002: 遥测观察者记录激活结果(默认关时 no-op)。
+    /// Activation outcome is deliberately independent from session completion.
+    private func recordActivationResult(_ result: PageCompositorActivationResult) {
+        recordPagingEventForDiag("compositorDecision")
+        pageCompositorActivationTelemetry.recordActivationResult(result)
+    }
+
+    /// T-002: 表面门未通过时的具体失败原因(观察者; 不改变门判断)。
+    private func surfaceGateResult() -> PageCompositorActivationResult {
+        if searchMode { return .search }
+        if currentSurface == .appLibrary { return .appLibrary }
+        if dragController?.isDragging ?? false { return .dragActive }
+        if currentPageItemCount < pageVisualMinItemsPerPage { return .sparsePage }
+        return .disabled
+    }
+
+    /// T-002: 两页视觉不齐备时, 判定缺失的是当前页还是目标页(观察者)。
+    private func visualsMissingResult(
+        visuals: [(page: Int, visual: PageVisual)]
+    ) -> PageCompositorActivationResult {
+        let present = Set(visuals.map(\.page))
+        if !present.contains(currentPage) { return .currentVisualMissing }
+        return .targetVisualMissing
+    }
+
+    /// T-002: 一次手势回到 idle 后, 按手势差分喂入 paging 计数并异步输出摘要。
+    private func flushCompositorActivationTelemetry() {
+        let telemetry = pageCompositorActivationTelemetry
+        telemetry.recordDisplayFrameCount(paging.displayFrameCount - compositorTelemetryStartDisplayFrames)
+        telemetry.recordScrollWriteCount(paging.scrollWriteCount - compositorTelemetryStartScrollWrites)
+        _ = telemetry.flushGesture(
+            completionReason: telemetryCompletionReason,
+            settleDurationMs: telemetrySettleDurationMs
+        )
+        telemetryCompletionReason = .settled
+        telemetrySettleDurationMs = nil
     }
 
     /// 运动停止(idle)→ 收掉 compositor: 同步真实 clip 到精确偏移 → reveal live。
@@ -1575,7 +1820,7 @@ final class GridViewController: NSViewController {
     private func performWorkingSetPrepare() async {
         guard pageVisualCompositorEnabled, isViewLoaded, collectionView != nil else { return }
         let display = store.displayModel()
-        guard currentPage >= 1, currentPage < display.pages.count else { return }
+        guard currentPage >= 0, currentPage < display.pages.count else { return }
         // 全程快照: 数据修订在准备起点捕获一次, 之后所有键构建与插入复验
         // 都基于它(不再实时读 store.displayRevision)。
         let capturedRevision = store.displayRevision
@@ -1589,8 +1834,14 @@ final class GridViewController: NSViewController {
 
         // 逐页独立解析图标 → 每页独立 iconEpoch: 迟到图标只触发对应页的新
         // epoch 重建, 不再牵动整个 working set(缓存键按页独立)。
-        let pages = [currentPage - 1, currentPage, currentPage + 1].filter {
-            $0 >= 0 && $0 < display.pages.count
+        // 方向感知两页: 首页 [0,1], 末页 [last-1,last], 中间页 [c-1,c,c+1]。
+        let pages: [Int]
+        if currentPage == 0 {
+            pages = [0, 1].filter { $0 < display.pages.count }
+        } else if currentPage == display.pages.count - 1 {
+            pages = [currentPage - 1, currentPage]
+        } else {
+            pages = [currentPage - 1, currentPage, currentPage + 1]
         }
         // 任一页插入前复验失败 → 本次语言代数不提交(等下一次完整成功)。
         var recheckFailed = false
@@ -1698,6 +1949,26 @@ final class GridViewController: NSViewController {
     private(set) var liveSettleLayoutSyncCountForDiag = 0
     /// settling 期间真实 clip 遮盖下渐进跟进的帧数(平滑落地诊断)。
     private(set) var pageVisualRealClipAdvanceCountForDiag = 0
+    /// Unified paging event sequence used by the real gesture integration probe.
+    /// This is an internal diagnostic seam; it records no product state and is
+    /// inactive unless a test explicitly starts a recording.
+    private var pagingEventSequenceRecording = false
+    private var pagingEventSequence: [String] = []
+    private var pagingEventMarkers: Set<String> = []
+
+    var pagingEventSequenceForDiag: [String] { pagingEventSequence }
+
+    func beginPagingEventSequenceForDiag() {
+        pagingEventSequenceRecording = true
+        pagingEventSequence = []
+        pagingEventMarkers = []
+    }
+
+    private func recordPagingEventForDiag(_ marker: String) {
+        guard pagingEventSequenceRecording, pagingEventMarkers.insert(marker).inserted else { return }
+        pagingEventSequence.append(marker)
+    }
+
     /// 目标页已物化 cell 数(测试: 揭露时刻 cell 应就绪)。
     var visibleItemsCountForDiag: Int { collectionView.visibleItems().count }
     var pageVisualCacheCountForDiag: Int { pageVisualCache.visualCount }
@@ -1827,8 +2098,28 @@ final class GridViewController: NSViewController {
         paging.probeGesture(deltaXs: deltaXs)
     }
 
+    /// Test-only deterministic time seam for probe-driven paging integration tests.
+    /// Real CADisplayLink timing remains unchanged.
+    func enableDeterministicPagingProbeClock(frameDuration: CFTimeInterval = 1.0 / 120.0) {
+        paging.enableDeterministicProbeClock(frameDuration: frameDuration)
+    }
+
     func pagingProbeDisplayFrame() -> Bool {
         paging.probeDisplayFrame()
+    }
+
+    /// Test-only lifecycle probes keep teardown behavior wired through the real
+    /// GridViewController/PagingInteractionController callbacks.
+    func pagingProbeShutdown() {
+        paging.shutdown()
+    }
+
+    func pagingProbeDisable() {
+        paging.isEnabled = false
+    }
+
+    func pagingProbeJumpTo(page: Int) {
+        paging.jumpTo(page: page)
     }
 
     /// 布局诊断(§56/§83): 一次交互中 prepare / attribute query 计数。

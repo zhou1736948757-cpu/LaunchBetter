@@ -3,6 +3,12 @@ import Foundation
 import LaunchCore
 import QuartzCore
 
+/// 分页手势方向(水平轴锁定后由首个非零水平位移确定)。
+enum PagingDirection: Sendable, Equatable {
+    case previous
+    case next
+}
+
 /// 分页交互控制器(v0.1.6 PART A): 唯一手势/动画状态持有者。
 ///
 /// 职责:
@@ -21,6 +27,12 @@ final class PagingInteractionController {
         case settling
     }
 
+    enum SettleLifecycle {
+        case settled(duration: CFTimeInterval)
+        case interrupted(duration: CFTimeInterval)
+        case cancelled(duration: CFTimeInterval?)
+    }
+
     // 数据访问(由 GridViewController 注入, 避免反向依赖)
     var onReadCurrentOffset: () -> CGFloat = { 0 }
     var onReadPageWidth: () -> CGFloat = { 0 }
@@ -36,9 +48,24 @@ final class PagingInteractionController {
     /// 读取当前偏移之前完成激活, 保证零跳变(baseOffset == 激活后 currentOffset)。
     var onWillBeginGesture: (() -> Void)?
 
+    /// Called exactly once when an active settle is completed, replaced, or
+    /// cancelled. The duration is the current settle only; cancellation may be nil.
+    var onSettleLifecycle: ((SettleLifecycle) -> Void)?
+    var onInteractionCancelled: (() -> Void)?
+
+    /// 水平轴锁定后、首个非零水平位移时回调(每次手势至多一次; 在首次 offset
+    /// 写入前触发)。GridViewController 借此按方向激活 compositor(切换 presentation
+    /// surface)。本回调不写 offset; 垂直/未定轴/零位移手势不触发。
+    var onWillStartHorizontalTracking: ((PagingDirection) -> Void)?
+
     /// P2: phase 回到 idle 时回调(settle 收敛 / 无 settle 手势结束 / 禁用 / 跳转 /
     /// shutdown)。GridViewController 借此在运动停止后收掉 compositor(同步 clip → reveal)。
     var onPhaseIdle: (() -> Void)?
+
+    /// T-002: 真实 DisplayLink 回调 tick(displayTick 内调用; probeDisplayFrame 不调用)。
+    /// 供 compositor 激活遥测记录真实帧间隔, 与手工 probeDisplayFrame 分开统计。
+    /// 默认 nil(产品路径零开销); 仅 `--pagingfeeltelemetry` 时由 GridViewController 接线。
+    var onDisplayLinkTick: (() -> Void)?
 
     private(set) var phase: Phase = .idle
 
@@ -49,12 +76,21 @@ final class PagingInteractionController {
     /// 开启时每事件记录到共享 `PagingTraceLog`, 诊断用途不参与行为。
     var traceEnabled = false
 
+    /// T-003: 跟手曲线(实验)。默认 `linear` 1.3, 与 `PagingTuning.followSensitivity`
+    /// 完全一致(产品默认不变)。仅 `--pagingfeel-damped` 或测试 seam 改为
+    /// `normalizedDamped`。纯函数, 不改变 PagingSpring / fling threshold。
+    var followCurve: PagingFollowCurve = .linear(sensitivity: PagingTuning.followSensitivity)
+
     private var axisLock = PagingAxisLock()
     private var velocity = PagingVelocityEstimator()
     private var displacement: CGFloat = 0
+    /// Gesture-level raw input for normalizedDamped; reset at beginGesture.
+    private var rawTrackingDisplacement: CGFloat = 0
     private var baseOffset: CGFloat = 0
     private var latestDesiredOffset: CGFloat = 0
     private var lastAppliedOffset: CGFloat = 0
+    /// 本次手势是否已发出方向回调(每次手势至多一次)。
+    private var hasEmittedDirectionCallback = false
 
     /// PA4 根因修复: 当前 settle 的目标页(经 clamp 后)。settle 启动时记录,
     /// 收敛/打断/跳转/禁用时清理。
@@ -68,11 +104,18 @@ final class PagingInteractionController {
     private var displayLinkTarget: DisplayLinkTarget?
     private let animator = PageSnapAnimator()
 
+    // Test-only probe clock. The product path remains driven by wall-clock
+    // timestamps from CADisplayLink/CACurrentMediaTime().
+    private var probeClockTime: CFTimeInterval?
+    private var probeInputTimestamp: CFTimeInterval?
+    private var probeFrameDuration: CFTimeInterval = 1.0 / 120.0
+
     // 搜索模式: 禁用分页交互。禁用时中断在途手势/动画并停止 display link(§C4 停止路径),
     // 防止 display link 在搜索模式下持续驱动, 无残留状态。
     var isEnabled = true {
         didSet {
             guard !isEnabled else { return }
+            cancelActiveInteractionIfNeeded()
             animator.cancel()
             phase = .idle
             interruptedSettleTarget = nil
@@ -98,8 +141,18 @@ final class PagingInteractionController {
     /// PA4 测试/诊断观察: 被打断 settle 目标页。
     var interruptedSettleTargetForTest: Int? { interruptedSettleTarget }
 
+    /// Enables deterministic time progression for probe frames only.
+    /// Production display-link behavior and defaults are unchanged.
+    func enableDeterministicProbeClock(frameDuration: CFTimeInterval = 1.0 / 120.0) {
+        probeFrameDuration = frameDuration
+        let now = ProcessInfo.processInfo.systemUptime
+        probeClockTime = now
+        probeInputTimestamp = now
+    }
+
     /// 显式生命周期收尾；可安全重复调用。
     func shutdown() {
+        cancelActiveInteractionIfNeeded()
         animator.cancel()
         phase = .idle
         interruptedSettleTarget = nil
@@ -141,13 +194,13 @@ final class PagingInteractionController {
             telemetryIntervals[(telemetryStart + $0) % Self.telemetryCapacity]
         }
         resetTelemetry()
-        DispatchQueue.main.async { [weak self] in
-            self?.writeTelemetryLine(samples: samples, phase: phase)
+        Task.detached(priority: .utility) {
+            Self.writeTelemetryLine(samples: samples, phase: phase)
         }
     }
 
-    /// 遥测统计与落盘(仅在 runloop hop 后执行, 不在任何帧预算内)。
-    private func writeTelemetryLine(samples: [CFTimeInterval], phase: String) {
+    /// 遥测统计与落盘(在 detached utility task 执行, 不在任何帧预算内)。
+    private nonisolated static func writeTelemetryLine(samples: [CFTimeInterval], phase: String) {
         let sorted = samples.sorted()
         let avgMs = samples.reduce(0, +) / Double(samples.count) * 1000
         let p95Index = min(sorted.count - 1, max(0, Int((Double(sorted.count) * 0.95).rounded(.up)) - 1))
@@ -160,6 +213,10 @@ final class PagingInteractionController {
     }
 
     /// O(1) 环形缓冲追加。
+    private func currentPagingTime() -> CFTimeInterval {
+        probeClockTime ?? ProcessInfo.processInfo.systemUptime
+    }
+
     private func recordTelemetryInterval() {
         let now = CACurrentMediaTime()
         guard lastDisplayTickTime > 0 else {
@@ -186,7 +243,7 @@ final class PagingInteractionController {
 
     /// 追加一行到 /tmp/lb-paging-telemetry.log(不存在则创建)。诊断用途,
     /// 每次手势一次写, 非热路径。
-    private func appendTelemetryLine(_ line: String) {
+    private nonisolated static func appendTelemetryLine(_ line: String) {
         let path = "/tmp/lb-paging-telemetry.log"
         if !FileManager.default.fileExists(atPath: path) {
             FileManager.default.createFile(atPath: path, contents: nil)
@@ -199,6 +256,9 @@ final class PagingInteractionController {
 
     /// 诊断计数(§63)
     private(set) var inputEventCount = 0
+    /// Lifetime totals; telemetry derives per-gesture counts from baselines.
+    /// Probe frames and real display-link processing share this work counter;
+    /// real display-link cadence is measured independently by interval telemetry.
     private(set) var displayFrameCount = 0
     private(set) var scrollWriteCount = 0
     private(set) var settlingSkippedWriteCount = 0
@@ -226,8 +286,9 @@ final class PagingInteractionController {
 
     func resetCounters() {
         inputEventCount = 0
-        displayFrameCount = 0
-        scrollWriteCount = 0
+        // Frame/write counts are lifetime probe totals. GridViewController takes
+        // per-gesture baselines from these monotonic values; resetting them while
+        // a telemetry session is still open would make that session's diff invalid.
         settlingSkippedWriteCount = 0
         interruptionCount = 0
         settleCount = 0
@@ -273,8 +334,10 @@ final class PagingInteractionController {
         // momentum: 全拦截, 0 位移 0 snap 0 重结算(§20);
         // 若同事件同时携带 ended/cancelled, 同步结束交互生命周期(评审 m1)
         if event.momentumPhase != [] {
-            if event.phase == .ended || event.phase == .cancelled {
+            if event.phase == .ended {
                 endGesture()
+            } else if event.phase == .cancelled {
+                cancelInteraction()
             }
             return true
         }
@@ -282,8 +345,11 @@ final class PagingInteractionController {
         switch event.phase {
         case .began:
             beginGesture()
-        case .ended, .cancelled:
+        case .ended:
             endGesture()
+            return true
+        case .cancelled:
+            cancelInteraction()
             return true
         default:
             break
@@ -318,6 +384,11 @@ final class PagingInteractionController {
         // P2: 手势开始前激活 compositor(读取 baseOffset 前; 零跳变前提)。
         onWillBeginGesture?()
         if phase == .settling {
+            // Close the old session before any state is reset or the new
+            // gesture can replace it.
+            let duration = currentSettleDuration
+            lastSettleDuration = duration
+            onSettleLifecycle?(.interrupted(duration: duration))
             // 打断旧 settle: 从当前实际位置重新跟手, 视觉 discontinuity ≈ 0(§29)
             animator.cancel()
             interruptionCount += 1
@@ -335,10 +406,12 @@ final class PagingInteractionController {
         axisLock.began()
         velocity.reset()
         displacement = 0
+        rawTrackingDisplacement = 0
+        hasEmittedDirectionCallback = false
         baseOffset = onReadCurrentOffset()
         lastAppliedOffset = baseOffset
         latestDesiredOffset = baseOffset
-        gestureStartTime = ProcessInfo.processInfo.systemUptime
+        gestureStartTime = currentPagingTime()
         resetTelemetry()
         phase = .tracking
     }
@@ -349,15 +422,38 @@ final class PagingInteractionController {
         guard axisLock.accumulate(deltaX: deltaX, deltaY: deltaY) else {
             return
         }
+        // 方向回调: 每次手势至多一次; 轴锁定后首个非零水平位移时触发, 在首次
+        // offset 写入前。deltaX < 0 → next, deltaX > 0 → previous。不写 offset。
+        if !hasEmittedDirectionCallback, deltaX != 0 {
+            hasEmittedDirectionCallback = true
+            onWillStartHorizontalTracking?(deltaX < 0 ? .next : .previous)
+        }
         let pageWidth = onReadPageWidth()
         guard pageWidth > 0 else { return }
-        // 一次手势最多一页(§17); 跟手位移应用灵敏度系数(§16, v0.1.7 0.85)
+        // 一次手势最多一页(§17); 跟手位移应用灵敏度系数(§16, v0.1.7 0.85)。
+        // T-003: 经 followCurve 施加曲线; 默认 linear 1.3 与旧行为逐位一致。
         let maxDisp = pageWidth * PagingTuning.maxGestureDisplacementPages
-        let applied = deltaX * PagingTuning.followSensitivity
-        displacement = min(max(displacement + applied, -maxDisp), maxDisp)
+        if case .linear = followCurve {
+            // Preserve the established linear deltaX * sensitivity accumulation
+            // order (including its floating-point behavior).
+            let applied = followCurve.apply(rawDisplacement: deltaX, pageWidth: pageWidth)
+            displacement = min(max(displacement + applied, -maxDisp), maxDisp)
+        } else {
+            // Non-linear curves are evaluated against the gesture total, not
+            // each NSEvent chunk, so event segmentation cannot change feel.
+            rawTrackingDisplacement += deltaX
+            let curvedTotal = followCurve.apply(
+                rawDisplacement: rawTrackingDisplacement,
+                pageWidth: pageWidth
+            )
+            displacement = min(max(curvedTotal, -maxDisp), maxDisp)
+        }
         // 方向: 手指左滑(deltaX 负, 自然滚动)→ 内容左移 → offset 增加
         latestDesiredOffset = baseOffset - displacement
-        _ = velocity.update(position: -displacement, timestamp: CACurrentMediaTime())
+        _ = velocity.update(
+            position: -displacement,
+            timestamp: probeInputTimestamp ?? currentPagingTime()
+        )
         ensureDisplayLink()
     }
 
@@ -372,9 +468,50 @@ final class PagingInteractionController {
         startSettle(toPage: targetPage, fromOffset: current, velocity: 0)
     }
 
+    private var currentSettleDuration: CFTimeInterval {
+        max(0, currentPagingTime() - settleStartTime)
+    }
+
+    /// Explicitly closes either active phase before lifecycle teardown reaches idle.
+    /// Tracking cancellation shares the existing callback used by cancelled NSEvents,
+    /// so GridViewController can flush observer state before onPhaseIdle's visual
+    /// finalization path. Settles retain their duration-less cancellation contract.
+    private func cancelActiveInteractionIfNeeded() {
+        switch phase {
+        case .tracking:
+            onInteractionCancelled?()
+        case .settling:
+            onSettleLifecycle?(.cancelled(duration: nil))
+        case .idle:
+            break
+        }
+    }
+
+    private func cancelInteraction() {
+        if phase == .settling {
+            onSettleLifecycle?(.cancelled(duration: nil))
+            animator.cancel()
+            phase = .idle
+            interruptedSettleTarget = nil
+            settleTargetPage = nil
+            stopDisplayLink()
+            onPhaseIdle?()
+            return
+        }
+        guard phase == .tracking else { return }
+        onInteractionCancelled?()
+        phase = .idle
+        axisLock.ended()
+        velocity.reset()
+        displacement = 0
+        flushTelemetry(phase: "cancelled")
+        stopDisplayLinkIfIdle()
+        onPhaseIdle?()
+    }
+
     private func endGesture() {
         guard phase == .tracking else { return }
-        lastGestureDuration = ProcessInfo.processInfo.systemUptime - gestureStartTime
+        lastGestureDuration = currentPagingTime() - gestureStartTime
         guard axisLock.isHorizontal, displacement != 0 else {
             finishTrackingWithoutSettle()
             return
@@ -400,6 +537,12 @@ final class PagingInteractionController {
 
     /// 启动一次 settle(目标页动画), 供键盘翻页 / 鼠标滚轮 / 手势松手共用(§31)。
     func startSettle(toPage page: Int, fromOffset: CGFloat? = nil, velocity: CGFloat = 0) {
+        if phase == .settling {
+            let duration = currentSettleDuration
+            lastSettleDuration = duration
+            onSettleLifecycle?(.interrupted(duration: duration))
+            animator.cancel()
+        }
         let pageCount = onReadPageCount()
         let targetPage = min(max(0, page), max(0, pageCount - 1))
         let targetOffset = CGFloat(targetPage) * onReadPageWidth()
@@ -407,14 +550,15 @@ final class PagingInteractionController {
         animator.start(
             startPosition: fromOffset ?? onReadCurrentOffset(),
             target: targetOffset,
-            velocity: velocity
+            velocity: velocity,
+            startTime: currentPagingTime()
         )
         // PA4: 记录本次 settle 目标(重 clamp 后); 新 settle 即新意图,
         // 清除被打断目标(重启 settle / 正常手势都走这里)。
         settleTargetPage = targetPage
         interruptedSettleTarget = nil
         settleCount += 1
-        settleStartTime = ProcessInfo.processInfo.systemUptime
+        settleStartTime = currentPagingTime()
         phase = .settling
         ensureDisplayLink()
         trace("settleStart target=\(targetPage) start=\(Int(fromOffset ?? onReadCurrentOffset())) v=\(Int(velocity))")
@@ -422,6 +566,7 @@ final class PagingInteractionController {
 
     /// 立即(无动画)跳到某页, 并停交互(初始化 / 测试)。
     func jumpTo(page: Int) {
+        cancelActiveInteractionIfNeeded()
         animator.cancel()
         stopDisplayLink()
         phase = .idle
@@ -439,7 +584,8 @@ final class PagingInteractionController {
     }
 
     private func finishSettle() {
-        lastSettleDuration = ProcessInfo.processInfo.systemUptime - settleStartTime
+        lastSettleDuration = currentSettleDuration
+        onSettleLifecycle?(.settled(duration: lastSettleDuration))
         settleTargetPage = nil
         // E13: settle 收敛 = 手势结束, 收掉本手势缓冲(phase 置 idle 前记录)。
         flushTelemetry(phase: "settling")
@@ -507,17 +653,26 @@ final class PagingInteractionController {
         if telemetryEnabled {
             recordTelemetryInterval()
         }
+        onDisplayLinkTick?()
         processDisplayFrame()
     }
 
     /// Diagnostic fallback for processes where AppKit does not schedule a view
     /// display link. Returns true once the real animator reaches idle.
     func probeDisplayFrame() -> Bool {
-        processDisplayFrame()
+        let timestamp: CFTimeInterval
+        if let probeClockTime {
+            let next = probeClockTime + probeFrameDuration
+            self.probeClockTime = next
+            timestamp = next
+        } else {
+            timestamp = CACurrentMediaTime()
+        }
+        processDisplayFrame(atTime: timestamp)
         return phase == .idle
     }
 
-    private func processDisplayFrame() {
+    private func processDisplayFrame(atTime timestamp: CFTimeInterval? = nil) {
         displayFrameCount += 1
         switch phase {
         case .tracking:
@@ -528,7 +683,11 @@ final class PagingInteractionController {
             // TRACKING: 直接应用最新目标, 不做 epsilon skip(§15, 慢速也保持直接操作)
             applyScroll(latestDesiredOffset, allowSkip: false)
         case .settling:
-            _ = animator.tick()
+            if let timestamp {
+                _ = animator.tick(atTime: timestamp)
+            } else {
+                _ = animator.tick()
+            }
         case .idle:
             stopDisplayLinkIfIdle()
         }

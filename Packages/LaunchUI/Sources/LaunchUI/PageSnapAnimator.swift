@@ -19,10 +19,18 @@ final class PageSnapAnimator {
     init() {}
 
     /// 开始一次 settle(打断上一次)。
-    func start(startPosition: CGFloat, target: CGFloat, velocity: CGFloat) {
+    func start(
+        startPosition: CGFloat,
+        target: CGFloat,
+        velocity: CGFloat,
+        startTime: CFTimeInterval = ProcessInfo.processInfo.systemUptime
+    ) {
         generation += 1
         spring = PagingSpring(
-            startPosition: startPosition, target: target, velocity: velocity
+            startPosition: startPosition,
+            target: target,
+            velocity: velocity,
+            startTime: startTime
         )
     }
 
@@ -35,9 +43,15 @@ final class PageSnapAnimator {
     /// 每 display frame 采样一次。返回 false 表示已收敛(调用方应停 link 并走 onSettled)。
     @discardableResult
     func tick() -> Bool {
+        tick(atTime: CACurrentMediaTime())
+    }
+
+    /// Deterministic probe seam; production display-link callers continue to use
+    /// `tick()`, whose timestamp remains CACurrentMediaTime().
+    @discardableResult
+    func tick(atTime now: CFTimeInterval) -> Bool {
         guard let spring else { return false }
         let gen = generation
-        let now = CACurrentMediaTime()
         if spring.isSettled(atTime: now) {
             // stale 保护: 仅当未被新手势/新 settle 打断时才结算
             guard gen == generation else { return true }

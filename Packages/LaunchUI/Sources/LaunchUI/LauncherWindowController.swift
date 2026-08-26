@@ -796,6 +796,7 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
             NSApp.activate(ignoringOtherApps: true)
         }
         launcherWindow.showOnScreen(containing: NSEvent.mouseLocation)
+        gridViewController?.beginShowSession()
         onVisibilityChange?(true)
         // 换屏后安全区可能变化: 同时更新搜索框、设置按钮与网格保留区。
         updateChromeLayoutForCurrentScreen()

@@ -232,6 +232,32 @@ final class PageVisualCache {
         }
     }
 
+    /// 显式页集合查询(两页方向感知合成用): 按请求页序返回已存储视觉。
+    ///
+    /// - 返回顺序与 `pages` 一致; 缺失项不返回, 调用方以 `count == pages.count`
+    ///   检测不齐备。
+    /// - 忽略 iconEpoch: 任意代数下匹配数据/几何/scale/语言的视觉都算命中,
+    ///   同页多匹配取最后插入者(与 `storedVisual` 一致)。
+    /// - 不改变 LRU 序(只读查询), 不新增缓存 owner。
+    func visuals(
+        for pages: [Int],
+        displayRevision: UInt64,
+        geometry: PageVisualGeometrySignature,
+        backingScale: Int,
+        languageRevision: UInt64
+    ) -> [(page: Int, visual: PageVisual)] {
+        pages.compactMap { page in
+            guard let visual = storedVisual(
+                page: page,
+                displayRevision: displayRevision,
+                geometry: geometry,
+                backingScale: backingScale,
+                languageRevision: languageRevision
+            ) else { return nil }
+            return (page, visual)
+        }
+    }
+
     private func neighborPages(centerPage: Int, pageCount: Int) -> [Int] {
         var pages: [Int] = []
         if centerPage - 1 >= 0 { pages.append(centerPage - 1) }
