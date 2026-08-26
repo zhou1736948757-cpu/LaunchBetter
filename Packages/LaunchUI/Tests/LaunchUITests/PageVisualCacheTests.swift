@@ -213,4 +213,121 @@ struct PageVisualCacheTests {
             "page 2 缺失 → 不齐备(选择逻辑不影响就绪判定)"
         )
     }
+
+    // MARK: - T-001: 显式页集合查询 visuals(for:)
+
+    @Test("visuals(for:): [0,1] 按序返回两页")
+    func explicitPages01InOrder() {
+        let cache = PageVisualCache()
+        cache.insert(visual(for: key(page: 0)))
+        cache.insert(visual(for: key(page: 1)))
+        let visuals = cache.visuals(
+            for: [0, 1], displayRevision: 7, geometry: geometry,
+            backingScale: 2, languageRevision: 1
+        )
+        #expect(visuals.map(\.page) == [0, 1], "返回顺序与请求一致")
+        #expect(visuals.map(\.visual.key.pageIndex) == [0, 1])
+    }
+
+    @Test("visuals(for:): [1,2] 按序返回两页")
+    func explicitPages12InOrder() {
+        let cache = PageVisualCache()
+        cache.insert(visual(for: key(page: 1)))
+        cache.insert(visual(for: key(page: 2)))
+        let visuals = cache.visuals(
+            for: [1, 2], displayRevision: 7, geometry: geometry,
+            backingScale: 2, languageRevision: 1
+        )
+        #expect(visuals.map(\.page) == [1, 2])
+    }
+
+    @Test("visuals(for:): 任一页缺失 → 返回数 < 请求数(可检测不齐备)")
+    func explicitPagesDetectIncompleteness() {
+        let cache = PageVisualCache()
+        cache.insert(visual(for: key(page: 0)))
+        // 请求 [0,1], 但 page 1 缺失。
+        let visuals = cache.visuals(
+            for: [0, 1], displayRevision: 7, geometry: geometry,
+            backingScale: 2, languageRevision: 1
+        )
+        #expect(visuals.count == 1, "缺失项不返回, 调用方以 count 检测不齐备")
+        #expect(visuals.map(\.page) == [0])
+    }
+
+    @Test("visuals(for:): displayRevision 不匹配 → miss")
+    func explicitPagesRevisionMismatch() {
+        let cache = PageVisualCache()
+        cache.insert(visual(for: key(page: 0, revision: 7)))
+        let visuals = cache.visuals(
+            for: [0], displayRevision: 8, geometry: geometry,
+            backingScale: 2, languageRevision: 1
+        )
+        #expect(visuals.isEmpty)
+    }
+
+    @Test("visuals(for:): geometry 不匹配 → miss")
+    func explicitPagesGeometryMismatch() {
+        let cache = PageVisualCache()
+        cache.insert(visual(for: key(page: 0)))
+        let other = PageVisualGeometrySignature(
+            columns: 3, rows: 1, cellSize: 60, iconSize: 32,
+            horizontalSpacing: 20, verticalSpacing: 20,
+            pageWidth: 200, pageHeight: 120, topInset: 0, bottomInset: 0
+        )
+        let visuals = cache.visuals(
+            for: [0], displayRevision: 7, geometry: other,
+            backingScale: 2, languageRevision: 1
+        )
+        #expect(visuals.isEmpty)
+    }
+
+    @Test("visuals(for:): backing scale 不匹配 → miss")
+    func explicitPagesScaleMismatch() {
+        let cache = PageVisualCache()
+        cache.insert(visual(for: key(page: 0, scale: 2)))
+        let visuals = cache.visuals(
+            for: [0], displayRevision: 7, geometry: geometry,
+            backingScale: 1, languageRevision: 1
+        )
+        #expect(visuals.isEmpty)
+    }
+
+    @Test("visuals(for:): language revision 不匹配 → miss")
+    func explicitPagesLanguageMismatch() {
+        let cache = PageVisualCache()
+        cache.insert(visual(for: key(page: 0, language: 1)))
+        let visuals = cache.visuals(
+            for: [0], displayRevision: 7, geometry: geometry,
+            backingScale: 2, languageRevision: 2
+        )
+        #expect(visuals.isEmpty)
+    }
+
+    @Test("visuals(for:): 同页多 iconEpoch → 取最后插入者")
+    func explicitPagesPrefersLatestInsertion() {
+        let cache = PageVisualCache()
+        cache.insert(visual(for: key(page: 0, iconEpoch: 100)))
+        cache.insert(visual(for: key(page: 0, iconEpoch: 1)))
+        let visuals = cache.visuals(
+            for: [0], displayRevision: 7, geometry: geometry,
+            backingScale: 2, languageRevision: 1
+        )
+        #expect(visuals.count == 1)
+        #expect(visuals[0].visual.key.iconEpoch == 1, "取最后插入者(单调插入序最大)")
+    }
+
+    @Test("visuals(for:): 不改变 LRU 序, 缓存上限仍 3")
+    func explicitPagesDoesNotTouchLRUAndKeepsCap() {
+        let cache = PageVisualCache()
+        cache.insert(visual(for: key(page: 0)))
+        cache.insert(visual(for: key(page: 1)))
+        cache.insert(visual(for: key(page: 2)))
+        let orderBefore = cache.keysForDiag
+        _ = cache.visuals(
+            for: [0, 1], displayRevision: 7, geometry: geometry,
+            backingScale: 2, languageRevision: 1
+        )
+        #expect(cache.keysForDiag == orderBefore, "只读查询不提升 LRU 序")
+        #expect(cache.visualCount == 3, "缓存上限仍 3")
+    }
 }

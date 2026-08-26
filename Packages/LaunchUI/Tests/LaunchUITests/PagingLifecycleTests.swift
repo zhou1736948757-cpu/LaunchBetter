@@ -63,6 +63,28 @@ struct PagingLifecycleTests {
         #expect(scrollWrites == writesAfterDisable)
     }
 
+    @Test("shutdown, disable, and jump explicitly cancel an active settle")
+    func lifecycleTeardownReportsCancelled() {
+        let actions: [(String, (PagingInteractionController) -> Void)] = [
+            ("shutdown", { $0.shutdown() }),
+            ("disable", { $0.isEnabled = false }),
+            ("jump", { $0.jumpTo(page: 2) }),
+        ]
+        for (label, action) in actions {
+            let controller = makeHeadlessController(currentOffset: 0)
+            var reasons: [PagingInteractionController.SettleLifecycle] = []
+            controller.onSettleLifecycle = { reasons.append($0) }
+            controller.startSettle(toPage: 1)
+            action(controller)
+            #expect(reasons.count == 1, "\(label) must end the settle once")
+            if case .cancelled(let duration) = reasons[0] {
+                #expect(duration == nil, "\(label) has no defined completion duration")
+            } else {
+                Issue.record("\(label) must report cancelled")
+            }
+        }
+    }
+
     @Test("重新启用后仍可启动新 settle")
     func reenablingAllowsNewSettle() {
         let window = makeWindow()

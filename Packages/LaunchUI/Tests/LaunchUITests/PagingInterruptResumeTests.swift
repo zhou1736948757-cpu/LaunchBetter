@@ -23,10 +23,11 @@ struct PagingInterruptResumeTests {
         controller.onReadPageCount = { pageCount }
         controller.onReadCurrentOffset = { currentOffset }
         controller.onScroll = { currentOffset = $0 }
+        controller.enableDeterministicProbeClock()
         return (controller, { currentOffset })
     }
 
-    /// 驱动帧直到 idle(弹簧按墙钟收敛, 必须让真实时间流逝)。
+    /// 驱动帧直到 idle using deterministic fixed-duration probe frames.
     @discardableResult
     private func settleToIdle(
         _ controller: PagingInteractionController,
@@ -34,7 +35,6 @@ struct PagingInterruptResumeTests {
     ) -> Bool {
         for _ in 0..<maxFrames {
             if controller.probeDisplayFrame() { return true }
-            Thread.sleep(forTimeInterval: 1.0 / 240.0)
         }
         return false
     }
@@ -43,7 +43,6 @@ struct PagingInterruptResumeTests {
     private func driveFrames(_ controller: PagingInteractionController, count: Int) {
         for _ in 0..<count {
             _ = controller.probeDisplayFrame()
-            Thread.sleep(forTimeInterval: 1.0 / 240.0)
         }
     }
 
@@ -57,7 +56,6 @@ struct PagingInterruptResumeTests {
         for _ in 0..<maxFrames {
             _ = controller.probeDisplayFrame()
             if offset() > threshold { return true }
-            Thread.sleep(forTimeInterval: 1.0 / 240.0)
         }
         return false
     }
@@ -237,6 +235,7 @@ struct PagingInterruptResumeTests {
         controller.onReadPageCount = { pageCount }
         controller.onReadCurrentOffset = { currentOffset }
         controller.onScroll = { currentOffset = $0 }
+        controller.enableDeterministicProbeClock()
 
         // 目标页 5(页数 6 时合法)。
         controller.startSettle(toPage: 5)
@@ -250,6 +249,28 @@ struct PagingInterruptResumeTests {
         #expect(settleToIdle(controller))
         #expect(currentOffset == 1600, "重 clamp 后必须停在页 2")
         assertPageBoundary(controller, offset: currentOffset)
+    }
+
+    @Test("settle replacement reports the current session duration, not the previous one")
+    func settleReplacementUsesCurrentDuration() {
+        let (controller, _) = makeController()
+        var lifecycles: [PagingInteractionController.SettleLifecycle] = []
+        controller.onSettleLifecycle = { lifecycles.append($0) }
+        controller.enableDeterministicProbeClock(frameDuration: 0.01)
+
+        controller.startSettle(toPage: 1)
+        driveFrames(controller, count: 12)
+        controller.startSettle(toPage: 2)
+        driveFrames(controller, count: 3)
+        controller.startSettle(toPage: 1)
+
+        let interrupted = lifecycles.compactMap { lifecycle -> CFTimeInterval? in
+            if case .interrupted(let duration) = lifecycle { return duration }
+            return nil
+        }
+        #expect(interrupted.count == 2)
+        #expect(interrupted[0] > 0.10)
+        #expect(interrupted[1] > 0.02 && interrupted[1] < 0.06)
     }
 
     // MARK: - 页边界不变式
