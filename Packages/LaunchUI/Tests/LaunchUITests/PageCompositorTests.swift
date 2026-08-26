@@ -514,4 +514,141 @@ struct PageCompositorTests {
         #expect(compositor.metrics.frameApplyTotalUs > 0)
         #expect(compositor.metrics.frameApplyMaxUs > 0)
     }
+
+    // MARK: - T-017: 合成层方向(镜像 bug 回归)
+
+    /// 纯色 CGImage 工厂(与 PageVisualRendererTests.solidImage 同构)。
+    private func solidImage(r: CGFloat, g: CGFloat, b: CGFloat, alpha: CGFloat = 1, size: Int = 8) -> CGImage {
+        let context = CGContext(
+            data: nil, width: size, height: size, bitsPerComponent: 8,
+            bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        )!
+        context.setFillColor(red: r, green: g, blue: b, alpha: alpha)
+        context.fill(CGRect(x: 0, y: 0, width: size, height: size))
+        return context.makeImage()!
+    }
+
+    /// 1x 页面视觉(复用 PageVisualRendererTests.makeRequest 模式):
+    /// 2 列 1 行, gridOrigin=(30,30), gridSize=(140,60)。
+    /// item0 = 真实红色图标(页面视觉左上); item1 = 占位(色块 + 首字母)。
+    /// 页面视觉顶部 = 图标区, 底部 = 标签区(与 y-down 落位断言方向一致)。
+    private func makeOrientationVisual() -> PageVisual {
+        let request = PageVisualRenderRequest(
+            key: PageVisualKey(
+                pageIndex: 0, displayRevision: 1,
+                geometry: PageVisualGeometrySignature(
+                    columns: 2, rows: 1, cellSize: 60, iconSize: 32,
+                    horizontalSpacing: 20, verticalSpacing: 20,
+                    pageWidth: 200, pageHeight: 120, topInset: 0, bottomInset: 0
+                ),
+                backingScale: 1, languageRevision: 0, iconEpoch: 0
+            ),
+            gridOrigin: CGPoint(x: 30, y: 30),
+            gridSize: CGSize(width: 140, height: 60),
+            columns: 2, rows: 1, cellSize: 60, iconSize: 32,
+            horizontalSpacing: 20, verticalSpacing: 20,
+            scale: 1,
+            cells: [
+                .app(
+                    slot: 0, colorRGBA: (1, 0, 0, 1), letter: "A",
+                    label: "Alpha", icon: solidImage(r: 1, g: 0, b: 0)
+                ),
+                .app(
+                    slot: 1, colorRGBA: (0.2, 0.2, 0.2, 1), letter: "B",
+                    label: "Beta", icon: nil
+                ),
+            ]
+        )
+        return PageVisualRenderer.rasterize(request)!
+    }
+
+    /// 渲染 layer 到像素缓冲(buffer row 0 = 输出顶部行)。
+    ///
+    /// 注意: 必须**直接渲染 compositor 子层**而非 host 层树 —— 探针证实
+    /// `hostLayer.render(in:)` 的软件渲染路径不应用子层 `isGeometryFlipped`
+    /// (host+sub 渲染在 flipped=true/false 下输出相同), 只有直接渲染该层
+    /// 才复现镜像机制(与 T-016 calayer-flip-experiment.swift 同法)。
+    private func renderPixels(_ layer: CALayer, width: Int, height: Int) -> [UInt8] {
+        var buffer = [UInt8](repeating: 0, count: width * height * 4)
+        let context = CGContext(
+            data: &buffer, width: width, height: height, bitsPerComponent: 8,
+            bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        )!
+        layer.render(in: context)
+        return buffer
+    }
+
+    /// (x, y) 为输出像素坐标(y = 0 为输出顶部行)。
+    private func outputPixel(_ buffer: [UInt8], width: Int, x: Int, y: Int) -> (r: Int, g: Int, b: Int, a: Int) {
+        let index = (y * width + x) * 4
+        return (Int(buffer[index]), Int(buffer[index + 1]), Int(buffer[index + 2]), Int(buffer[index + 3]))
+    }
+
+    /// T-017: 合成层方向 — 走真实 activate 路径 + render(in:) 像素断言。
+    ///
+    /// 非 flipped host(y-up) + live 层 + rasterize 产物(1x):
+    /// 输出顶部区域 == 页面视觉顶部(item0 红色图标), 输出底部区域 ==
+    /// 页面视觉底部(标签白字, 无红色图标)。修复前(isGeometryFlipped=true)
+    /// 该测试必须失败(红蓝颠倒)。
+    @Test("T-017: 合成层方向 — 非 flipped host 渲染无镜像(输出顶部 == 页面视觉顶部)")
+    func compositorLayerRendersUpright() {
+        // 真实 rasterize 产物(1x): 页面视觉顶部 = item0 红色图标, 底部 = 标签。
+        let visual = makeOrientationVisual()
+        #expect(visual.image.width == 140 && visual.image.height == 60)
+
+        // 非 flipped host + live 层(与生产一致: host = view.layer, y-up)。
+        let host = CALayer()
+        host.frame = CGRect(x: 0, y: 0, width: 140, height: 60)
+        let live = CALayer()
+        live.frame = host.bounds
+
+        let placement = PageCompositor.Placement(
+            page: 0,
+            baseFrame: CGRect(x: 0, y: 0, width: 140, height: 60),
+            visual: visual
+        )
+        let compositor = PageCompositor()
+        compositor.activate(
+            placements: [placement], pageWidth: 640, startOffset: 0,
+            hostLayer: host, liveLayer: live
+        )
+
+        // 激活路径真实生效: live 隐藏 + 层 frame == baseFrame(位置不变)。
+        #expect(live.opacity == 0, "激活即隐藏 live 前景")
+        #expect(compositor.layerFramesForDiag == [placement.baseFrame], "层 frame == baseFrame(位置不变)")
+        #expect(host.sublayers?.count == 1)
+
+        // 直接渲染 compositor 子层(见 renderPixels 注释: host 层树渲染不应用
+        // 子层 isGeometryFlipped), 读输出像素(buffer row 0 = 输出顶部)。
+        let compositorLayer = host.sublayers?.first
+        #expect(compositorLayer != nil, "activate 已创建合成层")
+        let pixels = renderPixels(compositorLayer!, width: 140, height: 60)
+
+        // 无镜像: 输出顶部区域 == 页面视觉顶部(item0 红色图标)。
+        // 图标中心: 页面 y-down (30,16) → 非 flipped 层输出行 15。
+        let icon = outputPixel(pixels, width: 140, x: 30, y: 15)
+        #expect(icon.r > 200 && icon.g < 60 && icon.b < 60 && icon.a == 255, "输出顶部应为红色图标(无镜像)")
+
+        // 输出底部区域 == 页面视觉底部(标签白字; 无红色图标)。
+        // 只扫 cell0 标签区(x 2..58, 行 39..52): item0 用真实图标(无首字母),
+        // 该区域唯一白字来源就是标签本身 —— 镜像时此处是红色图标, 必失败。
+        var labelFound = false
+        for y in 39..<54 {
+            for x in 2..<59 where !labelFound {
+                let p = outputPixel(pixels, width: 140, x: x, y: y)
+                if p.r > 150, p.g > 150, p.b > 150 { labelFound = true }
+            }
+        }
+        #expect(labelFound, "输出底部应含标签白字(无镜像)")
+        var redInBottom = false
+        for y in 39..<54 {
+            for x in 0..<140 where !redInBottom {
+                let p = outputPixel(pixels, width: 140, x: x, y: y)
+                if p.r > 200, p.g < 60, p.b < 60 { redInBottom = true }
+            }
+        }
+        #expect(!redInBottom, "输出底部不得出现红色图标(无镜像)")
+    }
 }

@@ -188,7 +188,6 @@ final class PageCompositor {
         var newLayers: [CALayer] = []
         for placement in placements {
             let layer = CALayer()
-            layer.isGeometryFlipped = true
             layer.contents = placement.visual.image
             layer.contentsScale = placement.visual.rasterScale
             layer.frame = placement.baseFrame
