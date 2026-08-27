@@ -362,6 +362,8 @@ final class AppCellView: NSCollectionViewItem {
 
     override func prepareForReuse() {
         super.prepareForReuse()
+        // T-027: 真实 prepare-for-reuse 调用点(仅记录; 不改行为)。
+        PagingPerfContext.recordCellEvent("prepareForReuse")
         pressPresentation?.cancel()
         invalidateIconRequests()
         representedAppID = nil
@@ -606,6 +608,8 @@ final class AppCellView: NSCollectionViewItem {
         provider: any IconImageProviding,
         scale: Int
     ) {
+        // T-027: 真实 icon request 调用点(仅记录; 不改行为)。
+        PagingPerfContext.recordCellEvent("iconRequest")
         let expectedGeneration = requestGeneration
         let size = iconPointSize
         let task = Task { [weak self] in
@@ -627,6 +631,10 @@ final class AppCellView: NSCollectionViewItem {
         provider: any IconImageProviding,
         scale: Int
     ) {
+        // T-027: 真实 icon request 调用点(每个子项一次; 仅记录, 不改行为)。
+        for _ in children.prefix(FolderThumbnailMetrics.maxIconCount) {
+            PagingPerfContext.recordCellEvent("iconRequest")
+        }
         let expectedGeneration = requestGeneration
         // P0-05: 子图标按缩略图实际显示尺寸请求(metrics.iconSide, 向下取整,
         // 与 PageVisualRenderer.resolveIcons 同一取整约定 → 同一 IconKey 缓存

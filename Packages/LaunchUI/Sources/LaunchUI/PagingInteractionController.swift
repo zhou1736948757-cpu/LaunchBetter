@@ -76,6 +76,11 @@ final class PagingInteractionController {
     /// 开启时每事件记录到共享 `PagingTraceLog`, 诊断用途不参与行为。
     var traceEnabled = false
 
+    /// T-027: 分页性能遥测 recorder(默认 nil = 默认路径零开销, 仅一次 optional
+    /// 检查; 仅 `--paging-perf` 时由 GridViewController 接线)。recorder 只做
+    /// 计数/耗时聚合, 不参与任何行为决策, 不改 offset writer / 状态机 / 布局。
+    var perfRecorder: PagingPerfTelemetry?
+
     /// T-003: 跟手曲线(实验)。默认 `linear` 1.3, 与 `PagingTuning.followSensitivity`
     /// 完全一致(产品默认不变)。仅 `--pagingfeel-damped` 或测试 seam 改为
     /// `normalizedDamped`。纯函数, 不改变 PagingSpring / fling threshold。
@@ -389,6 +394,7 @@ final class PagingInteractionController {
             let duration = currentSettleDuration
             lastSettleDuration = duration
             onSettleLifecycle?(.interrupted(duration: duration))
+            perfRecorder?.recordSettleInterrupted(at: currentPagingTime())
             // 打断旧 settle: 从当前实际位置重新跟手, 视觉 discontinuity ≈ 0(§29)
             animator.cancel()
             interruptionCount += 1
@@ -414,18 +420,27 @@ final class PagingInteractionController {
         gestureStartTime = currentPagingTime()
         resetTelemetry()
         phase = .tracking
+        perfRecorder?.beginSession(
+            startPage: telemetryStartPage(),
+            startOffset: baseOffset,
+            at: currentPagingTime()
+        )
     }
 
     private func feedTracking(deltaX: CGFloat, deltaY: CGFloat) {
         inputEventCount += 1
+        perfRecorder?.recordInputEvent(at: currentPagingTime())
         guard phase == .tracking else { return }
         guard axisLock.accumulate(deltaX: deltaX, deltaY: deltaY) else {
+            // T-027: axis lock 前未进入 displacement 的事件(含累计 deltaX)。
+            perfRecorder?.recordPreLockEvent(deltaX: deltaX)
             return
         }
         // 方向回调: 每次手势至多一次; 轴锁定后首个非零水平位移时触发, 在首次
         // offset 写入前。deltaX < 0 → next, deltaX > 0 → previous。不写 offset。
         if !hasEmittedDirectionCallback, deltaX != 0 {
             hasEmittedDirectionCallback = true
+            perfRecorder?.recordAxisLock(at: currentPagingTime())
             onWillStartHorizontalTracking?(deltaX < 0 ? .next : .previous)
         }
         let pageWidth = onReadPageWidth()
@@ -465,6 +480,11 @@ final class PagingInteractionController {
         let pageCount = onReadPageCount()
         let currentPage = min(max(0, Int((current / max(1, pageWidth)).rounded())), max(0, pageCount - 1))
         let targetPage = min(max(0, currentPage + (deltaY < 0 ? 1 : -1)), max(0, pageCount - 1))
+        perfRecorder?.recordDiscreteInput(
+            startPage: telemetryStartPage(fromOffset: current),
+            startOffset: current,
+            at: currentPagingTime()
+        )
         startSettle(toPage: targetPage, fromOffset: current, velocity: 0)
     }
 
@@ -479,8 +499,10 @@ final class PagingInteractionController {
     private func cancelActiveInteractionIfNeeded() {
         switch phase {
         case .tracking:
+            perfRecorder?.recordTrackingCancelled(at: currentPagingTime())
             onInteractionCancelled?()
         case .settling:
+            perfRecorder?.recordSettleCancelled(at: currentPagingTime())
             onSettleLifecycle?(.cancelled(duration: nil))
         case .idle:
             break
@@ -489,6 +511,7 @@ final class PagingInteractionController {
 
     private func cancelInteraction() {
         if phase == .settling {
+            perfRecorder?.recordSettleCancelled(at: currentPagingTime())
             onSettleLifecycle?(.cancelled(duration: nil))
             animator.cancel()
             phase = .idle
@@ -499,6 +522,7 @@ final class PagingInteractionController {
             return
         }
         guard phase == .tracking else { return }
+        perfRecorder?.recordTrackingCancelled(at: currentPagingTime())
         onInteractionCancelled?()
         phase = .idle
         axisLock.ended()
@@ -512,6 +536,7 @@ final class PagingInteractionController {
     private func endGesture() {
         guard phase == .tracking else { return }
         lastGestureDuration = currentPagingTime() - gestureStartTime
+        perfRecorder?.recordGestureEnd(at: currentPagingTime())
         guard axisLock.isHorizontal, displacement != 0 else {
             finishTrackingWithoutSettle()
             return
@@ -541,14 +566,16 @@ final class PagingInteractionController {
             let duration = currentSettleDuration
             lastSettleDuration = duration
             onSettleLifecycle?(.interrupted(duration: duration))
+            perfRecorder?.recordSettleInterrupted(at: currentPagingTime())
             animator.cancel()
         }
         let pageCount = onReadPageCount()
         let targetPage = min(max(0, page), max(0, pageCount - 1))
         let targetOffset = CGFloat(targetPage) * onReadPageWidth()
+        let startOffset = fromOffset ?? onReadCurrentOffset()
         onSettleTargetPage(targetPage)
         animator.start(
-            startPosition: fromOffset ?? onReadCurrentOffset(),
+            startPosition: startOffset,
             target: targetOffset,
             velocity: velocity,
             startTime: currentPagingTime()
@@ -560,6 +587,14 @@ final class PagingInteractionController {
         settleCount += 1
         settleStartTime = currentPagingTime()
         phase = .settling
+        // T-027: programmatic/discrete 路径无手势 session 时补开一个, 保证
+        // settle 生命周期闭合(已有时 no-op); settleStart 记录目标页与相位。
+        perfRecorder?.beginSessionIfNeeded(
+            startPage: telemetryStartPage(fromOffset: startOffset),
+            startOffset: startOffset,
+            at: currentPagingTime()
+        )
+        perfRecorder?.recordSettleStart(targetPage: targetPage, at: currentPagingTime())
         ensureDisplayLink()
         trace("settleStart target=\(targetPage) start=\(Int(fromOffset ?? onReadCurrentOffset())) v=\(Int(velocity))")
     }
@@ -585,6 +620,10 @@ final class PagingInteractionController {
 
     private func finishSettle() {
         lastSettleDuration = currentSettleDuration
+        perfRecorder?.recordSettleCompleted(
+            finalOffset: onReadCurrentOffset(),
+            at: currentPagingTime()
+        )
         onSettleLifecycle?(.settled(duration: lastSettleDuration))
         settleTargetPage = nil
         // E13: settle 收敛 = 手势结束, 收掉本手势缓冲(phase 置 idle 前记录)。
@@ -607,6 +646,7 @@ final class PagingInteractionController {
             startSettle(toPage: target)
             return
         }
+        perfRecorder?.recordTrackingEndedWithoutSettle(at: currentPagingTime())
         phase = .idle
         axisLock.ended()
         velocity.reset()
@@ -676,6 +716,7 @@ final class PagingInteractionController {
         displayFrameCount += 1
         switch phase {
         case .tracking:
+            perfRecorder?.recordTrackingFrame()
             guard axisLock.isHorizontal, displacement != 0 else {
                 stopDisplayLink()
                 return
@@ -683,6 +724,7 @@ final class PagingInteractionController {
             // TRACKING: 直接应用最新目标, 不做 epsilon skip(§15, 慢速也保持直接操作)
             applyScroll(latestDesiredOffset, allowSkip: false)
         case .settling:
+            perfRecorder?.recordSettlingFrame()
             if let timestamp {
                 _ = animator.tick(atTime: timestamp)
             } else {
@@ -694,6 +736,7 @@ final class PagingInteractionController {
     }
 
     private func applyScroll(_ offset: CGFloat, allowSkip: Bool) {
+        perfRecorder?.recordApplyScroll()
         let pageWidth = onReadPageWidth()
         let pageCount = onReadPageCount()
         let maxOffset = max(0, CGFloat(pageCount) * pageWidth - pageWidth)
@@ -706,11 +749,21 @@ final class PagingInteractionController {
         )
         if allowSkip, abs(clamped - lastAppliedOffset) < PagingTuning.positionTolerance {
             settlingSkippedWriteCount += 1
+            perfRecorder?.recordSettleSkipWrite()
             return
         }
         onScroll(clamped)
         lastAppliedOffset = clamped
         scrollWriteCount += 1
+        perfRecorder?.recordOffsetWrite(at: currentPagingTime())
+    }
+
+    /// T-027: 起始页(经 clamp; 供 telemetry session 归属)。
+    private func telemetryStartPage(fromOffset offset: CGFloat? = nil) -> Int {
+        let pageWidth = onReadPageWidth()
+        let pageCount = onReadPageCount()
+        let offset = offset ?? baseOffset
+        return min(max(0, Int((offset / max(1, pageWidth)).rounded())), max(0, pageCount - 1))
     }
 
     @MainActor

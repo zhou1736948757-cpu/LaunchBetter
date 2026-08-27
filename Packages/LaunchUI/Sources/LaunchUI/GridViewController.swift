@@ -1,5 +1,6 @@
 import AppKit
 import LaunchCore
+import QuartzCore
 
 /// Runtime diagnostic switches owned by the paging controller wiring.
 /// Keeping flag interpretation here gives tests a real configuration seam
@@ -179,6 +180,10 @@ final class GridViewController: NSViewController {
 
     /// T-002: 激活原因遥测(默认关; `--pagingfeeltelemetry` 开启)。观察者, 不改变激活判断。
     let pageCompositorActivationTelemetry = PageCompositorActivationTelemetry()
+
+    /// T-027: 分页性能遥测 recorder(默认关; `--paging-perf` 开启)。观察者,
+    /// 只做计数/耗时聚合, 不改变任何行为; 默认路径不接线(perfRecorder == nil)。
+    private let pagingPerfTelemetry = PagingPerfTelemetry()
 
     /// T-002: 本次手势起点快照的 paging 计数(用于按手势差分 displayFrame/scrollWrite)。
     private var compositorTelemetryStartDisplayFrames = 0
@@ -485,6 +490,12 @@ final class GridViewController: NSViewController {
 
     deinit {
         Self.tearDownMemoryPressureSource(memoryPressureSource)
+        // T-027: 释放时输出尚未输出的 idle 归属摘要(幂等; enabled 关闭时 no-op)。
+        // 注意: 不能在此捕获 self(触发 copy-of-self 限制), 仅捕获 recorder 局部值。
+        let perfRecorder = pagingPerfTelemetry
+        MainActor.assumeIsolated {
+            perfRecorder.flushIdleSummaryIfAny()
+        }
         // P3-I: 注销 Library-only 数据观察者(幂等)。
         // 硬约束: 本控制器为 @MainActor 类, 所有引用均在主线程持有/释放,
         // deinit 必在主线程执行(与 memoryPressureSource teardown 同一前提)。
@@ -528,6 +539,8 @@ final class GridViewController: NSViewController {
             collectionView: collectionView
         ) { [weak self] _, indexPath, item in
             guard let self else { return nil }
+            // T-027: diffable 数据源的真实 cell provider 调用点(每 item 一次)。
+            PagingPerfContext.recordCellEvent("cellProvider")
             switch item {
             case .appLibrary:
                 let cell = collectionView.makeItem(
@@ -602,6 +615,8 @@ final class GridViewController: NSViewController {
 
     private func configure(_ cell: AppCellView?, with item: Item) {
         guard let cell else { return }
+        // T-027: AppCell 真实 configure 调用点(含 folder 缩略图分支)。
+        PagingPerfContext.recordCellEvent("cellConfigure")
         let pointSize = liveEffectivePointSize()
         switch item {
         case .app(let id):
@@ -1338,6 +1353,34 @@ final class GridViewController: NSViewController {
             : nil
     }
 
+    /// T-027: `--paging-perf` 接线（默认关闭；测试经此 seam 显式开启）。
+    /// 关闭时各 perfRecorder 引用置 nil —— 默认路径每个调用点仅一次 optional
+    /// 检查，零分配、零字符串构建、零时间戳读取；开启时 recorder 只做计数与
+    /// 耗时聚合，不参与任何行为决策。幂等，可重复调用。
+    /// 注意: 视图加载前调用时布局尚未创建, gridLayout 部分自动跳过
+    /// (生产路径 setupPagingController 恒在 viewDidLoad 后调用, 布局已就绪)。
+    func configurePagingPerfTelemetry(enabled: Bool) {
+        pagingPerfTelemetry.enabled = enabled
+        paging.perfRecorder = enabled ? pagingPerfTelemetry : nil
+        if collectionView?.collectionViewLayout is PagingGridLayout {
+            gridLayout.perfRecorder = enabled ? pagingPerfTelemetry : nil
+        }
+        pageCompositor.perfRecorder = enabled ? pagingPerfTelemetry : nil
+        PagingPerfContext.recorder = enabled ? pagingPerfTelemetry : nil
+    }
+
+    /// T-027: 测试/诊断 —— 遥测是否已接线。
+    var pagingPerfEnabledForDiag: Bool { pagingPerfTelemetry.enabled }
+
+    /// T-027: 测试/诊断 —— 当前 recorder 的 open session 状态。
+    var pagingPerfHasOpenSessionForDiag: Bool { pagingPerfTelemetry.hasOpenSessionForDiag }
+
+    /// T-027: 测试/诊断 —— 捕获 recorder 的 JSONL 摘要输出(默认 stdout)。
+    /// 只替换输出目标, 不改变任何采集行为。
+    func setPagingPerfSummaryHandlerForDiag(_ handler: @escaping (String) -> Void) {
+        pagingPerfTelemetry.onSummary = handler
+    }
+
     var pagingDisplayLinkTelemetryEnabledForDiag: Bool {
         paging.onDisplayLinkTick != nil
     }
@@ -1399,9 +1442,12 @@ final class GridViewController: NSViewController {
         // 会在下一次真正 idle 时补跑(schedulePageVisualPrepare 内部已有
         // generation + 取消旧任务机制, 重复调度安全)。
         paging.onPhaseIdle = { [weak self] in
-            self?.finalizePageCompositor()
-            self?.flushCompositorActivationTelemetry()
-            self?.schedulePageVisualPrepare()
+            guard let self else { return }
+            self.finalizePageCompositor()
+            self.flushCompositorActivationTelemetry()
+            // T-027: teardown 指标已在上一步记入 session, 此时收口输出 JSONL。
+            self.pagingPerfTelemetry.flushOpenSession()
+            self.schedulePageVisualPrepare()
         }
         // P2: settle 收敛 → idle 准备相邻页视觉。
         paging.onSettleComplete = { [weak self] in
@@ -1417,7 +1463,14 @@ final class GridViewController: NSViewController {
             // 用户会看到一段只有壁纸背景的空白。这里在合成表面仍遮盖时
             // 强制同步布局, 让目标页 cell 在揭露前就绪。
             if self.pageCompositor.isActive {
+                // T-027: 记录 layoutSubtreeIfNeeded() 是否执行及其耗时(teardown 归属)。
+                let perfStart = self.pagingPerfTelemetry.enabled ? CACurrentMediaTime() : 0
                 self.collectionView.layoutSubtreeIfNeeded()
+                if self.pagingPerfTelemetry.enabled {
+                    self.pagingPerfTelemetry.recordCompositorTeardownLayout(
+                        durationMs: (CACurrentMediaTime() - perfStart) * 1000
+                    )
+                }
                 self.pageCompositorSyncLayoutCountForDiag += 1
             }
         }
@@ -1444,6 +1497,11 @@ final class GridViewController: NSViewController {
         if CommandLine.arguments.contains("--pagingfeel-damped") {
             paging.followCurve = .normalizedDamped(strength: PagingTuning.followSensitivity)
         }
+        // T-027: --paging-perf 分页性能诊断(默认关; 交互式运行, 每 session 完成
+        // 时输出一行 JSONL 到 stdout)。不改变任何行为。
+        configurePagingPerfTelemetry(
+            enabled: CommandLine.arguments.contains("--paging-perf")
+        )
     }
 
     // MARK: - P2 偏移抽象与滚动路由
@@ -1461,18 +1519,39 @@ final class GridViewController: NSViewController {
     /// 唯一 offset writer 路由: compositor active → 只移动合成层(不写 clip),
     /// settle 期间真实 clip 在遮盖下渐进跟进(见 `advanceRealClipBehindCover`);
     /// 否则写真实 clip。
+    ///
+    /// T-027: 按真实路由分桶记录(live tracking / live settling /
+    /// compositor tracking / compositor settling layer apply)。idle 期写入
+    /// (jump 等程序化写)不归属任何 session 桶, 不计数。
     private func routeScroll(_ offset: CGFloat) {
         recordPagingEventForDiag("firstOffsetWrite")
         if pageCompositor.isActive {
+            let perfStart = pagingPerfTelemetry.enabled ? CACurrentMediaTime() : 0
             pageCompositor.applyOffset(offset)
+            if pagingPerfTelemetry.enabled {
+                pagingPerfTelemetry.recordCompositorApplyOffset(
+                    phase: paging.phase == .settling ? "settling" : "tracking",
+                    durationMs: (CACurrentMediaTime() - perfStart) * 1000
+                )
+            }
             if paging.phase == .settling {
                 advanceRealClipBehindCover()
             }
             return
         }
+        // live 路径: 真实 clip 写。compositor tracking 期间按架构不应出现
+        // 真实 clip 写(compositor 分支已 return; 该计数恒 0, 由 recorder
+        // 的 compositorTracking.realClipWriteCount 如实暴露, 供真机验证)。
+        let perfStart = pagingPerfTelemetry.enabled ? CACurrentMediaTime() : 0
         collectionView.enclosingScrollView?.contentView.scroll(
             to: NSPoint(x: offset, y: 0)
         )
+        if pagingPerfTelemetry.enabled, paging.phase != .idle {
+            pagingPerfTelemetry.recordLiveScroll(
+                phase: paging.phase == .settling ? "settling" : "tracking",
+                durationMs: (CACurrentMediaTime() - perfStart) * 1000
+            )
+        }
     }
 
     /// P2 平滑落地(v0.5.2): settling 每帧让真实 clip 向 compositor 偏移跟进
@@ -1481,14 +1560,33 @@ final class GridViewController: NSViewController {
     /// (v0.5.1 的落地强制布局保留为兜底, 此时通常已无剩余工作)。
     /// 引擎不受影响: readPagingOffset 在 compositor active 期间只读合成器偏移。
     /// abort/打断路径由 teardown 的 clip 同步 + 强制布局兜底。
+    ///
+    /// T-027: 记录调用数 / gap 阈值跳过 / catch-up 写次数+耗时 / gap 最大值。
     private func advanceRealClipBehindCover() {
         let target = pageCompositor.currentOffset
         let current = realClipOffset()
         let gap = target - current
-        guard abs(gap) > 0.5 else { return }
+        guard abs(gap) > 0.5 else {
+            // T-027: gap 阈值跳过(默认关时单次 bool 检查, 零记录)。
+            if pagingPerfTelemetry.enabled {
+                pagingPerfTelemetry.recordCatchUpGapSkip()
+            }
+            return
+        }
+        // T-027: 记录调用数(默认关时单次 bool 检查, 零记录)。
+        if pagingPerfTelemetry.enabled {
+            pagingPerfTelemetry.recordAdvanceRealClipCall()
+        }
+        let perfStart = pagingPerfTelemetry.enabled ? CACurrentMediaTime() : 0
         collectionView.enclosingScrollView?.contentView.scroll(
             to: NSPoint(x: current + gap * 0.35, y: 0)
         )
+        if pagingPerfTelemetry.enabled {
+            pagingPerfTelemetry.recordCatchUpWrite(
+                durationMs: (CACurrentMediaTime() - perfStart) * 1000,
+                gap: abs(gap)
+            )
+        }
         pageVisualRealClipAdvanceCountForDiag += 1
     }
 
@@ -1606,6 +1704,8 @@ final class GridViewController: NSViewController {
             // clip to the compositor's exact currentOffset and reveals live;
             // it performs no rasterization or cache wait.
             pageCompositor.abort()
+            // T-027: compositor active 状态同步(abort teardown 后已不激活)。
+            pagingPerfTelemetry.markCompositorActive(false)
             pageCompositor.metrics.recordFallbackLive()
             recordActivationResult(.interruptionFallbackLive)
             return
@@ -1708,6 +1808,8 @@ final class GridViewController: NSViewController {
             recordActivationResult(.invalidGeometry)
             return
         }
+        // T-027: compositor active 状态同步(激活成功)。
+        pagingPerfTelemetry.markCompositorActive(true)
         recordActivationResult(.activated)
     }
 
@@ -1759,6 +1861,8 @@ final class GridViewController: NSViewController {
     private func finalizePageCompositor() {
         if pageCompositor.isActive {
             pageCompositor.finishSettle()
+            // T-027: finishSettle teardown 后 compositor 已不激活。
+            pagingPerfTelemetry.markCompositorActive(false)
             return
         }
         guard currentSurface != .appLibrary, !searchMode, pageCount > 0 else { return }
@@ -1770,6 +1874,8 @@ final class GridViewController: NSViewController {
     /// 同步收尾: 捕获当前 visual offset → 真实 clip 同步 → reveal → 移除, 无僵尸 layer。
     func shutdownPageCompositor() {
         pageCompositor.shutdown()
+        // T-027: shutdown teardown 后 compositor 已不激活。
+        pagingPerfTelemetry.markCompositorActive(false)
     }
 
     /// purge 页面视觉缓存(hide / 内存压力 / scale 变更)。

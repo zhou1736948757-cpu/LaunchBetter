@@ -99,6 +99,12 @@ final class PageCompositor {
     /// 默认产品路径 diagnosticsEnabled == false, 完全不进入记录逻辑。
     var diagnosticsEnabled = false
 
+    /// T-027: 分页性能遥测 recorder(默认 nil; `--paging-perf` 时由
+    /// GridViewController 接线)。只记录 teardown 原因 / sync clip /
+    /// layoutSubtreeIfNeeded / 总时长, 与 `metrics`(--pagecompositor)为独立
+    /// 存储, 不双重计数、不参与任何行为。
+    var perfRecorder: PagingPerfTelemetry?
+
     /// 诊断事件环上限(M3): 固定容量环形缓冲, 超过上限覆盖最旧事件。
     private static let maxDiagEvents = 64
     /// 一页视觉的放置信息(baseFrame 为宿主层坐标, y-up; 水平随 offset 漂移)。
@@ -280,9 +286,25 @@ final class PageCompositor {
     }
 
     private func teardown(syncOffset: CGFloat, event: Event) {
+        // T-027: teardown 原因归属(finishSettle / abort / shutdown)。
+        switch event {
+        case .finishedSettle: perfRecorder?.recordCompositorTeardownStarted(reason: "finishSettle")
+        case .aborted: perfRecorder?.recordCompositorTeardownStarted(reason: "abort")
+        case .shutdown: perfRecorder?.recordCompositorTeardownStarted(reason: "shutdown")
+        case .activated, .applied: break
+        }
+        let perfStart = perfRecorder?.enabled == true ? CACurrentMediaTime() : 0
         CATransaction.begin()
         CATransaction.setDisableActions(true)
+        // sync clip duration(onSyncClip 内含真实 clip 写; layoutSubtreeIfNeeded
+        // 在 GridViewController 闭包内经 recordCompositorTeardownLayout 记录)。
+        let syncStart = perfRecorder?.enabled == true ? CACurrentMediaTime() : 0
         onSyncClip(syncOffset)
+        if perfRecorder?.enabled == true {
+            perfRecorder?.recordCompositorTeardownSyncClip(
+                durationMs: (CACurrentMediaTime() - syncStart) * 1000
+            )
+        }
         liveLayer?.opacity = 1
         CATransaction.commit()
         for layer in layers {
@@ -293,6 +315,11 @@ final class PageCompositor {
         isActive = false
         metrics.recordActiveChange(active: false)
         recordEvent(event)
+        if perfRecorder?.enabled == true {
+            perfRecorder?.recordCompositorTeardownFinished(
+                durationMs: (CACurrentMediaTime() - perfStart) * 1000
+            )
+        }
     }
 
     // MARK: - 诊断

@@ -227,6 +227,18 @@ public final class PagingGridLayout: NSCollectionViewLayout {
     private var lastVisibleWidth: CGFloat = 0
     private var lastVisibleHeight: CGFloat = 0
 
+    /// T-027: 分页性能遥测 recorder(默认 nil; `--paging-perf` 时由
+    /// GridViewController 接线)。弱引用; 只记录 prepare/query/invalidate
+    /// 的 count/耗时, **绝不改变 layout invalidation 的真实行为**。
+    weak var perfRecorder: PagingPerfTelemetry?
+
+    /// T-027: recorder 访问辅助。AppKit 布局回调恒在主线程执行, 本辅助仅作
+    /// 编译期隔离桥接(MainActor.assumeIsolated 运行时开销仅在已接线时发生)。
+    private func perfRecord(_ body: @MainActor (PagingPerfTelemetry) -> Void) {
+        guard let perfRecorder else { return }
+        MainActor.assumeIsolated { body(perfRecorder) }
+    }
+
     public init(
         columns: Int,
         rows: Int,
@@ -330,6 +342,9 @@ public final class PagingGridLayout: NSCollectionViewLayout {
     public override func prepare() {
         super.prepare()
         prepareCount += 1
+        // T-027: 计时包裹(原逻辑逐字保留; 仅记录, 不改失效行为)。
+        perfRecord { $0.recordLayoutPrepareStarted() }
+        defer { perfRecord { $0.recordLayoutPrepareFinished() } }
         guard let collectionView else { return }
         let bounds = collectionView.bounds
         let geometry = buildGeometry(usingClipWidth: visibleClipWidth)
@@ -451,6 +466,20 @@ public final class PagingGridLayout: NSCollectionViewLayout {
 
     public override func layoutAttributesForElements(in rect: NSRect) -> [NSCollectionViewLayoutAttributes] {
         attributeQueryCount += 1
+        // T-027: 计时包裹(原逻辑移入 impl, 逐字保留; 只记录, 不改行为)。
+        perfRecord { $0.recordLayoutQueryStarted() }
+        let result = layoutAttributesForElementsImpl(in: rect)
+        perfRecord { recorder in
+            recorder.recordLayoutQueryFinished(
+                candidates: lastAttributeCandidateCount,
+                returned: result.count
+            )
+        }
+        return result
+    }
+
+    /// T-027: `layoutAttributesForElements(in:)` 原实现(行为逐字保留)。
+    private func layoutAttributesForElementsImpl(in rect: NSRect) -> [NSCollectionViewLayoutAttributes] {
         guard mode == .paged,
               !pagedSectionItemCounts.isEmpty else {
             return attributesFromAllFrames(intersecting: rect)
@@ -551,7 +580,11 @@ public final class PagingGridLayout: NSCollectionViewLayout {
     /// 滚动/翻页动画只改变文档 bounds.origin(帧是文档坐标静态值)→ 不失效;
     /// AppKit 每次滚动还会"提议"把文档收成 clip 宽, 一律忽略(宽度锁在 ClickableCollectionView)。
     public override func shouldInvalidateLayout(forBoundsChange newBounds: NSRect) -> Bool {
-        guard let collectionView else { return false }
+        guard let collectionView else {
+            // T-027: 记录判定(false; 无 collection view 的退化路径)。
+            perfRecord { $0.recordLayoutInvalidationDecision(false) }
+            return false
+        }
         let clipWidth = collectionView.enclosingScrollView?.contentView.bounds.width
             ?? newBounds.width
         let clipHeight = collectionView.enclosingScrollView?.contentView.bounds.height
@@ -559,6 +592,8 @@ public final class PagingGridLayout: NSCollectionViewLayout {
         let invalidate = clipWidth != lastVisibleWidth || clipHeight != lastVisibleHeight
         lastVisibleWidth = clipWidth
         lastVisibleHeight = clipHeight
+        // T-027: 记录调用数与 true/false 次数(判定逻辑逐字保留; 仅记录)。
+        perfRecord { $0.recordLayoutInvalidationDecision(invalidate) }
         return invalidate
     }
 }
