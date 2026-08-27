@@ -407,4 +407,67 @@ struct IconContentVersionFactoryTests {
         )
         #expect(v1 != v2)
     }
+
+    @Test("resourceMetadata 合并: 正常文件返回精确 mtime(纳秒公式)+大小")
+    func mergedMetadataNormalFile() throws {
+        let dir = try tempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let appURL = dir.appendingPathComponent("App.app")
+        let resources = appURL.appendingPathComponent("Contents/Resources")
+        try FileManager.default.createDirectory(at: resources, withIntermediateDirectories: true)
+        let iconURL = resources.appendingPathComponent("App.icns")
+        try Data(count: 4096).write(to: iconURL)
+        let stamp = Date(timeIntervalSince1970: 1_700_000_000) // 整秒, 无精度损失
+        try FileManager.default.setAttributes(
+            [.modificationDate: stamp], ofItemAtPath: iconURL.path
+        )
+
+        let version = IconContentVersionFactory.make(
+            appURL: appURL,
+            infoPlist: ["CFBundleIconFile": "App", "CFBundleVersion": "1.0"],
+            infoPlistDate: nil
+        )
+        #expect(version.iconResourceSizeBytes == 4096)
+        #expect(
+            version.iconResourceModificationNanoseconds
+                == UInt64(stamp.timeIntervalSince1970 * 1_000_000_000)
+        )
+    }
+
+    @Test("resourceMetadata 合并: 候选文件不存在 → nil → 回退不崩")
+    func mergedMetadataMissingFileFallsBack() throws {
+        let dir = try tempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let appURL = dir.appendingPathComponent("App.app")
+        let resources = appURL.appendingPathComponent("Contents/Resources")
+        try FileManager.default.createDirectory(at: resources, withIntermediateDirectories: true)
+        // CFBundleIconFile 指名但文件不存在, 且无 Assets.car → resourceMetadata 返回 nil, 走回退
+        let version = IconContentVersionFactory.make(
+            appURL: appURL,
+            infoPlist: ["CFBundleIconFile": "Missing", "CFBundleVersion": "1.0"],
+            infoPlistDate: Date(timeIntervalSince1970: 700)
+        )
+        #expect(version.iconResourceModificationNanoseconds == nil)
+        #expect(version.iconResourceSizeBytes == nil)
+        #expect(version.infoPlistModificationNanoseconds == UInt64(700 * 1_000_000_000))
+        #expect(version.bundleVersion == "1.0")
+    }
+
+    @Test("resourceMetadata 合并: 同一文件两次调用结果一致(确定性)")
+    func mergedMetadataDeterministic() throws {
+        let dir = try tempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let appURL = dir.appendingPathComponent("App.app")
+        let resources = appURL.appendingPathComponent("Contents/Resources")
+        try FileManager.default.createDirectory(at: resources, withIntermediateDirectories: true)
+        try Data(count: 2048).write(to: resources.appendingPathComponent("App.icns"))
+        let plist: [String: Any] = ["CFBundleIconFile": "App", "CFBundleVersion": "1.0"]
+
+        let v1 = IconContentVersionFactory.make(appURL: appURL, infoPlist: plist, infoPlistDate: nil)
+        let v2 = IconContentVersionFactory.make(appURL: appURL, infoPlist: plist, infoPlistDate: nil)
+        #expect(v1.iconResourceModificationNanoseconds != nil)
+        #expect(v1.iconResourceModificationNanoseconds == v2.iconResourceModificationNanoseconds)
+        #expect(v1.iconResourceSizeBytes == 2048)
+        #expect(v1.iconResourceSizeBytes == v2.iconResourceSizeBytes)
+    }
 }

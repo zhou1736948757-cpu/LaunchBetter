@@ -24,10 +24,10 @@ public enum IconContentVersionFactory {
         let iconFile = iconResourceName(from: infoPlist)
         if let iconURL = iconFile.flatMap({
             locateIconResource(named: $0, in: resourcesURL)
-        }), let date = modificationNanoseconds(of: iconURL), let size = fileSizeBytes(of: iconURL) {
+        }), let metadata = resourceMetadata(of: iconURL) {
             return IconContentVersion(
-                iconResourceModificationNanoseconds: date,
-                iconResourceSizeBytes: size,
+                iconResourceModificationNanoseconds: metadata.mtime,
+                iconResourceSizeBytes: metadata.size,
                 infoPlistModificationNanoseconds: infoPlistDate.map {
                     UInt64($0.timeIntervalSince1970 * 1_000_000_000)
                 },
@@ -37,10 +37,10 @@ public enum IconContentVersionFactory {
 
         // 2. Assets.car
         let assetsURL = resourcesURL.appendingPathComponent("Assets.car")
-        if let date = modificationNanoseconds(of: assetsURL), let size = fileSizeBytes(of: assetsURL) {
+        if let metadata = resourceMetadata(of: assetsURL) {
             return IconContentVersion(
-                iconResourceModificationNanoseconds: date,
-                iconResourceSizeBytes: size,
+                iconResourceModificationNanoseconds: metadata.mtime,
+                iconResourceSizeBytes: metadata.size,
                 infoPlistModificationNanoseconds: infoPlistDate.map {
                     UInt64($0.timeIntervalSince1970 * 1_000_000_000)
                 },
@@ -80,21 +80,12 @@ public enum IconContentVersionFactory {
         return nil
     }
 
-    private static func modificationNanoseconds(of url: URL) -> UInt64? {
-        guard let date = try? url.resourceValues(
-            forKeys: [.contentModificationDateKey]
-        ).contentModificationDate else {
+    private static func resourceMetadata(of url: URL) -> (mtime: UInt64, size: UInt64)? {
+        guard let values = try? url.resourceValues(
+            forKeys: [.contentModificationDateKey, .fileSizeKey]
+        ), let date = values.contentModificationDate, let size = values.fileSize else {
             return nil
         }
-        return UInt64(date.timeIntervalSince1970 * 1_000_000_000)
-    }
-
-    private static func fileSizeBytes(of url: URL) -> UInt64? {
-        guard let size = try? url.resourceValues(
-            forKeys: [.fileSizeKey]
-        ).fileSize else {
-            return nil
-        }
-        return UInt64(size)
+        return (UInt64(date.timeIntervalSince1970 * 1_000_000_000), UInt64(size))
     }
 }
