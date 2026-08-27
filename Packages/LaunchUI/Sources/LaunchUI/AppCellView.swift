@@ -556,7 +556,7 @@ final class AppCellView: NSCollectionViewItem {
     }
 
     /// 释放文件夹缩略图层级: reset 状态、从 superview 移除并置 nil, 使
-    /// NSVisualEffectView + container/sheen + 9 个图标 layer 真正被释放。
+    /// FolderThumbnailView(NSView) + container/sheen + 9 个图标 layer 真正被释放。
     /// 仅 App 配置(configure)在 beginConfiguration 之后调用; 下一次文件夹
     /// 配置经 ensure 重新创建。
     private func releaseFolderThumbnailView() {
@@ -671,12 +671,31 @@ final class AppCellView: NSCollectionViewItem {
     }
 }
 
-/// 主网格文件夹缩略图: AppKit 磨砂背景承载最多 3x3 个真实图标。
+/// 文件夹缩略图表面样式常量 —— live(FolderThumbnailView)与
+/// raster(PageVisualRenderer.drawFolderThumbnail)共用的唯一数值源。
 ///
-/// 未拿到图标时对应位置保持透明，不绘制首字母或色块占位，避免把文件夹
-/// 缩略图误认为普通 App 单元格。所有尺寸都按当前 cell 的 point/Retina scale
-/// 重新计算，图标 layer 不跨 cell 共享。
-private final class FolderThumbnailView: NSVisualEffectView {
+/// T-020: 移除 live 层动态系统毛玻璃(NSVisualEffectView material)后, live 与
+/// raster 统一为静态半透明 glass surface; 数值与修复前完全一致(0.08/0.38/
+/// 0.18/0.02), 只消除 duplication 不改变视觉。禁止在此之外引入协议/策略抽象。
+enum FolderThumbnailStyle {
+    /// 玻璃背景填充 alpha(白)。
+    static let backgroundAlpha: CGFloat = 0.08
+    /// 玻璃边框 alpha(白, 1/scale 线宽)。
+    static let borderAlpha: CGFloat = 0.38
+    /// sheen 渐变顶部 alpha(白, 顶亮)。
+    static let sheenTopAlpha: CGFloat = 0.18
+    /// sheen 渐变底部 alpha(白, 底暗)。
+    static let sheenBottomAlpha: CGFloat = 0.02
+}
+
+/// 主网格文件夹缩略图: 静态半透明 glass surface 承载最多 3x3 个真实图标。
+///
+/// T-020: 由 NSVisualEffectView(动态系统毛玻璃)改为普通 NSView —— 背景/border/
+/// sheen 全部静态绘制(数值来自 FolderThumbnailStyle, 与 raster 一致), 滑动时
+/// 与静止视觉一致。未拿到图标时对应位置保持透明，不绘制首字母或色块占位，
+/// 避免把文件夹缩略图误认为普通 App 单元格。所有尺寸都按当前 cell 的
+/// point/Retina scale 重新计算，图标 layer 不跨 cell 共享。
+private final class FolderThumbnailView: NSView {
     private let iconContainerLayer = CALayer()
     private let sheenLayer = CAGradientLayer()
     private var iconLayers: [CALayer] = []
@@ -685,15 +704,12 @@ private final class FolderThumbnailView: NSVisualEffectView {
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
-        material = .hudWindow
-        blendingMode = .withinWindow
-        state = .active
         wantsLayer = true
 
         iconContainerLayer.masksToBounds = true
         sheenLayer.colors = [
-            NSColor.white.withAlphaComponent(0.18).cgColor,
-            NSColor.white.withAlphaComponent(0.02).cgColor,
+            NSColor.white.withAlphaComponent(FolderThumbnailStyle.sheenTopAlpha).cgColor,
+            NSColor.white.withAlphaComponent(FolderThumbnailStyle.sheenBottomAlpha).cgColor,
         ]
         sheenLayer.startPoint = CGPoint(x: 0.2, y: 1)
         sheenLayer.endPoint = CGPoint(x: 0.8, y: 0)
@@ -709,8 +725,10 @@ private final class FolderThumbnailView: NSVisualEffectView {
         }
 
         if let layer {
-            layer.backgroundColor = NSColor.white.withAlphaComponent(0.08).cgColor
-            layer.borderColor = NSColor.white.withAlphaComponent(0.38).cgColor
+            layer.backgroundColor = NSColor.white
+                .withAlphaComponent(FolderThumbnailStyle.backgroundAlpha).cgColor
+            layer.borderColor = NSColor.white
+                .withAlphaComponent(FolderThumbnailStyle.borderAlpha).cgColor
             layer.borderWidth = 1 / backingScale
             layer.masksToBounds = true
             layer.addSublayer(iconContainerLayer)

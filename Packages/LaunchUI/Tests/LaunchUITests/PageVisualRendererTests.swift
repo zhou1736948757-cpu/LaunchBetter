@@ -496,6 +496,251 @@ struct PageVisualRendererTests {
         #expect(rightmost! <= Int(2.0 + 51.0) + 2, "短文本 ink 不应超出 labelRect")
     }
 
+    // MARK: - T-022: 截断宽度契约对齐(raster = labelRect.width − 7.5, 对齐 live)
+
+    /// 10pt 系统字体下名字的 typographic 宽度(与 drawCenteredText 同口径:
+    /// CTLineGetBoundsWithOptions(line, []) 默认 bounds)。
+    private func typoWidth(_ text: String, fontSize: CGFloat = 10) -> CGFloat {
+        guard let font = CTFontCreateUIFontForLanguage(.system, fontSize, nil) else { return 0 }
+        let attributes: [CFString: Any] = [kCTFontAttributeName: font]
+        let attributed = CFAttributedStringCreate(nil, text as CFString, attributes as CFDictionary)
+        guard let attributed else { return 0 }
+        let line = CTLineCreateWithAttributedString(attributed)
+        return CTLineGetBoundsWithOptions(line, []).width
+    }
+
+    /// 标签带(y-down 行 [minY, maxY])内白像素的 ink 范围(minX, maxX, 像素坐标)。
+    private func labelInkExtent(
+        _ buffer: [UInt8], width: Int, height: Int,
+        cellSize: Double, scale: Int
+    ) -> (minX: Int, maxX: Int)? {
+        let gap = max(6.0, (cellSize - 32) / 4)
+        let bandMinY = Int(((cellSize - gap - 13) * Double(scale)).rounded(.up))
+        let bandMaxY = Int(((cellSize - gap) * Double(scale)).rounded(.down))
+        var minX: Int? = nil
+        var maxX: Int? = nil
+        for y in bandMinY...bandMaxY {
+            let row = height - 1 - y
+            for x in 0..<width {
+                let i = (row * width + x) * 4
+                if buffer[i] > 200, buffer[i + 1] > 200, buffer[i + 2] > 200 {
+                    minX = min(minX ?? Int.max, x)
+                    maxX = max(maxX ?? -1, x)
+                }
+            }
+        }
+        guard let minX, let maxX else { return nil }
+        return (minX, maxX)
+    }
+
+    @Test("T-022 边界命中: typo 宽 ∈ (96.5, 104] 的名字 → 省略号(修复前全名, 红→绿)")
+    func truncationBoundaryHitShowsEllipsis() {
+        // 真实 bug 名 "Affinity Designer 2.6" @10pt typo 宽 ≈ 98.72pt(T-021
+        // probe4/probe8 实测), 落在 (96.5, 104] 带内: 修复前截断宽度 =
+        // labelRect.width = 104 → 全名; 修复后 = 104 − 7.5 = 96.5 → 省略号。
+        let cellSize = 108.0  // 默认几何 iconSize=80 → cellSize=108 → labelRect 宽 104
+        let scale = 4
+        let name = "Affinity Designer 2.6"
+        let typo = typoWidth(name)
+        #expect(
+            typo > 96.5 && typo <= 104,
+            "测试前提: typo 宽应落在 (96.5, 104] 带内(字体变化时大声失败), 实测 \(typo)"
+        )
+        let visual = PageVisualRenderer.rasterize(
+            makeTruncationRequest(label: name, cellSize: cellSize, scale: scale)
+        )!
+        let pixels = readPixels(visual.image)
+        let extent = labelInkExtent(
+            pixels, width: visual.image.width, height: visual.image.height,
+            cellSize: cellSize, scale: scale
+        )
+        // 全名 ink 宽 ≈ 97.8pt(实测 391px@4x); 截断(96.5)后 ≈ 91.3pt(实测
+        // 365px@4x)。阈值 95pt 分离两者: 修复前全名 97.8 > 95(红), 修复后
+        // 省略号 91.3 ≤ 95(绿)。用 ink 宽度而非单边 rightmost —— 全名右缘
+        // 被 AA 削到 102.25pt, 与截断行右缘理论上限重合, 单边不可分。
+        #expect(extent != nil, "标签应已绘制")
+        let widthPt = Double(extent!.maxX - extent!.minX + 1) / Double(scale)
+        #expect(
+            widthPt <= 95.0,
+            "带内名字必须截断出现省略号(修复前画全名, ink 宽 \(widthPt) > 95.0)"
+        )
+    }
+
+    @Test("T-022 欠截断保护: typo 宽 ≤ 96.5 的名字 → 完整绘制、无省略号")
+    func truncationUnderTruncationProtection() {
+        // "GarageBand 10.4.12" @10pt typo 宽 ≈ 95.77pt(T-021 probe4/probe8
+        // 实测)≤ 96.5 → 修复后仍完整绘制; 若内缩常量被放大(截断宽度 < 95.77)
+        // 则提前省略号, 本测试必挂。
+        let cellSize = 108.0
+        let scale = 4
+        let name = "GarageBand 10.4.12"
+        let typo = typoWidth(name)
+        #expect(
+            typo <= 96.5,
+            "测试前提: typo 宽应 ≤ 96.5(带外, 不截断), 实测 \(typo)"
+        )
+        let visual = PageVisualRenderer.rasterize(
+            makeTruncationRequest(label: name, cellSize: cellSize, scale: scale)
+        )!
+        let pixels = readPixels(visual.image)
+        let extent = labelInkExtent(
+            pixels, width: visual.image.width, height: visual.image.height,
+            cellSize: cellSize, scale: scale
+        )
+        // 全名 ink 宽 ≈ 94.3pt(实测 377px@4x); 阈值 93pt: 完整绘制必过,
+        // 提前截断(如内缩 ≥ 9.75 → 截断宽 ≤ 94.5 → ink ≈ 92.5pt)必挂。
+        #expect(extent != nil, "标签应已绘制")
+        let widthPt = Double(extent!.maxX - extent!.minX + 1) / Double(scale)
+        #expect(
+            widthPt >= 93.0,
+            "带外名字必须完整绘制、无省略号(ink 宽 \(widthPt) < 93.0)"
+        )
+    }
+
+    // MARK: - T-023: 显式 "…"(U+2026) token(省略号对齐 live)
+
+    /// 复刻 drawCenteredText 截断管线(同 font/attributes/width/token), 返回
+    /// 截断行 typographic 宽 + 末字形 + "…" 参考字形。
+    ///
+    /// 字形级断言只能走复刻管线(渲染器私有, 无测试钩子); 渲染器真实输出由
+    /// 像素断言覆盖(见 truncationTokenEllipsisBoundary 的 3 点 run 检查)。
+    private func truncatedLineGlyphInfo(
+        _ text: String, at width: CGFloat
+    ) -> (width: CGFloat, lastGlyph: CGGlyph, ellipsisGlyph: CGGlyph) {
+        guard let font = CTFontCreateUIFontForLanguage(.system, 10, nil) else {
+            fatalError("system font unavailable")
+        }
+        let attributes: [CFString: Any] = [
+            kCTFontAttributeName: font,
+            kCTForegroundColorAttributeName: CGColor(red: 1, green: 1, blue: 1, alpha: 1),
+        ]
+        let attributed = CFAttributedStringCreate(nil, text as CFString, attributes as CFDictionary)!
+        let line = CTLineCreateWithAttributedString(attributed)
+        let tokenAttributed = CFAttributedStringCreate(nil, "\u{2026}" as CFString, attributes as CFDictionary)!
+        let tokenLine = CTLineCreateWithAttributedString(tokenAttributed)
+        let truncated = CTLineCreateTruncatedLine(line, Double(width), .end, tokenLine)!
+        let truncatedWidth = CTLineGetBoundsWithOptions(truncated, []).width
+        let runs = CTLineGetGlyphRuns(truncated) as! [CTRun]
+        let lastRun = runs[runs.count - 1]
+        let count = CTRunGetGlyphCount(lastRun)
+        var lastGlyph = CGGlyph()
+        CTRunGetGlyphs(lastRun, CFRange(location: count - 1, length: 1), &lastGlyph)
+        let eRuns = CTLineGetGlyphRuns(tokenLine) as! [CTRun]
+        var ellipsisGlyph = CGGlyph()
+        CTRunGetGlyphs(eRuns[0], CFRange(location: 0, length: 1), &ellipsisGlyph)
+        return (truncatedWidth, lastGlyph, ellipsisGlyph)
+    }
+
+    /// 标签带内白像素的列 run 序列(像素坐标, 升序)。
+    private func labelTailColumnRuns(
+        _ buffer: [UInt8], width: Int, height: Int,
+        cellSize: Double, scale: Int
+    ) -> [Range<Int>] {
+        let gap = max(6.0, (cellSize - 32) / 4)
+        let bandMinY = Int(((cellSize - gap - 13) * Double(scale)).rounded(.up))
+        let bandMaxY = Int(((cellSize - gap) * Double(scale)).rounded(.down))
+        var cols = [Int](repeating: 0, count: width)
+        for y in bandMinY...bandMaxY {
+            let row = height - 1 - y
+            for x in 0..<width {
+                let i = (row * width + x) * 4
+                if buffer[i] > 200, buffer[i + 1] > 200, buffer[i + 2] > 200 {
+                    cols[x] += 1
+                }
+            }
+        }
+        var runs: [Range<Int>] = []
+        var start: Int? = nil
+        for x in 0..<width {
+            if cols[x] > 0 {
+                if start == nil { start = x }
+            } else if let s = start {
+                runs.append(s..<x)
+                start = nil
+            }
+        }
+        if let s = start { runs.append(s..<width) }
+        return runs
+    }
+
+    @Test("T-023 边界用例: 'Affinity Designer 2.6'@96.5 → 省略号(末字形 U+2026 + 像素 3 独立点 run), 行宽 ≤ 96.5")
+    func truncationTokenEllipsisBoundary() {
+        // 真实 bug 名 "Affinity Designer 2.6" @10pt typo 宽 ≈ 98.72pt, 落在
+        // (96.5, 104] 带内(T-022 同前提)。修复前(nil token)硬切 "Affinity
+        // Designer 2." 92.24pt, 无省略号字形 → 像素尾部无 3 点 run, 本测试红。
+        let cellSize = 108.0
+        let scale = 4
+        let name = "Affinity Designer 2.6"
+        let typo = typoWidth(name)
+        #expect(
+            typo > 96.5 && typo <= 104,
+            "测试前提: typo 宽应落在 (96.5, 104] 带内(字体变化时大声失败), 实测 \(typo)"
+        )
+
+        // (a) 字形级: 复刻截断管线(同 font/attributes/width/token) → 末字形
+        // == U+2026 字形; nil token(旧行为)末字形 != U+2026(硬切机制证据)。
+        let info = truncatedLineGlyphInfo(name, at: 96.5)
+        #expect(
+            info.lastGlyph == info.ellipsisGlyph,
+            "截断行末字形必须是 U+2026 省略号字形(实测 lastGlyph=\(info.lastGlyph) ellipsis=\(info.ellipsisGlyph))"
+        )
+        #expect(
+            info.width <= 96.5,
+            "截断行总宽(含 token)必须 ≤ 96.5(实测 \(info.width))"
+        )
+
+        // (b) 像素级: 真实渲染输出尾部 3 个独立点 run(与 live_affinity_2x.png
+        // 同判据: 末 3 run 各 ≤ 2pt 且相互独立), 且 ink 宽 ≤ 96.5。
+        let visual = PageVisualRenderer.rasterize(
+            makeTruncationRequest(label: name, cellSize: cellSize, scale: scale)
+        )!
+        let pixels = readPixels(visual.image)
+        let runs = labelTailColumnRuns(
+            pixels, width: visual.image.width, height: visual.image.height,
+            cellSize: cellSize, scale: scale
+        )
+        #expect(runs.count >= 3, "标签应已绘制且尾部有 ≥3 个列 run(实测 \(runs.count))")
+        let tail = runs.suffix(3)
+        let maxDotWidthPx = 2 * scale  // 省略号单点 ≤ 2pt(实测 5px@4x = 1.25pt)
+        let dotWidths = tail.map { $0.count }
+        #expect(
+            dotWidths.allSatisfy { $0 <= maxDotWidthPx },
+            "末 3 run 必须是省略号点(各 ≤ \(maxDotWidthPx)px, 实测 \(dotWidths))"
+        )
+        // 独立: run 间有 ≥1px 空隙(实测 4-5px@4x; 硬切 "2." 的 "2" run 11px 必挂)
+        let gaps = zip(tail.dropFirst(), tail).map { $0.lowerBound - $1.upperBound }
+        #expect(
+            gaps.allSatisfy { $0 >= 1 },
+            "末 3 run 必须相互独立(空隙 ≥1px, 实测 \(gaps))"
+        )
+        let extent = labelInkExtent(
+            pixels, width: visual.image.width, height: visual.image.height,
+            cellSize: cellSize, scale: scale
+        )
+        #expect(extent != nil, "标签应已绘制")
+        let inkWidthPt = Double(extent!.maxX - extent!.minX + 1) / Double(scale)
+        #expect(
+            inkWidthPt <= 96.5,
+            "截断行 ink 宽必须 ≤ 96.5(实测 \(inkWidthPt))"
+        )
+    }
+
+    @Test("T-023 行宽对齐: token 行宽 ∈ live 可见宽 ±0.5pt(affinity 88.77≈88.5, longname 93.83≈93.5)")
+    func truncationTokenWidthAlignsWithLive() {
+        // Chief 实测: token@96.5 行宽 88.77/93.83pt ≈ live 88.5/93.5pt
+        // (Δ0.27/0.33pt 亚像素)。固定区间断言: 字体变化时大声失败。
+        let affinity = truncatedLineGlyphInfo("Affinity Designer 2.6", at: 96.5)
+        #expect(
+            abs(affinity.width - 88.5) <= 0.5,
+            "affinity token 行宽应 ∈ [88.0, 89.0](live 88.5 ±0.5), 实测 \(affinity.width)"
+        )
+        let longname = truncatedLineGlyphInfo("Adobe Photoshop 2026", at: 96.5)
+        #expect(
+            abs(longname.width - 93.5) <= 0.5,
+            "longname token 行宽应 ∈ [93.0, 94.0](live 93.5 ±0.5), 实测 \(longname.width)"
+        )
+    }
+
     @Test("T-019 文件夹: resolveIcons 子图标按 metrics(iconSize).iconSide 请求(对齐 live)")
     func folderChildRequestsUseIconSize() async {
         let geometry = GridGeometry(

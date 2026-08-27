@@ -59,14 +59,22 @@ struct FolderThumbnailMetricsWiringTests {
             && abs(a.height - b.height) < 1e-9
     }
 
-    /// 从 cell 视图树中定位 FolderThumbnailView(私有类, 经层级查找)。
-    private func findFolderThumbnailView(in cell: AppCellView) -> NSVisualEffectView? {
+    /// 从 cell 视图树中定位 FolderThumbnailView(私有类, 经层级结构识别:
+    /// 其 layer 树含 sheen CAGradientLayer —— T-020 后为普通 NSView, 不再
+    /// 是 NSVisualEffectView, 不耦合类型名)。
+    private func findFolderThumbnailView(in cell: AppCellView) -> NSView? {
         guard let pressContainer = cell.view.subviews.first else { return nil }
-        return pressContainer.subviews.first { $0 is NSVisualEffectView } as? NSVisualEffectView
+        return pressContainer.subviews.first { isFolderThumbnailView($0) }
+    }
+
+    /// FolderThumbnailView 结构识别: layer → iconContainerLayer → sheen
+    /// (CAGradientLayer) + 9 个图标 layer。label 等兄弟视图无此结构。
+    private func isFolderThumbnailView(_ view: NSView) -> Bool {
+        view.layer?.sublayers?.first?.sublayers?.contains { $0 is CAGradientLayer } == true
     }
 
     /// 缩略图 layer 树中的 9 个子图标 layer(排除 sheen 渐变层)。
-    private func iconLayers(of thumbnail: NSVisualEffectView) -> [CALayer] {
+    private func iconLayers(of thumbnail: NSView) -> [CALayer] {
         guard let container = thumbnail.layer?.sublayers?.first else { return [] }
         return container.sublayers?.compactMap { $0 as? CALayer }
             .filter { !($0 is CAGradientLayer) } ?? []

@@ -111,9 +111,79 @@
       "same_reviewer_policy": null,
       "subagent_sessions": {},
       "latest_runtime_update": "2026-08-27T12:32:59+09:00"
+    },
+    "T-020": {
+      "status": "PASSED",
+      "worker_attempts": 1,
+      "review_attempts": 1,
+      "worker_failures": 0,
+      "expert_worker_required": false,
+      "chief_escalation_required": false,
+      "plan_level_issue": false,
+      "next_route": "Main",
+      "current_worker_kind": "normal",
+      "same_reviewer_policy": null,
+      "subagent_sessions": {},
+      "latest_runtime_update": "2026-08-27T16:44:34+09:00"
+    },
+    "T-021": {
+      "status": "PASSED",
+      "worker_attempts": 1,
+      "review_attempts": 0,
+      "worker_failures": 0,
+      "expert_worker_required": false,
+      "chief_escalation_required": false,
+      "plan_level_issue": false,
+      "next_route": "Reviewer",
+      "current_worker_kind": "normal",
+      "same_reviewer_policy": null,
+      "subagent_sessions": {},
+      "latest_runtime_update": "2026-08-27T14:47:48+09:00"
+    },
+    "T-022": {
+      "status": "PASSED",
+      "worker_attempts": 1,
+      "review_attempts": 1,
+      "worker_failures": 0,
+      "expert_worker_required": false,
+      "chief_escalation_required": false,
+      "plan_level_issue": false,
+      "next_route": "Main",
+      "current_worker_kind": "normal",
+      "same_reviewer_policy": null,
+      "subagent_sessions": {},
+      "latest_runtime_update": "2026-08-27T15:20:25+09:00"
+    },
+    "T-023": {
+      "status": "PASSED",
+      "worker_attempts": 1,
+      "review_attempts": 1,
+      "worker_failures": 0,
+      "expert_worker_required": false,
+      "chief_escalation_required": false,
+      "plan_level_issue": false,
+      "next_route": "Main",
+      "current_worker_kind": "normal",
+      "same_reviewer_policy": null,
+      "subagent_sessions": {},
+      "latest_runtime_update": "2026-08-27T15:43:36+09:00"
+    },
+    "B-REBUILD": {
+      "status": "REVIEWING",
+      "worker_attempts": 1,
+      "review_attempts": 0,
+      "worker_failures": 0,
+      "expert_worker_required": false,
+      "chief_escalation_required": false,
+      "plan_level_issue": false,
+      "next_route": "Reviewer",
+      "current_worker_kind": "normal",
+      "same_reviewer_policy": null,
+      "subagent_sessions": {},
+      "latest_runtime_update": "2026-08-27T16:39:27+09:00"
     }
   },
   "active_agent_jobs": [],
   "blockers": [],
-  "latest_runtime_update": "2026-08-27T12:32:59+09:00"
+  "latest_runtime_update": "2026-08-27T16:44:34+09:00"
 }

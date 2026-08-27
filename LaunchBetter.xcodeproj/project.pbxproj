@@ -337,7 +337,7 @@
 				INFOPLIST_KEY_CFBundleDisplayName = LaunchBetter;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "GPL-3.0";
-				MARKETING_VERSION = 0.7.1;
+				MARKETING_VERSION = 0.7.3;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -425,7 +425,7 @@
 				INFOPLIST_KEY_CFBundleDisplayName = LaunchBetter;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "GPL-3.0";
-				MARKETING_VERSION = 0.7.1;
+				MARKETING_VERSION = 0.7.3;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",

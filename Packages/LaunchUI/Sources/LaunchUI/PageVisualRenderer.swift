@@ -473,21 +473,23 @@ final class PageVisualRenderer {
         context.addPath(path)
         context.clip()
 
-        // 背景: 白 0.08 + 边框白 0.38(1/scale)。
-        context.setFillColor(red: 1, green: 1, blue: 1, alpha: 0.08)
+        // 背景: 白 backgroundAlpha + 边框白 borderAlpha(1/scale)。
+        // T-020: 数值来自 FolderThumbnailStyle(与 live FolderThumbnailView 共用
+        // 同一常量源, 消除 duplication; 数值与修复前一致)。
+        context.setFillColor(red: 1, green: 1, blue: 1, alpha: FolderThumbnailStyle.backgroundAlpha)
         context.fill(quartz)
-        context.setStrokeColor(red: 1, green: 1, blue: 1, alpha: 0.38)
+        context.setStrokeColor(red: 1, green: 1, blue: 1, alpha: FolderThumbnailStyle.borderAlpha)
         context.setLineWidth(CGFloat(1) / CGFloat(max(1, request.scale)))
         context.addPath(path)
         context.strokePath()
 
-        // sheen: 顶亮 → 底暗(白 0.18 → 0.02)。y-up 下顶部 = maxY、底部 = minY
-        // (与旧 y-down 的 minY→maxY 对调, 保持顶亮底暗)。
+        // sheen: 顶亮 → 底暗(白 sheenTopAlpha → sheenBottomAlpha)。y-up 下顶部
+        // = maxY、底部 = minY(与旧 y-down 的 minY→maxY 对调, 保持顶亮底暗)。
         let gradient = CGGradient(
             colorsSpace: CGColorSpaceCreateDeviceRGB(),
             colors: [
-                CGColor(red: 1, green: 1, blue: 1, alpha: 0.18),
-                CGColor(red: 1, green: 1, blue: 1, alpha: 0.02),
+                CGColor(red: 1, green: 1, blue: 1, alpha: FolderThumbnailStyle.sheenTopAlpha),
+                CGColor(red: 1, green: 1, blue: 1, alpha: FolderThumbnailStyle.sheenBottomAlpha),
             ] as CFArray,
             locations: [0, 1]
         )
@@ -527,6 +529,30 @@ final class PageVisualRenderer {
         context.restoreGState()
     }
 
+    /// NSTextFieldCell 私有绘制内缩(实测 7.5–7.7pt, 取 7.5)。
+    ///
+    /// live 路径(AppCellView)的 NSTextFieldCell 在 frame 内实际可绘制宽度 =
+    /// frame.width − 7.5~7.7pt —— 私有绘制行为, drawingRect/titleRect 均报
+    /// 全宽, 公共 API 不可查询(T-021 probe4/probe5/probe8 实测, 脚本见
+    /// Workflow/evidence/T-021/)。raster 侧若按 labelRect.width(= cellSize−4)
+    /// 截断, 比 live 宽 ~7.7pt → 滑动时(compositor 显示 PageVisual)带内名字
+    /// 显示全名而 live 显示省略号(T-021 决定性样本 "Affinity Designer 2.6"
+    /// 98.72pt: raster 全名 100.5pt vs live 省略号 88.5pt)。
+    ///
+    /// 选择依据: T-021 probe6 实证 raster @96.5 截断 → 94.0pt 居中 ≈ live
+    /// 93.5pt, 0.5pt 内对齐; 7.5 落在实测区间 [95.77, 96.83) 的等价宽度内。
+    ///
+    /// T-023: CTLineCreateTruncatedLine 的 width 参数 = 结果行总宽上限(含
+    /// token), 与 live "text+ellipsis ≤ frame−7.7" 同构 → 7.5 常量无需调整。
+    /// 实测 token@96.5 行宽 88.77/93.83pt ≈ live 88.5/93.5pt(Δ0.27/0.33pt
+    /// 亚像素)。
+    ///
+    /// 依赖前提: label font 10pt 硬编码(drawLabel fontSize: 10)。该内缩是字体
+    /// 相关量 —— 若未来 label 字体大小可配置, 此常量变为字体函数, 必须并入
+    /// PageVisualKey(geometry 签名)并重新测量。macOS 大版本升级后需用
+    /// Workflow/evidence/T-021/ 的 probe4/probe5/probe8 重新测量。
+    nonisolated private static let labelTruncationInset: CGFloat = 7.5
+
     /// 标签(AppCellView: 10pt 系统字体, 白, 黑 0.85 阴影, 尾部截断, 居中)。
     nonisolated private static func drawLabel(
         text: String,
@@ -548,6 +574,9 @@ final class PageVisualRenderer {
             fontSize: 10,
             color: (1, 1, 1, 1),
             truncatingTail: true,
+            // T-022: 截断宽度 = labelRect.width − 7.5(≈ cellSize − 11.5), 对齐
+            // live NSTextFieldCell 有效可绘制宽度; labelRect 与居中保持不变。
+            truncationWidth: labelRect.width - Self.labelTruncationInset,
             context: context
         )
     }
@@ -558,6 +587,7 @@ final class PageVisualRenderer {
         fontSize: CGFloat,
         color: (Float, Float, Float, Float),
         truncatingTail: Bool = false,
+        truncationWidth: CGFloat? = nil,
         context: CGContext
     ) {
         guard !text.isEmpty, rect.width > 0 else { return }
@@ -577,13 +607,27 @@ final class PageVisualRenderer {
         // [.useGlyphPathBounds] —— 字形路径边界不含字距/尾随空白, 宽度偏小,
         // 超宽判断不触发 → 长名不截断, 与 live byTruncatingTail 不一致。
         let bounds = CTLineGetBoundsWithOptions(line, [])
+        // T-022: 截断宽度显式参数(默认 rect.width)。drawLabel 传入
+        // labelRect.width − 7.5 对齐 live NSTextFieldCell 有效宽度; 占位字母
+        // 路径(truncatingTail: false)不受影响。
+        let effectiveTruncationWidth = truncationWidth ?? rect.width
         let targetLine: CTLine
-        if truncatingTail, bounds.width > rect.width {
+        if truncatingTail, bounds.width > effectiveTruncationWidth {
+            // T-023: 显式 "…"(U+2026) token —— nil token 在本系统从不附加省略号
+            // (硬切, T-021 probe5 实测), live NSTextFieldCell 恒附真省略号。
+            // token 行与文本同 font/attributes(省略号字形匹配); width 参数 =
+            // 结果行总宽上限(含 token), 与 live "text+ellipsis ≤ frame−7.7"
+            // 同构 → 7.5 常量无需调整(token@96.5 行宽 88.77/93.83 ≈ live
+            // 88.5/93.5, Δ0.27/0.33pt 亚像素)。
+            let tokenAttributed = CFAttributedStringCreate(
+                nil, "\u{2026}" as CFString, attributes as CFDictionary
+            )
+            let tokenLine = tokenAttributed.flatMap { CTLineCreateWithAttributedString($0) }
             guard let truncated = CTLineCreateTruncatedLine(
                 line,
-                Double(rect.width),
+                Double(effectiveTruncationWidth),
                 .end,
-                nil
+                tokenLine
             ) else { return }
             targetLine = truncated
         } else {
