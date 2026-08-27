@@ -651,4 +651,83 @@ struct PageCompositorTests {
         }
         #expect(!redInBottom, "输出底部不得出现红色图标(无镜像)")
     }
+
+    // MARK: - T-018: 不对称方向(镜像根因回归)
+
+    /// 不对称方向 fixture: 上半红、下半蓝(镜像不对称; 纯色 fixture 无法检测翻转)。
+    private func asymmetricIcon(size: Int = 16) -> CGImage {
+        let context = CGContext(
+            data: nil, width: size, height: size, bitsPerComponent: 8,
+            bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        )!
+        context.setFillColor(red: 1, green: 0, blue: 0, alpha: 1)
+        context.fill(CGRect(x: 0, y: size / 2, width: size, height: size / 2))
+        context.setFillColor(red: 0, green: 0, blue: 1, alpha: 1)
+        context.fill(CGRect(x: 0, y: 0, width: size, height: size / 2))
+        return context.makeImage()!
+    }
+
+    /// 1x 页面视觉: 1 列 1 行, 不对称图标(红上/蓝下) + 标签。
+    /// 页面视觉顶部 = 图标区(红上蓝下), 底部 = 标签区。
+    private func makeAsymmetricOrientationVisual() -> PageVisual {
+        let request = PageVisualRenderRequest(
+            key: PageVisualKey(
+                pageIndex: 0, displayRevision: 1,
+                geometry: PageVisualGeometrySignature(
+                    columns: 1, rows: 1, cellSize: 120, iconSize: 96,
+                    horizontalSpacing: 20, verticalSpacing: 20,
+                    pageWidth: 150, pageHeight: 150, topInset: 0, bottomInset: 0
+                ),
+                backingScale: 1, languageRevision: 0, iconEpoch: 0
+            ),
+            gridOrigin: CGPoint(x: 15, y: 15),
+            gridSize: CGSize(width: 120, height: 120),
+            columns: 1, rows: 1, cellSize: 120, iconSize: 96,
+            horizontalSpacing: 20, verticalSpacing: 20,
+            scale: 1,
+            cells: [
+                .app(
+                    slot: 0, colorRGBA: (0.1, 0.1, 0.1, 1), letter: "T",
+                    label: "T018", icon: asymmetricIcon()
+                ),
+            ]
+        )
+        return PageVisualRenderer.rasterize(request)!
+    }
+
+    /// T-018: 合成层方向 — 不对称图标(红上/蓝下)经真实 activate + render(in:)
+    /// 输出未镜像。修复前 rasterize 产出的位图本身镜像(图标蓝上红下), 非 flipped
+    /// 层原样上屏 → 输出顶部=蓝 → 断言必失败。
+    @Test("T-018: 合成层方向 — 不对称图标(红上/蓝下)经 activate + render(in:) 未镜像")
+    func compositorLayerRendersAsymmetricIconUpright() {
+        let visual = makeAsymmetricOrientationVisual()
+        #expect(visual.image.width == 120 && visual.image.height == 120)
+
+        let host = CALayer()
+        host.frame = CGRect(x: 0, y: 0, width: 120, height: 120)
+        let live = CALayer()
+        live.frame = host.bounds
+
+        let placement = PageCompositor.Placement(
+            page: 0,
+            baseFrame: CGRect(x: 0, y: 0, width: 120, height: 120),
+            visual: visual
+        )
+        let compositor = PageCompositor()
+        compositor.activate(
+            placements: [placement], pageWidth: 640, startOffset: 0,
+            hostLayer: host, liveLayer: live
+        )
+        #expect(live.opacity == 0, "激活即隐藏 live 前景")
+        let compositorLayer = host.sublayers?.first
+        #expect(compositorLayer != nil, "activate 已创建合成层")
+        let pixels = renderPixels(compositorLayer!, width: 120, height: 120)
+
+        // 输出顶部 = 图标顶部(红); 输出 y=92 = 图标底部(蓝)。
+        let top = outputPixel(pixels, width: 120, x: 60, y: 4)
+        #expect(top.r > 200 && top.g < 60 && top.b < 60 && top.a == 255, "输出顶部应为红(未镜像)")
+        let bottom = outputPixel(pixels, width: 120, x: 60, y: 92)
+        #expect(bottom.b > 200 && bottom.r < 60 && bottom.g < 60 && bottom.a == 255, "输出图标底部应为蓝(未镜像)")
+    }
 }

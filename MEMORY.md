@@ -653,6 +653,11 @@ No non-trivial decisions recorded yet.
 - Result: T-017 PASSED (implementation + review); production diff exactly −1 line; `MANUAL_PHYSICAL_GATE` remains OPEN/REQUIRED; acceptance #3 (user interactive verification: scroll with compositor ON, confirm no mirror) pending user
 - Evidence: `Workflow/results/T-017.md`, `Workflow/reviews/T-017-r1.md`, `Workflow/tasks/T-017.md`, `Workflow/PLAN.md`, `Workflow/MAIN_BRIEF.md`
 - Next: User interactive verification (acceptance #3); then decide next dev goal (e.g., T-018 120Hz physical acceptance on capable hardware, or other improvements)
+
+### 2026-08-27T02:20:00+09:00 — Process convention (user-mandated)
+- Role: `Main`
+- Action: User-mandated process convention: if a Subagent hits network issues / thinking-token cap / similar transient failures, **reply "继续" via `send_message` to the SAME subagent** — do NOT spawn a new subagent. Applies to Chief/Worker/Reviewer dispatch from now on.
+- Result: Convention recorded; applies to all future subagent dispatch in this workflow.
 <!-- chef-worker-reviewer-workflow:work-log:end -->
 
 ### Review findings

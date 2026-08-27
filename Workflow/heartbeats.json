@@ -1,26 +1,32 @@
 {
   "Main": {
     "role": "Main",
-    "task_id": "T-017",
-    "status": "IDLE",
-    "last_heartbeat": "2026-08-27T00:42:10+09:00"
+    "task_id": "T-019",
+    "status": "ACTIVE",
+    "last_heartbeat": "2026-08-27T12:27:47+09:00"
   },
   "Worker": {
     "role": "Worker",
-    "task_id": "T-017",
+    "task_id": "T-019",
     "status": "IDLE",
-    "last_heartbeat": "2026-08-27T00:37:55+09:00"
+    "last_heartbeat": "2026-08-27T12:27:47+09:00"
   },
   "Reviewer": {
     "role": "Reviewer",
-    "task_id": "T-017",
+    "task_id": "T-019",
     "status": "IDLE",
-    "last_heartbeat": "2026-08-27T00:41:58+09:00"
+    "last_heartbeat": "2026-08-27T12:32:59+09:00"
   },
   "Chief": {
     "role": "Chief",
-    "task_id": "T-017",
+    "task_id": "T-018",
     "status": "ACTIVE",
-    "last_heartbeat": "2026-08-27T00:32:40+09:00"
+    "last_heartbeat": "2026-08-27T02:28:47+09:00"
+  },
+  "T-019-worker": {
+    "agent": "T-019-worker",
+    "ts": 1787801247.5597582,
+    "status": "COMPLETED",
+    "note": "R1+R2 landed, 481/481 green, Release built"
   }
 }

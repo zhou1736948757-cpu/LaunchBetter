@@ -70,6 +70,21 @@
       "latest_runtime_update": "2026-08-26T23:44:26+09:00"
     },
     "T-017": {
+      "status": "REOPENED",
+      "worker_attempts": 1,
+      "review_attempts": 1,
+      "worker_failures": 0,
+      "expert_worker_required": false,
+      "chief_escalation_required": false,
+      "plan_level_issue": false,
+      "next_route": "Main",
+      "current_worker_kind": "normal",
+      "same_reviewer_policy": null,
+      "latest_runtime_update": "2026-08-27T02:28:47+09:00",
+      "subagent_sessions": {},
+      "reason": "acceptance#3 real-screen FAIL (ed33ad1 still mirrored); root cause = rasterizer contract (Chief decision); isGeometryFlipped not root cause"
+    },
+    "T-018": {
       "status": "PASSED",
       "worker_attempts": 1,
       "review_attempts": 1,
@@ -80,10 +95,25 @@
       "next_route": "Main",
       "current_worker_kind": "normal",
       "same_reviewer_policy": null,
-      "latest_runtime_update": "2026-08-27T00:42:10+09:00"
+      "subagent_sessions": {},
+      "latest_runtime_update": "2026-08-27T12:02:10+09:00"
+    },
+    "T-019": {
+      "status": "PASSED",
+      "worker_attempts": 1,
+      "review_attempts": 1,
+      "worker_failures": 0,
+      "expert_worker_required": false,
+      "chief_escalation_required": false,
+      "plan_level_issue": false,
+      "next_route": "Main",
+      "current_worker_kind": "normal",
+      "same_reviewer_policy": null,
+      "subagent_sessions": {},
+      "latest_runtime_update": "2026-08-27T12:32:59+09:00"
     }
   },
   "active_agent_jobs": [],
   "blockers": [],
-  "latest_runtime_update": "2026-08-27T00:42:10+09:00"
+  "latest_runtime_update": "2026-08-27T12:32:59+09:00"
 }

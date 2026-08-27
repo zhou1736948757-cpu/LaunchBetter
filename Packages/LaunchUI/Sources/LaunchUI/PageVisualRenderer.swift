@@ -147,12 +147,13 @@ final class PageVisualRenderer {
         }
         // P0-05: 普通 app 按整格 iconSize 请求; 文件夹子图标按缩略图实际
         // 显示尺寸请求(metrics.iconSide, 向下取整, 与 live AppCellView 同一
-        // 取整约定 → 同一 IconKey 缓存身份)。渲染器把文件夹缩略图绘制在
-        // 单元格 frame(cellSize 正方形)内, 故 side = cellSize。
+        // 取整约定 → 同一 IconKey 缓存身份)。T-019: 与 live 一致按图标区
+        // (iconSize, AppCellView:636 用 iconPointSize) 取 side —— 旧实现用
+        // cellSize(整格)导致请求偏大, 与 live 缓存身份/显示尺寸分叉。
         let appPointSize = max(1, Int(geometry.iconSize.rounded(.down)))
         let folderChildPointSize = max(
             1,
-            Int(FolderThumbnailMetrics(side: geometry.cellSize).iconSide.rounded(.down))
+            Int(FolderThumbnailMetrics(side: geometry.iconSize).iconSide.rounded(.down))
         )
 
         // 1. 收集唯一请求(保持页内首次出现顺序): 普通 app 去重; 每个 folder
@@ -320,10 +321,13 @@ final class PageVisualRenderer {
         ) else { return nil }
         context.interpolationQuality = .high
 
-        // y-down 页面坐标(与 flipped 文档一致)。
-        context.translateBy(x: 0, y: CGFloat(pixelHeight))
+        // 绘制契约(T-018): 上下文为 y-up 设备坐标, 只按 scale 缩放 —— 不再做
+        // 全局 y 翻转。逻辑布局保持 y-down(与 flipped 文档一致, slotOrigin/frame/
+        // iconFrame/labelRect/childRect 计算不变), 在绘制边界用 quartzRect(topDown:
+        // canvasHeight:) 显式转换(y_quartz = canvasHeight − y_down − h)。这样
+        // CGContextDrawImage/CTLineDraw 在 y-up 下自然正向, 位图不再镜像。
+        let canvasHeight = CGFloat(pixelHeight) / CGFloat(scale)
         context.scaleBy(x: CGFloat(scale), y: CGFloat(scale))
-        context.scaleBy(x: 1, y: -1)
 
         for cell in request.cells {
             let slot: Int
@@ -342,14 +346,21 @@ final class PageVisualRenderer {
             case .app(_, let rgba, let letter, let label, let icon):
                 drawAppIcon(
                     frame: frame, rgba: rgba, letter: letter, icon: icon, request: request,
-                    context: context
+                    context: context, canvasHeight: canvasHeight
                 )
-                drawLabel(text: label, cellFrame: frame, request: request, context: context)
+                drawLabel(
+                    text: label, cellFrame: frame, request: request,
+                    context: context, canvasHeight: canvasHeight
+                )
             case .folder(_, let label, let childIcons):
                 drawFolderThumbnail(
-                    frame: frame, childIcons: childIcons, request: request, context: context
+                    frame: frame, childIcons: childIcons, request: request,
+                    context: context, canvasHeight: canvasHeight
                 )
-                drawLabel(text: label, cellFrame: frame, request: request, context: context)
+                drawLabel(
+                    text: label, cellFrame: frame, request: request,
+                    context: context, canvasHeight: canvasHeight
+                )
             }
         }
 
@@ -373,6 +384,20 @@ final class PageVisualRenderer {
         )
     }
 
+    /// y-down 页面坐标 → y-up Quartz 坐标(绘制边界显式转换)。
+    ///
+    /// y_quartz = canvasHeight − y_down − h。canvasHeight 用逻辑点
+    /// (CGFloat(pixelHeight)/CGFloat(scale))保证亚像素精确 —— 与 scale 后的
+    /// CTM 同单位, 避免像素/点混用产生 0.5pt 级偏移。
+    nonisolated private static func quartzRect(topDown: CGRect, canvasHeight: CGFloat) -> CGRect {
+        CGRect(
+            x: topDown.minX,
+            y: canvasHeight - topDown.maxY,
+            width: topDown.width,
+            height: topDown.height
+        )
+    }
+
     /// 图标(真实位图 aspect-fit)或占位(圆角色块 + 首字母), 与 AppCellView 一致。
     nonisolated private static func drawAppIcon(
         frame: CGRect,
@@ -380,7 +405,8 @@ final class PageVisualRenderer {
         letter: String,
         icon: CGImage?,
         request: PageVisualRenderRequest,
-        context: CGContext
+        context: CGContext,
+        canvasHeight: CGFloat
     ) {
         let iconSide = min(request.iconSize, frame.width)
         let iconFrame = CGRect(
@@ -389,22 +415,24 @@ final class PageVisualRenderer {
             width: iconSide,
             height: iconSide
         )
+        // y-down 逻辑布局 → y-up Quartz 绘制边界。
+        let quartz = quartzRect(topDown: iconFrame, canvasHeight: canvasHeight)
         if let icon {
-            context.draw(icon, in: iconFrame)
+            context.draw(icon, in: quartz)
             return
         }
         // 占位: 圆角 16 色块 + 白色首字母(live: iconLayer.cornerRadius = 16, masksToBounds)。
         context.saveGState()
         let clipPath = CGPath(
-            roundedRect: iconFrame, cornerWidth: 16, cornerHeight: 16, transform: nil
+            roundedRect: quartz, cornerWidth: 16, cornerHeight: 16, transform: nil
         )
         context.addPath(clipPath)
         context.clip()
         context.setFillColor(red: CGFloat(rgba.0), green: CGFloat(rgba.1), blue: CGFloat(rgba.2), alpha: CGFloat(rgba.3))
-        context.fill(iconFrame)
+        context.fill(quartz)
         drawCenteredText(
             letter,
-            in: iconFrame,
+            in: quartz,
             fontSize: iconSide * 0.5,
             color: (1, 1, 1, 1),
             context: context
@@ -417,21 +445,29 @@ final class PageVisualRenderer {
         frame: CGRect,
         childIcons: [CGImage?],
         request: PageVisualRenderRequest,
-        context: CGContext
+        context: CGContext,
+        canvasHeight: CGFloat
     ) {
-        let side = min(frame.width, frame.height)
+        // T-019(R2): 与 live 容器一致按图标区绘制 —— side = min(iconSize,
+        // frame.width)(同 drawAppIcon 的口径: iconSide = min(request.iconSize,
+        // frame.width))。旧实现用整格 frame(cellSize)导致缩略图偏大(用户可见
+        // "滑动时文件夹变大"), 且与 :155 的 metrics(iconSize) 请求口径分叉。
+        // 保持顶部锚定 + 水平居中(thumbFrame.x 居中、y = frame.minY)。
+        let side = min(request.iconSize, frame.width)
         let thumbFrame = CGRect(
             x: frame.minX + (frame.width - side) / 2,
             y: frame.minY,
             width: side,
             height: side
         )
+        // y-down 逻辑布局 → y-up Quartz 绘制边界。
+        let quartz = quartzRect(topDown: thumbFrame, canvasHeight: canvasHeight)
         // P0-04: 几何唯一真值来自 FolderThumbnailMetrics(与 live
         // FolderThumbnailView 共用同一公式, 消除两处硬编码漂移)。
         let metrics = FolderThumbnailMetrics(side: side)
         let radius = metrics.radius
         let path = CGPath(
-            roundedRect: thumbFrame, cornerWidth: radius, cornerHeight: radius, transform: nil
+            roundedRect: quartz, cornerWidth: radius, cornerHeight: radius, transform: nil
         )
         context.saveGState()
         context.addPath(path)
@@ -439,13 +475,14 @@ final class PageVisualRenderer {
 
         // 背景: 白 0.08 + 边框白 0.38(1/scale)。
         context.setFillColor(red: 1, green: 1, blue: 1, alpha: 0.08)
-        context.fill(thumbFrame)
+        context.fill(quartz)
         context.setStrokeColor(red: 1, green: 1, blue: 1, alpha: 0.38)
         context.setLineWidth(CGFloat(1) / CGFloat(max(1, request.scale)))
         context.addPath(path)
         context.strokePath()
 
-        // sheen: 顶亮 → 底暗(白 0.18 → 0.02)。
+        // sheen: 顶亮 → 底暗(白 0.18 → 0.02)。y-up 下顶部 = maxY、底部 = minY
+        // (与旧 y-down 的 minY→maxY 对调, 保持顶亮底暗)。
         let gradient = CGGradient(
             colorsSpace: CGColorSpaceCreateDeviceRGB(),
             colors: [
@@ -457,15 +494,14 @@ final class PageVisualRenderer {
         if let gradient {
             context.drawLinearGradient(
                 gradient,
-                start: CGPoint(x: thumbFrame.midX, y: thumbFrame.minY),
-                end: CGPoint(x: thumbFrame.midX, y: thumbFrame.maxY),
+                start: CGPoint(x: quartz.midX, y: quartz.maxY),
+                end: CGPoint(x: quartz.midX, y: quartz.minY),
                 options: []
             )
         }
 
-        // 子图标网格(≤9): 几何来自 FolderThumbnailMetrics。rasterize 上下文
-        // 已翻转为 y-down(与 flipped 文档一致), top-down childFrame 直接映射
-        // (与旧实现逐位一致)。
+        // 子图标网格(≤9): 几何来自 FolderThumbnailMetrics(top-down childFrame);
+        // 经 quartzRect 显式转换到 y-up 绘制边界。
         for (index, icon) in childIcons.prefix(FolderThumbnailMetrics.maxIconCount).enumerated() {
             guard let icon else { continue }
             let childFrame = metrics.childFrame(index: index)
@@ -475,16 +511,17 @@ final class PageVisualRenderer {
                 width: childFrame.width,
                 height: childFrame.height
             )
+            let childQuartz = quartzRect(topDown: childRect, canvasHeight: canvasHeight)
             context.saveGState()
             let childPath = CGPath(
-                roundedRect: childRect,
+                roundedRect: childQuartz,
                 cornerWidth: metrics.childRadius,
                 cornerHeight: metrics.childRadius,
                 transform: nil
             )
             context.addPath(childPath)
             context.clip()
-            context.draw(icon, in: childRect)
+            context.draw(icon, in: childQuartz)
             context.restoreGState()
         }
         context.restoreGState()
@@ -495,7 +532,8 @@ final class PageVisualRenderer {
         text: String,
         cellFrame: CGRect,
         request: PageVisualRenderRequest,
-        context: CGContext
+        context: CGContext,
+        canvasHeight: CGFloat
     ) {
         let gap = max(6, (request.cellSize - request.iconSize) / 4)
         let labelRect = CGRect(
@@ -506,7 +544,7 @@ final class PageVisualRenderer {
         )
         drawCenteredText(
             text,
-            in: labelRect,
+            in: quartzRect(topDown: labelRect, canvasHeight: canvasHeight),
             fontSize: 10,
             color: (1, 1, 1, 1),
             truncatingTail: true,
@@ -534,7 +572,11 @@ final class PageVisualRenderer {
         let attributed = CFAttributedStringCreate(nil, text as CFString, attributes as CFDictionary)
         guard let attributed else { return }
         let line = CTLineCreateWithAttributedString(attributed)
-        let bounds = CTLineGetBoundsWithOptions(line, [.useGlyphPathBounds])
+        // T-019: 宽度口径 = 默认 typographic bounds(与 CTLineGetTypographicBounds
+        // 逐位一致), 与 CTLineCreateTruncatedLine 的截断决策同一测量。旧实现用
+        // [.useGlyphPathBounds] —— 字形路径边界不含字距/尾随空白, 宽度偏小,
+        // 超宽判断不触发 → 长名不截断, 与 live byTruncatingTail 不一致。
+        let bounds = CTLineGetBoundsWithOptions(line, [])
         let targetLine: CTLine
         if truncatingTail, bounds.width > rect.width {
             guard let truncated = CTLineCreateTruncatedLine(
@@ -547,17 +589,19 @@ final class PageVisualRenderer {
         } else {
             targetLine = line
         }
-        let finalBounds = CTLineGetBoundsWithOptions(targetLine, [.useGlyphPathBounds])
+        let finalBounds = CTLineGetBoundsWithOptions(targetLine, [])
         let x = rect.midX - finalBounds.width / 2
         let y = rect.midY - finalBounds.height / 2 - finalBounds.minY
 
         context.saveGState()
-        // 阴影(对齐 live: 黑 0.85, blur 4, 下方 1pt)。
+        // 阴影(对齐 live: 黑 0.85, blur 4, 下方 1pt)。y-up 上下文下"下方" = −y
+        // (旧 y-down 全局翻转上下文用 (0,1), 修复后必须取反)。
         context.setShadow(
-            offset: CGSize(width: 0, height: 1), blur: 4,
+            offset: CGSize(width: 0, height: -1), blur: 4,
             color: CGColor(red: 0, green: 0, blue: 0, alpha: 0.85)
         )
-        // flipped(y-down)上下文绘制 CoreText 必须复位 textMatrix。
+        // y-up 上下文绘制 CoreText: textMatrix 保持 identity 即正向
+        // (旧 flipped 上下文必须复位 textMatrix 才能勉强正向, 修复后无需)。
         context.textMatrix = .identity
         context.textPosition = CGPoint(x: x, y: y)
         CTLineDraw(targetLine, context)

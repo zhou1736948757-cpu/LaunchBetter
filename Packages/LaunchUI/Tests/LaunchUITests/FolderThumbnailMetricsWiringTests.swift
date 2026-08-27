@@ -11,7 +11,8 @@ import Testing
 /// - live(AppCellView.FolderThumbnailView): 子图标 layer frame = metrics
 ///   childFrame 按 bounds.height 翻转; 子图标请求 pointSize = metrics.iconSide。
 /// - PageVisual(PageVisualRenderer): resolveIcons 子图标请求 pointSize =
-///   metrics(cellSize).iconSide; 光栅化子图标像素范围 = metrics.iconSide。
+///   metrics(iconSize).iconSide(T-019: 与 live 一致按图标区, 旧实现按
+///   cellSize 偏大); 光栅化子图标像素范围 = metrics(iconSize).iconSide。
 ///
 /// 不触碰懒分配/生命周期(configure/reset/复用路径由既有测试覆盖)。
 @Suite("FolderThumbnailMetrics consumer wiring (P0-05)")
@@ -82,6 +83,10 @@ struct FolderThumbnailMetricsWiringTests {
             bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
         ) else { return buffer }
+        // T-019(R2 同步): 与 PageVisualRendererTests.readPixels 同一约定 ——
+        // 翻转 CTM 使缓冲 row 0 = 图像顶部(y-down), 后续断言统一用 y-down 坐标。
+        context.translateBy(x: 0, y: CGFloat(height))
+        context.scaleBy(x: 1, y: -1)
         context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
         return buffer
     }
@@ -213,7 +218,7 @@ struct FolderThumbnailMetricsWiringTests {
 
     // MARK: - PageVisual: 请求尺寸
 
-    @Test("PageVisual: resolveIcons 子图标按 metrics(cellSize).iconSide 请求")
+    @Test("PageVisual: resolveIcons 子图标按 metrics(iconSize).iconSide 请求(T-019)")
     func resolveIconsRequestsFolderChildrenAtIconSide() async {
         let geometry = GridGeometry(
             columns: 1, rows: 1, cellSize: 120, iconSize: 96,
@@ -237,12 +242,12 @@ struct FolderThumbnailMetricsWiringTests {
         )
         #expect(icons.folderIcons[folderID]?.count == 2)
 
-        // 渲染器把文件夹缩略图绘制在单元格 frame(cellSize=120)内:
-        // side=120 → iconSide=29.2 → 29。普通 app 仍按 iconSize=96。
+        // T-019: 渲染器缩略图绘制在图标区(与 live 容器一致): side = iconSize=96
+        // → iconSide=23.36 → 23。普通 app 仍按 iconSize=96。
         let expectedChildSize = max(
-            1, Int(FolderThumbnailMetrics(side: 120).iconSide.rounded(.down))
+            1, Int(FolderThumbnailMetrics(side: geometry.iconSize).iconSide.rounded(.down))
         )
-        #expect(expectedChildSize == 29)
+        #expect(expectedChildSize == 23)
         let byID = Dictionary(uniqueKeysWithValues: provider.requests.map { ($0.appID, $0) })
         #expect(byID[appA]?.pointSize == 96)
         #expect(byID[child1]?.pointSize == expectedChildSize)
@@ -282,11 +287,14 @@ struct FolderThumbnailMetricsWiringTests {
         let width = visual.image.width
         let height = visual.image.height
 
-        // 蓝色子图标像素包围盒: side=120 → iconSide=29.2 → 约 29×29 pt。
+        // T-019(R2): side = min(iconSize, frame.width) = 96 → iconSide≈23.36
+        // → 蓝色子图标像素包围盒约 23×23 pt。
         var minX = width, minY = height, maxX = -1, maxY = -1
         for y in 0..<height {
+            // y-down 坐标(缓冲 row 0 = 底部; 与 readPixels 的翻转 CTM 对应)。
+            let row = height - 1 - y
             for x in 0..<width {
-                let index = (y * width + x) * 4
+                let index = (row * width + x) * 4
                 if pixels[index + 2] > 200, Int(pixels[index + 2]) > Int(pixels[index]) * 2 {
                     minX = min(minX, x)
                     minY = min(minY, y)
@@ -297,13 +305,13 @@ struct FolderThumbnailMetricsWiringTests {
         }
         let extentWidth = maxX - minX + 1
         let extentHeight = maxY - minY + 1
-        #expect(extentWidth >= 28 && extentWidth <= 31, "子图标宽 ≈ iconSide(29.2)")
-        #expect(extentHeight >= 28 && extentHeight <= 31, "子图标高 ≈ iconSide(29.2)")
-        // 中心 ≈ (27.8, 27.8)(y-down 图像坐标; 与既有
+        #expect(extentWidth >= 22 && extentWidth <= 24, "子图标宽 ≈ iconSide(23.36)")
+        #expect(extentHeight >= 22 && extentHeight <= 24, "子图标高 ≈ iconSide(23.36)")
+        // 中心 ≈ (34.2, 22.2)(y-down 图像坐标; 与
         // folderThumbnailChildGridPlacement 的 child0 落位一致)。
         let centerX = (minX + maxX) / 2
         let centerY = (minY + maxY) / 2
-        #expect(centerX >= 26 && centerX <= 29, "子图标水平中心 ≈ 27.8")
-        #expect(centerY >= 26 && centerY <= 29, "子图标垂直中心 ≈ 27.8")
+        #expect(centerX >= 32 && centerX <= 36, "子图标水平中心 ≈ 34.2")
+        #expect(centerY >= 20 && centerY <= 24, "子图标垂直中心 ≈ 22.2")
     }
 }
