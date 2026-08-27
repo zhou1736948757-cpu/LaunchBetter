@@ -1,7 +1,7 @@
 {
   "workflow": "chef-worker-reviewer-workflow",
   "version": "1.4",
-  "workflow_status": "BLOCKED",
+  "workflow_status": "v0.7.5 released",
   "tasks": {
     "T-000": {
       "status": "PASSED",
@@ -263,21 +263,23 @@
       "expert_worker_required": false
     },
     "T-029": {
-      "status": "READY",
-      "worker_attempts": 0,
-      "review_attempts": 0,
-      "worker_failures": 0,
-      "expert_worker_required": false,
-      "chief_escalation_required": false,
-      "plan_level_issue": false,
-      "next_route": "Main",
-      "current_worker_kind": "normal",
-      "same_reviewer_policy": null,
-      "subagent_sessions": {},
-      "latest_runtime_update": "2026-08-27T23:16:21+09:00"
+      "title": "T-027/T-028 收口、集成提交与 v0.7.5 发布",
+      "status": "PASSED",
+      "next_route": null,
+      "created": "2026-08-28",
+      "baseline": "049ef0e (v0.7.5)",
+      "commits": [
+        "49a223c",
+        "8d8845b",
+        "8efa75e",
+        "049ef0e"
+      ],
+      "tag": "v0.7.5 @ 049ef0e856e6",
+      "release": "https://github.com/zhou1736948757-cpu/LaunchBetter/releases/tag/v0.7.5",
+      "verification": "verify-release.sh 6 gates PASS (522/200/152)"
     }
   },
   "active_agent_jobs": [],
   "blockers": [],
-  "latest_runtime_update": "2026-08-27T23:16:21+09:00"
+  "latest_runtime_update": "2026-08-27T23:22:28+09:00"
 }
