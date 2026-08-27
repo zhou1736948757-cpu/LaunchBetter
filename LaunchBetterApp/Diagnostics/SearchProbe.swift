@@ -12,12 +12,12 @@ enum SearchProbe {
         let query = "com"
         // 搜索前截图(同壁纸基线)
         windowController.captureContentScreenshot(to: "/tmp/lb-search-before.png")
-        store.searchQuery = query
-        windowController.refreshGrid()
+        // T-025: query 归 UI 层, 经窗口控制器诊断 seam 写入
+        windowController.diagnosticSetSearchQuery(query)
         // 等搜索布局 + 图标异步加载完成后再测量/截图
         DispatchQueue.main.asyncAfter(deadline: .now() + 6.0) {
             MainActor.assumeIsolated {
-                let results = store.searchResults() ?? []
+                let results = store.searchResults(for: query) ?? []
                 let diag = windowController.pageTestScrollDiagnostics()
                 let overflow = results.count > capacity
                 print("SEARCHPROBE query=\(query) results=\(results.count) capacity=\(capacity) overflow=\(overflow)")
@@ -54,9 +54,9 @@ enum SearchProbe {
                     customNameRebuilt = delta > 0
                     print("SEARCHPROBE searchRebuildOnCustomName=\(delta > 0 ? "OK (+\(delta))" : "FAIL (0)")")
                 }
-                store.searchQuery = ""
-                windowController.refreshGrid()
-                let restored = store.searchResults() == nil
+                // T-025: query 归 UI 层, 经窗口控制器诊断 seam 写入
+                windowController.diagnosticSetSearchQuery("")
+                let restored = store.searchResults(for: "") == nil
                 let restoredUI = !windowController.isSearchModeForDiag()
                 print("SEARCHPROBE restored search=\(restored) ui=\(restoredUI)")
                 let ok = overflow && iconsOK && searchUIOK && layoutOK

@@ -238,7 +238,6 @@ private final class FolderRefreshTestStore: LauncherStoring {
     }
 
     var onDataChange: (() -> Void)?
-    var searchQuery = ""
     let gridColumns = 7
     let gridRows = 6
     let iconSize = 64
@@ -273,7 +272,7 @@ private final class FolderRefreshTestStore: LauncherStoring {
         )
     }
 
-    func searchResults() -> [DisplayModel.DisplayItem]? { nil }
+    func searchResults(for query: String) -> [DisplayModel.DisplayItem]? { nil }
     func displayName(for appID: AppID) -> String {
         displayNames[appID] ?? appID.rawValue
     }

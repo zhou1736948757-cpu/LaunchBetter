@@ -81,7 +81,6 @@ private final class SnapshotIndexTestStore: LauncherStoring {
     var searchBarWidth: Int { 320 }
     let displayRevision: UInt64 = 1
     var onDataChange: (() -> Void)?
-    var searchQuery = ""
 
     private let items: [DisplayModel.DisplayItem]
 
@@ -104,7 +103,7 @@ private final class SnapshotIndexTestStore: LauncherStoring {
         DisplayModel(pages: [items], pageCapacity: gridColumns * gridRows)
     }
 
-    func searchResults() -> [DisplayModel.DisplayItem]? { nil }
+    func searchResults(for query: String) -> [DisplayModel.DisplayItem]? { nil }
     func displayName(for appID: AppID) -> String { appID.rawValue }
     func folderName(for folderID: FolderID) -> String { folderID.rawValue }
     func launch(_ appID: AppID) {}

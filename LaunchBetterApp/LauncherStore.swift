@@ -85,22 +85,15 @@ public final class LauncherStore: LauncherStoring, LayoutMutationCompleting, Set
     private var externalCatalogRefreshPending = false
     private var externalCatalogRefreshTask: Task<Void, Never>?
 
-    public var searchQuery = "" {
-        didSet {
-            // 搜索只碰内存索引(§95); 值未变化不 bump(避免 hide/show 无意义刷新, 评审 M8)
-            if searchQuery != oldValue {
-                bumpRevision()
-            }
-        }
-    }
-
     public var gridColumns: Int { config.gridColumns }
     public var gridRows: Int { config.gridRows }
     public var iconSize: Int { config.iconSize }
     public var wallpaperBlurRadius: Int { config.wallpaperBlurRadius }
     public var searchBarWidth: Int { config.searchBarWidth }
 
-    /// 显示修订号: 目录/布局/网格可见配置/搜索变化时递增(Stage 1 §30)。
+    /// 显示修订号: 目录/布局/网格可见配置变化时递增(Stage 1 §30)。
+    /// T-025: 搜索是 UI ephemeral state, 搜索词变化不递增修订(不使普通
+    /// PageVisual cache identity 失效); 存储不保有搜索词, 只保有 SearchIndex。
     public private(set) var displayRevision: UInt64 = 0
 
     /// 诊断(§65-66): 搜索索引重建次数 / onDataChange 通知次数。
@@ -418,10 +411,11 @@ public final class LauncherStore: LauncherStoring, LayoutMutationCompleting, Set
         return model
     }
 
-    public func searchResults() -> [DisplayModel.DisplayItem]? {
-        let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return nil }
-        return searchIndex.query(query).map(DisplayModel.DisplayItem.app)
+    /// T-025: query 由 UI 层持有并传入; 存储只保有 SearchIndex, 不保有搜索词。
+    public func searchResults(for query: String) -> [DisplayModel.DisplayItem]? {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return searchIndex.query(trimmed).map(DisplayModel.DisplayItem.app)
     }
 
     public func displayName(for appID: AppID) -> String {

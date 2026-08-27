@@ -213,7 +213,6 @@ private final class LifecycleStore: LauncherStoring {
     var iconSize = 64
 
     var onDataChange: (() -> Void)?
-    var searchQuery = ""
     let wallpaperBlurRadius = 30
     let searchBarWidth = 320
     var displayRevision: UInt64 { revision }
@@ -236,7 +235,7 @@ private final class LifecycleStore: LauncherStoring {
         DisplayModel(pages: pages, pageCapacity: gridColumns * gridRows)
     }
 
-    func searchResults() -> [DisplayModel.DisplayItem]? { searchResultsValue }
+    func searchResults(for query: String) -> [DisplayModel.DisplayItem]? { query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : searchResultsValue }
     func displayName(for appID: AppID) -> String { appID.rawValue }
     func folderName(for folderID: FolderID) -> String { folderID.rawValue }
     func launch(_ appID: AppID) {}

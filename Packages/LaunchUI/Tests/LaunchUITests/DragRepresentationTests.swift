@@ -251,7 +251,6 @@ private final class DragSourceTestStore: LauncherStoring, LayoutMutationCompleti
     var items: [DisplayModel.DisplayItem]
     var revision: UInt64 = 1
     var onDataChange: (() -> Void)?
-    var searchQuery = ""
     let gridColumns = 2
     let gridRows = 1
     let iconSize = 64
@@ -276,7 +275,7 @@ private final class DragSourceTestStore: LauncherStoring, LayoutMutationCompleti
         DisplayModel(pages: [items], pageCapacity: gridColumns * gridRows)
     }
 
-    func searchResults() -> [DisplayModel.DisplayItem]? { nil }
+    func searchResults(for query: String) -> [DisplayModel.DisplayItem]? { nil }
     func displayName(for appID: AppID) -> String { appID.rawValue }
     func folderName(for folderID: FolderID) -> String { folderID.rawValue }
     func launch(_ appID: AppID) {}

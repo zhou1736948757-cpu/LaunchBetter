@@ -203,6 +203,7 @@ struct PageCompositorGridIntegrationTests {
         // 搜索 → 不可合成 + purge 缓存。
         store.searchResultsValue = [.app(makeApp(0, 0))]
         store.revision &+= 1
+        grid.searchQuery = "photo"
         grid.refresh()
         #expect(grid.isSearchMode)
         #expect(!grid.pageCompositorEligibleForDiag)
@@ -211,6 +212,7 @@ struct PageCompositorGridIntegrationTests {
         // 退出搜索恢复。
         store.searchResultsValue = nil
         store.revision &+= 1
+        grid.searchQuery = ""
         grid.refresh()
         #expect(!grid.isSearchMode)
         #expect(grid.currentPageValue == 1)
@@ -1692,7 +1694,6 @@ private class CompositorIntegrationStore: LauncherStoring {
     var revision: UInt64 = 1
 
     var onDataChange: (() -> Void)?
-    var searchQuery = ""
     let gridColumns = 3
     let gridRows = 2
     let iconSize = 64
@@ -1718,7 +1719,7 @@ private class CompositorIntegrationStore: LauncherStoring {
         DisplayModel(pages: pages, pageCapacity: gridColumns * gridRows)
     }
 
-    func searchResults() -> [DisplayModel.DisplayItem]? { searchResultsValue }
+    func searchResults(for query: String) -> [DisplayModel.DisplayItem]? { query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : searchResultsValue }
     func displayName(for appID: AppID) -> String { appID.rawValue }
     func folderName(for folderID: FolderID) -> String { folderID.rawValue }
     func launch(_ appID: AppID) {}
@@ -1777,7 +1778,6 @@ private final class SnapshotRecheckStore: LauncherStoring {
     var revision: UInt64 = 1
 
     var onDataChange: (() -> Void)?
-    var searchQuery = ""
     let gridColumns = 3
     let gridRows = 2
     let iconSize = 64
@@ -1815,7 +1815,7 @@ private final class SnapshotRecheckStore: LauncherStoring {
         )
     }
 
-    func searchResults() -> [DisplayModel.DisplayItem]? { nil }
+    func searchResults(for query: String) -> [DisplayModel.DisplayItem]? { nil }
     func displayName(for appID: AppID) -> String { appID.rawValue }
     func folderName(for folderID: FolderID) -> String { folderID.rawValue }
     func launch(_ appID: AppID) {}

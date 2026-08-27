@@ -268,7 +268,7 @@ enum SettingsChildWindowAttachment: Equatable, Sendable {
 ///
 /// 职责:
 /// - show/hide(淡入淡出)
-/// - 搜索栏 → store.searchQuery → GridViewController.refresh
+/// - 搜索栏 → GridViewController.searchQuery → refresh(T-025: query 归 UI 层)
 /// - 键盘导航(左右翻页 / Escape 隐藏 / Return 启动首项)
 /// - 点击启动(经 GridViewController 点击路由)
 @MainActor
@@ -1116,7 +1116,7 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         closeFolderView(immediately: true)
         iconProvider?.trimMemoryForHidden()
         guard let window else { return }
-        store.searchQuery = ""
+        gridViewController.searchQuery = ""
         searchField.stringValue = ""
         gridViewController.refresh()
         // v0.1.4: 重新打开面板回到第一页
@@ -1430,6 +1430,14 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
         gridViewController?.forceRefresh()
     }
 
+    /// 诊断: 程序化设置搜索词(搜索栏 + Grid 搜索状态同步, T-025 query 归 UI 层)。
+    /// 供诊断探针(SearchProbe/SmokeProbe 等)替代旧的 store.searchQuery 写入。
+    public func diagnosticSetSearchQuery(_ query: String) {
+        searchField.stringValue = query
+        gridViewController.searchQuery = query
+        gridViewController.refresh()
+    }
+
     /// 应用自渲染截图: layer 级渲染(与屏幕合成一致)。
     /// cacheDisplay 对纯 layer-backed 层级不可靠(搜索模式实测为空图, 假 BLOCKER)。
     public func captureContentScreenshot(to path: String) {
@@ -1622,7 +1630,9 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
     }
 
     private func launchFirstSearchResult() {
-        guard let results = store.searchResults(), let first = results.first else { return }
+        // T-025: query 由 Grid(UI 层)持有; 存储按传入 query 过滤。
+        guard let results = store.searchResults(for: gridViewController.searchQuery),
+              let first = results.first else { return }
         if case .app(let id) = first {
             store.launch(id)
         }
@@ -1631,7 +1641,7 @@ public final class LauncherWindowController: NSWindowController, NSSearchFieldDe
     // MARK: - NSSearchFieldDelegate
 
     public func controlTextDidChange(_ obj: Notification) {
-        store.searchQuery = searchField.stringValue
+        gridViewController.searchQuery = searchField.stringValue
         gridViewController.refresh()
     }
 }

@@ -44,13 +44,13 @@ enum SourcesProbe {
                 try? FileManager.default.removeItem(at: root)
                 DiagnosticRunner.finishProbe("SOURCESPROBE", ok: false, detail: "app did not appear after adding source")
             }
-            // 搜索可达
-            store.searchQuery = "sourceprobe"
-            let searchable = (store.searchResults() ?? []).contains { item in
+            // 搜索可达(T-025: query 归 UI 层, 经窗口控制器诊断 seam 写入)
+            container.windowController.diagnosticSetSearchQuery("sourceprobe")
+            let searchable = (store.searchResults(for: "sourceprobe") ?? []).contains { item in
                 if case .app(let id) = item { return id == probeID }
                 return false
             }
-            store.searchQuery = ""
+            container.windowController.diagnosticSetSearchQuery("")
             // 移除源 → 消失
             store.save(original)
             poll(until: { !store.allApps.contains { $0.name == "SourceProbeApp" } }) { disappeared in

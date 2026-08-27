@@ -124,7 +124,8 @@ enum DiagnosticRunner {
             // 保持启动器显示(供外部 screencapture 截真实屏幕, 含 NSSearchField)。
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
                 if CommandLine.arguments.contains("--search-mode") {
-                    container.store.searchQuery = "com"
+                    // T-025: query 归 UI 层, 经窗口控制器诊断 seam 写入
+                    container.windowController.diagnosticSetSearchQuery("com")
                 }
                 container.windowController.show()
                 if CommandLine.arguments.contains("--search-mode") {

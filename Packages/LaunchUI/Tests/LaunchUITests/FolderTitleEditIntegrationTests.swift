@@ -301,7 +301,6 @@ private final class TitleEditTestStore: LauncherStoring {
     let folderName = "My Long Folder Name"
 
     var onDataChange: (() -> Void)?
-    var searchQuery = ""
     let gridColumns = 7
     let gridRows = 6
     let iconSize = 64
@@ -330,7 +329,7 @@ private final class TitleEditTestStore: LauncherStoring {
         )
     }
 
-    func searchResults() -> [DisplayModel.DisplayItem]? { nil }
+    func searchResults(for query: String) -> [DisplayModel.DisplayItem]? { nil }
     func displayName(for appID: AppID) -> String { appID == self.appID ? "Title Child" : appID.rawValue }
     func folderName(for folderID: FolderID) -> String { folderID == self.folderID ? folderName : folderID.rawValue }
     func launch(_ appID: AppID) {}

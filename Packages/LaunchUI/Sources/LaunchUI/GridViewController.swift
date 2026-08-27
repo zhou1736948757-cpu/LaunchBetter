@@ -290,6 +290,10 @@ final class GridViewController: NSViewController {
         return "content=\(Int(content.width))x\(Int(content.height)) docFrame=\(Int(doc.width))x\(Int(doc.height)) clipX=\(Int(clip.origin.x)) clipY=\(Int(clip.origin.y)) clipW=\(Int(clip.width)) sections=\(sections) items=\(items) frames=\(frames) prepare=\(layout?.prepareCount ?? 0)"
     }
     private var searchMode = false
+    /// T-025: 搜索词是 UI ephemeral state, 由 Grid(UI 层)持有; 存储不保有 query。
+    /// 由 LauncherWindowController(搜索栏)写入; 变化经 refresh() 重新过滤,
+    /// 不递增 displayRevision。
+    var searchQuery = ""
     private var lastAppliedLanguage = L10n.currentLanguage
     /// 最近一次用来配置 AppCell/预热图标的有效 pointSize, 防止布局回调循环 reload。
     private var lastConfiguredEffectivePointSize: Int?
@@ -342,6 +346,10 @@ final class GridViewController: NSViewController {
 
     /// 上次应用的显示修订(无变化跳过 full snapshot, Stage 1 §30)。
     private var lastAppliedRevision: UInt64 = .max
+
+    /// T-025: 上次应用的搜索词。搜索词变化(即使修订未变)也要重新过滤并
+    /// 应用最新数据; 搜索词未变且修订未变才跳过 full snapshot。
+    private var lastAppliedSearchQuery = ""
 
     /// Folder source 的离散布局/显示修订；过渡帧只读取这个缓存值，不访问 Store。
     private var folderTransitionRevision = FolderTransitionSourceRevision()
@@ -653,7 +661,8 @@ final class GridViewController: NSViewController {
     // MARK: - 刷新(修订跳过)
 
     /// 应用最新显示模型(或搜索结果)。
-    /// 修订相同(目录/布局/配置/搜索均未变)时跳过 full snapshot(Stage 1 §30)。
+    /// 修订相同(目录/布局/配置均未变)且搜索词未变时跳过 full snapshot
+    /// (Stage 1 §30; T-025: 搜索词变化不递增修订, 但必须重新过滤)。
     func refresh() {
         // 隐藏期间图标缓存可能被 trim; 每次 show 后的首次预热必须真正执行,
         // 不能被 (page, revision) 去重键挡掉(PA1)。
@@ -668,13 +677,18 @@ final class GridViewController: NSViewController {
             )
             return
         }
-        if store.displayRevision != lastAppliedRevision {
-            dragController?.invalidateActiveSessionForDisplayChange()
-            folderTransitionRevision.invalidate()
-            lastAppliedRevision = store.displayRevision
-            // External data changes can arrive during a swipe; retire the
-            // presentation-only compositor before replacing its page model.
-            shutdownPageCompositor()
+        let revisionChanged = store.displayRevision != lastAppliedRevision
+        let searchChanged = searchQuery != lastAppliedSearchQuery
+        if revisionChanged || searchChanged {
+            if revisionChanged {
+                dragController?.invalidateActiveSessionForDisplayChange()
+                folderTransitionRevision.invalidate()
+                lastAppliedRevision = store.displayRevision
+                // External data changes can arrive during a swipe; retire the
+                // presentation-only compositor before replacing its page model.
+                shutdownPageCompositor()
+            }
+            lastAppliedSearchQuery = searchQuery
             applyLatestData()
             if L10n.currentLanguage != lastAppliedLanguage {
                 lastAppliedLanguage = L10n.currentLanguage
@@ -700,7 +714,7 @@ final class GridViewController: NSViewController {
     }
 
     private func applyLatestData() {
-        if let results = store.searchResults() {
+        if let results = store.searchResults(for: searchQuery) {
             enterSearchMode(with: results)
         } else {
             let restoringSearchExit = searchMode

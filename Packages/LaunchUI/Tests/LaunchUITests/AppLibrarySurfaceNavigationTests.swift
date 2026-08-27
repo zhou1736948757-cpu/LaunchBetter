@@ -173,10 +173,12 @@ struct AppLibrarySurfaceNavigationTests {
         #expect(grid.currentSurfaceValue == .appLibrary)
         store.searchResultsValue = [.app(makeApp(9))]
         store.revision &+= 1
+        grid.searchQuery = "photo"
         grid.refresh()
         #expect(grid.isSearchMode)
         store.searchResultsValue = nil
         store.revision &+= 1
+        grid.searchQuery = ""
         grid.refresh()
         #expect(!grid.isSearchMode)
         #expect(grid.currentSurfaceValue == .appLibrary)
@@ -188,10 +190,12 @@ struct AppLibrarySurfaceNavigationTests {
         #expect(grid.currentSurfaceValue == .layoutPage(2))
         store.searchResultsValue = [.app(makeApp(9))]
         store.revision &+= 1
+        grid.searchQuery = "photo"
         grid.refresh()
         #expect(grid.isSearchMode)
         store.searchResultsValue = nil
         store.revision &+= 1
+        grid.searchQuery = ""
         grid.refresh()
         #expect(!grid.isSearchMode)
         #expect(grid.currentSurfaceValue == .layoutPage(2))
@@ -206,6 +210,7 @@ struct AppLibrarySurfaceNavigationTests {
         #expect(grid.pageDotCountForDiag == 3)
         harness.store.searchResultsValue = [.app(makeApp(9))]
         harness.store.revision &+= 1
+        grid.searchQuery = "photo"
         grid.refresh()
         #expect(grid.isSearchMode)
         #expect(grid.pageDotCountForDiag == 0)
@@ -408,7 +413,6 @@ private final class LibraryNavTestStore: LauncherStoring, AppLibraryDataProvidin
     var revision: UInt64 = 1
 
     var onDataChange: (() -> Void)?
-    var searchQuery = ""
     let gridColumns = 2
     let gridRows = 1
     let iconSize = 64
@@ -429,7 +433,7 @@ private final class LibraryNavTestStore: LauncherStoring, AppLibraryDataProvidin
         DisplayModel(pages: pages, pageCapacity: gridColumns * gridRows)
     }
 
-    func searchResults() -> [DisplayModel.DisplayItem]? { searchResultsValue }
+    func searchResults(for query: String) -> [DisplayModel.DisplayItem]? { query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : searchResultsValue }
     func displayName(for appID: AppID) -> String { appID.rawValue }
     func folderName(for folderID: FolderID) -> String { folderID.rawValue }
     func launch(_ appID: AppID) {}

@@ -33,9 +33,6 @@ public protocol LauncherStoring: AnyObject {
     /// 移除由 addDataObserver 返回的观察者。
     func removeDataObserver(_ token: UUID)
 
-    /// 当前搜索词(由 UI 写入)。
-    var searchQuery: String { get set }
-
     /// 网格列数(布局几何)。
     var gridColumns: Int { get }
 
@@ -51,14 +48,17 @@ public protocol LauncherStoring: AnyObject {
     /// 搜索栏宽度(pt，兼容持久值；运行时宽高由 `SearchBarSizing` 统一映射)。
     var searchBarWidth: Int { get }
 
-    /// 显示修订号: 目录/布局/配置/搜索任一变化即递增(无变化跳过 full snapshot)。
+    /// 显示修订号: 目录/布局/配置任一变化即递增(无变化跳过 full snapshot)。
+    /// 搜索是 UI ephemeral state(T-025): 搜索词变化不递增修订, 不使普通
+    /// PageVisual cache identity 失效。
     var displayRevision: UInt64 { get }
 
     /// 当前分页显示模型。
     func displayModel() -> DisplayModel
 
-    /// 搜索结果(搜索词非空时返回)。
-    func searchResults() -> [DisplayModel.DisplayItem]?
+    /// 搜索结果(按给定 query 过滤; 空/空白 query 返回 nil)。
+    /// query 由 UI 层持有(T-025), 存储不保有搜索词。
+    func searchResults(for query: String) -> [DisplayModel.DisplayItem]?
 
     /// 应用显示名(占位图标与标签用)。
     func displayName(for appID: AppID) -> String

@@ -58,7 +58,6 @@ struct GridDragCacheTests {
 private final class GridDragCacheTestStore: LauncherStoring {
     let pages: [[DisplayModel.DisplayItem]]
     var onDataChange: (() -> Void)?
-    var searchQuery = ""
     let gridColumns = 2
     let gridRows = 1
     let iconSize = 64
@@ -79,7 +78,7 @@ private final class GridDragCacheTestStore: LauncherStoring {
         DisplayModel(pages: pages, pageCapacity: gridColumns * gridRows)
     }
 
-    func searchResults() -> [DisplayModel.DisplayItem]? { nil }
+    func searchResults(for query: String) -> [DisplayModel.DisplayItem]? { nil }
     func displayName(for appID: AppID) -> String { appID.rawValue }
     func folderName(for folderID: FolderID) -> String { folderID.rawValue }
     func launch(_ appID: AppID) {}

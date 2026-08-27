@@ -54,6 +54,7 @@ struct SearchPageRestoreTests {
 
         store.searchResultsValue = [.app(makeApp(1))]
         store.revision &+= 1
+        grid.searchQuery = "photo"
         grid.refresh()
         #expect(grid.isSearchMode)
         #expect(grid.currentPageValue == 0)
@@ -61,6 +62,7 @@ struct SearchPageRestoreTests {
 
         store.searchResultsValue = nil
         store.revision &+= 1
+        grid.searchQuery = ""
         grid.refresh()
         #expect(!grid.isSearchMode)
         #expect(grid.pageCountValue == 3)
@@ -80,12 +82,14 @@ struct SearchPageRestoreTests {
 
         store.searchResultsValue = [.app(makeApp(1))]
         store.revision &+= 1
+        grid.searchQuery = "photo"
         grid.refresh()
         #expect(grid.isSearchMode)
 
         store.pages = [[.app(makeApp(1))]]
         store.searchResultsValue = nil
         store.revision &+= 1
+        grid.searchQuery = ""
         grid.refresh()
         #expect(!grid.isSearchMode)
         #expect(grid.pageCountValue == 1)
@@ -125,7 +129,6 @@ private final class SearchRestoreTestStore: LauncherStoring {
     var revision: UInt64 = 1
 
     var onDataChange: (() -> Void)?
-    var searchQuery = ""
     let gridColumns = 2
     let gridRows = 1
     let iconSize = 64
@@ -146,7 +149,7 @@ private final class SearchRestoreTestStore: LauncherStoring {
         DisplayModel(pages: pages, pageCapacity: gridColumns * gridRows)
     }
 
-    func searchResults() -> [DisplayModel.DisplayItem]? { searchResultsValue }
+    func searchResults(for query: String) -> [DisplayModel.DisplayItem]? { query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : searchResultsValue }
     func displayName(for appID: AppID) -> String { appID.rawValue }
     func folderName(for folderID: FolderID) -> String { folderID.rawValue }
     func launch(_ appID: AppID) {}

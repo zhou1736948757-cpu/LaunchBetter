@@ -295,7 +295,6 @@ private final class LibraryFirstStore: LauncherStoring, AppLibraryDataProviding 
     var pages: [[DisplayModel.DisplayItem]]
     var libraryModel: AppLibraryModel
     var onDataChange: (() -> Void)?
-    var searchQuery = ""
     var onLaunch: ((AppID) -> Void)?
     let gridColumns = 2
     let gridRows = 1
@@ -313,7 +312,7 @@ private final class LibraryFirstStore: LauncherStoring, AppLibraryDataProviding 
     func addDataObserver(_ observer: @escaping () -> Void) -> UUID { UUID() }
     func removeDataObserver(_ token: UUID) {}
     func displayModel() -> DisplayModel { DisplayModel(pages: pages, pageCapacity: gridColumns * gridRows) }
-    func searchResults() -> [DisplayModel.DisplayItem]? { nil }
+    func searchResults(for query: String) -> [DisplayModel.DisplayItem]? { nil }
     func displayName(for appID: AppID) -> String { appID.rawValue }
     func folderName(for folderID: FolderID) -> String { folderID.rawValue }
     func launch(_ appID: AppID) { onLaunch?(appID) }

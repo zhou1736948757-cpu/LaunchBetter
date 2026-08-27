@@ -12,10 +12,11 @@ enum SmokeProbe {
         print("SMOKE catalogApps=\(store.diagnosticCatalogAppCount())")
         print("SMOKE layoutPages=\(display.pages.count) flatSlots=\(display.flatSlots.count) capacity=\(display.pageCapacity)")
 
-        store.searchQuery = "chrome"
-        let results = store.searchResults() ?? []
+        // T-025: query 归 UI 层, 经窗口控制器诊断 seam 写入
+        windowController.diagnosticSetSearchQuery("chrome")
+        let results = store.searchResults(for: "chrome") ?? []
         print("SMOKE searchQuery=chrome results=\(results.count)")
-        store.searchQuery = ""
+        windowController.diagnosticSetSearchQuery("")
 
         print("SMOKE window [\(windowController.diagnostics())]")
         let baseOK = store.diagnosticCatalogAppCount() > 0

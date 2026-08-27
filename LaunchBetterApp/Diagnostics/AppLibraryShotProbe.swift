@@ -57,8 +57,8 @@ enum AppLibraryShotProbe {
             }
             waitThenCapture(container, outputPath: outputPath, state: state, delay: 0.4)
         case "search":
-            container.store.searchQuery = "com"
-            controller.refreshGrid()
+            // T-025: query 归 UI 层, 经窗口控制器诊断 seam 写入
+            controller.diagnosticSetSearchQuery("com")
             waitThenCapture(container, outputPath: outputPath, state: state, delay: 0.3)
         case "settings":
             controller.openSettingsFromMenu()
