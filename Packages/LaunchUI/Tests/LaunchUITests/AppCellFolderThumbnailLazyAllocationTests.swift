@@ -6,8 +6,8 @@ import Testing
 
 /// P2-A: AppCellView 懒分配 FolderThumbnailView。
 ///
-/// 普通 App 配置不得实例化/加入文件夹缩略图层级(NSVisualEffectView +
-/// container/sheen + 9 个图标 layer); 文件夹配置懒创建唯一实例; 文件夹→App
+/// 普通 App 配置不得实例化/加入文件夹缩略图层级(NSView + container/sheen +
+/// 9 个图标 layer); 文件夹配置懒创建唯一实例; 文件夹→App
 /// 复用/重配置必须真正移除并释放层级; app→folder 必须安全重建。
 ///
 /// 几何/拖拽行为由既有 FolderThumbnailMetricsWiringTests 等覆盖, 本套件只
@@ -17,11 +17,18 @@ import Testing
 struct AppCellFolderThumbnailLazyAllocationTests {
     // MARK: - helpers
 
-    /// 从 cell 视图树中收集 pressContainer 下的全部 NSVisualEffectView
-    /// (即 FolderThumbnailView 实例; 私有类经层级查找, 不耦合类型名)。
-    private func folderThumbnailViews(in cell: AppCellView) -> [NSVisualEffectView] {
+    /// 从 cell 视图树中收集 pressContainer 下的全部 FolderThumbnailView
+    /// (私有类, 经层级结构识别: layer 树含 sheen CAGradientLayer —— T-020 后
+    /// 为普通 NSView, 不再按 NSVisualEffectView 类型过滤, 不耦合类型名)。
+    private func folderThumbnailViews(in cell: AppCellView) -> [NSView] {
         guard let pressContainer = cell.view.subviews.first else { return [] }
-        return pressContainer.subviews.compactMap { $0 as? NSVisualEffectView }
+        return pressContainer.subviews.filter { isFolderThumbnailView($0) }
+    }
+
+    /// FolderThumbnailView 结构识别: layer → iconContainerLayer → sheen
+    /// (CAGradientLayer) + 9 个图标 layer。label 等兄弟视图无此结构。
+    private func isFolderThumbnailView(_ view: NSView) -> Bool {
+        view.layer?.sublayers?.first?.sublayers?.contains { $0 is CAGradientLayer } == true
     }
 
     /// 建一个带窗口的 cell, 保证 loadView 与布局路径被真实执行。
