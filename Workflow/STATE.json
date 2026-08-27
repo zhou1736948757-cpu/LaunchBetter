@@ -194,7 +194,7 @@
       "current_worker_kind": "normal",
       "same_reviewer_policy": null,
       "subagent_sessions": {},
-      "latest_runtime_update": "2026-08-27T20:31:46+09:00"
+      "latest_runtime_update": "2026-08-27T21:04:36+09:00"
     },
     "T-025": {
       "status": "PASSED",
@@ -223,9 +223,61 @@
       "same_reviewer_policy": null,
       "subagent_sessions": {},
       "latest_runtime_update": "2026-08-27T18:19:21+09:00"
+    },
+    "T-027": {
+      "title": "Paging Performance Telemetry (B+ Phase 1)",
+      "status": "PASSED",
+      "next_route": "Main",
+      "created": "2026-08-28",
+      "baseline": "80516fb (v0.7.4)",
+      "worker": null,
+      "reviewer": null,
+      "worker_failures": 1,
+      "worker_attempts": 1,
+      "review_attempts": 2,
+      "chief_escalation_required": false,
+      "plan_level_issue": false,
+      "current_worker_kind": "normal",
+      "same_reviewer_policy": null,
+      "subagent_sessions": {},
+      "latest_runtime_update": "2026-08-27T22:53:15+09:00",
+      "expert_worker_required": false
+    },
+    "T-028": {
+      "title": "IconContentVersionFactory metadata coalescing (single resourceValues)",
+      "status": "PASSED",
+      "next_route": "Main",
+      "created": "2026-08-28",
+      "baseline": "80516fb (v0.7.4)",
+      "worker": null,
+      "reviewer": null,
+      "worker_failures": 0,
+      "worker_attempts": 1,
+      "review_attempts": 1,
+      "chief_escalation_required": false,
+      "plan_level_issue": false,
+      "current_worker_kind": "normal",
+      "same_reviewer_policy": null,
+      "subagent_sessions": {},
+      "latest_runtime_update": "2026-08-27T22:01:01+09:00",
+      "expert_worker_required": false
+    },
+    "T-029": {
+      "status": "READY",
+      "worker_attempts": 0,
+      "review_attempts": 0,
+      "worker_failures": 0,
+      "expert_worker_required": false,
+      "chief_escalation_required": false,
+      "plan_level_issue": false,
+      "next_route": "Main",
+      "current_worker_kind": "normal",
+      "same_reviewer_policy": null,
+      "subagent_sessions": {},
+      "latest_runtime_update": "2026-08-27T23:16:21+09:00"
     }
   },
   "active_agent_jobs": [],
   "blockers": [],
-  "latest_runtime_update": "2026-08-27T20:31:46+09:00"
+  "latest_runtime_update": "2026-08-27T23:16:21+09:00"
 }
