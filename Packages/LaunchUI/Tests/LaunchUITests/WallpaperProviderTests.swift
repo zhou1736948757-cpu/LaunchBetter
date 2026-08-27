@@ -212,6 +212,173 @@ struct WallpaperProviderTests {
         )
     }
 
+    // MARK: - T-026: 磁盘持久化移出 display-ready path(serial writer)
+
+    @Test("disk writer persists a decodable PNG after flush")
+    func diskWriterPersistsDecodablePNG() throws {
+        let dir = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let writer = WallpaperDiskWriter()
+        let url = dir.appendingPathComponent("Wallpaper").appendingPathComponent("test.png")
+        let image = try makeSolidImage(
+            width: 32, height: 32, color: RGBA(red: 10, green: 20, blue: 30, alpha: 255)
+        )
+
+        writer.enqueue(image: image, to: url)
+        writer.flush()
+
+        #expect(FileManager.default.fileExists(atPath: url.path))
+        let decoded = try #require(Self.loadPNG(url: url))
+        #expect(decoded.width == 32)
+        #expect(decoded.height == 32)
+        let pixels = try rgbaPixels(of: decoded)
+        #expect(pixels.allSatisfy {
+            $0.red == 10 && $0.green == 20 && $0.blue == 30 && $0.alpha == 255
+        })
+    }
+
+    @Test("disk writer deduplicates repeated enqueues of the same URL (idempotent)")
+    func diskWriterDeduplicatesSameURL() throws {
+        let dir = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let writer = WallpaperDiskWriter()
+        let url = dir.appendingPathComponent("Wallpaper").appendingPathComponent("test.png")
+        let first = try makeSolidImage(
+            width: 16, height: 16, color: RGBA(red: 1, green: 2, blue: 3, alpha: 255)
+        )
+        let second = try makeSolidImage(
+            width: 16, height: 16, color: RGBA(red: 200, green: 201, blue: 202, alpha: 255)
+        )
+
+        // 同 URL 二次入队(多次 cold render 场景): 只写首次内容
+        writer.enqueue(image: first, to: url)
+        writer.enqueue(image: second, to: url)
+        writer.flush()
+
+        let decoded = try #require(Self.loadPNG(url: url))
+        let pixels = try rgbaPixels(of: decoded)
+        #expect(pixels.allSatisfy { $0.red == 1 && $0.green == 2 && $0.blue == 3 })
+    }
+
+    @Test("enqueue returns before the write completes (write lives on the serial queue)")
+    func enqueueDoesNotBlockOnWrite() throws {
+        let dir = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let queue = DispatchQueue(label: "test.wallpaper-writer.suspended")
+        queue.suspend()
+        let writer = WallpaperDiskWriter(queue: queue)
+        let url = dir.appendingPathComponent("Wallpaper").appendingPathComponent("test.png")
+        let image = try makeSolidImage(
+            width: 16, height: 16, color: RGBA(red: 5, green: 6, blue: 7, alpha: 255)
+        )
+
+        writer.enqueue(image: image, to: url)
+        // 队列挂起: enqueue 已返回, 但写盘尚未执行 → 磁盘 IO 不在入队/返回路径
+        #expect(!FileManager.default.fileExists(atPath: url.path))
+
+        queue.resume()
+        writer.flush()
+        #expect(FileManager.default.fileExists(atPath: url.path))
+    }
+
+    @Test("disk write failure is recorded, not thrown, and does not poison later writes")
+    func diskWriteFailureIsRecordedNotThrown() throws {
+        let dir = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let writer = WallpaperDiskWriter()
+        let image = try makeSolidImage(
+            width: 16, height: 16, color: RGBA(red: 1, green: 1, blue: 1, alpha: 255)
+        )
+
+        // 父路径是普通文件: createDirectory 必然失败(确定性失败注入)
+        let blocker = dir.appendingPathComponent("blocker")
+        try Data("x".utf8).write(to: blocker)
+        let badURL = blocker.appendingPathComponent("Wallpaper").appendingPathComponent("bad.png")
+
+        writer.enqueue(image: image, to: badURL) // 不抛出
+        writer.flush() // 不抛出
+        #expect(!FileManager.default.fileExists(atPath: badURL.path))
+
+        // 失败不污染后续写(失败未记入 written, 可重试)
+        let goodURL = dir.appendingPathComponent("Wallpaper").appendingPathComponent("good.png")
+        writer.enqueue(image: image, to: goodURL)
+        writer.flush()
+        #expect(FileManager.default.fileExists(atPath: goodURL.path))
+    }
+
+    @Test("cold render returns before disk write and persists asynchronously")
+    func coldRenderReturnsBeforeDiskWrite() throws {
+        // 环境依赖: 需要真实壁纸源; 无壁纸源时验证安全回退(不伪造持久化通过)
+        guard let source = firstWallpaperSourceURL() else {
+            let provider = WallpaperProvider(
+                cachesURL: URL(fileURLWithPath: NSTemporaryDirectory())
+            )
+            #expect(provider.blurredWallpaper(for: renderRequest()) == nil)
+            return
+        }
+        let dir = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let queue = DispatchQueue(label: "test.wallpaper-provider.suspended")
+        queue.suspend()
+        let writer = WallpaperDiskWriter(queue: queue)
+        let provider = WallpaperProvider(cachesURL: dir, diskWriter: writer)
+        let request = renderRequest()
+
+        let rendered = try #require(provider.blurredWallpaper(for: request))
+        // 返回时: 内存缓存已就绪, 磁盘尚未写(队列挂起 → 写盘不在返回路径)
+        #expect(!FileManager.default.fileExists(
+            atPath: dir.appendingPathComponent("Wallpaper").path
+        ))
+
+        // 第二次 cold render(内存缓存命中): 返回同一图像, 不重复入队写盘
+        let again = provider.blurredWallpaper(for: request)
+        #expect(again === rendered)
+
+        queue.resume()
+        writer.flush()
+        // 异步写完成: 磁盘文件存在且可解码, 尺寸与渲染结果一致
+        let diskURL = dir.appendingPathComponent("Wallpaper", isDirectory: true)
+            .appendingPathComponent(WallpaperProvider.diskCacheFileName(
+                for: request,
+                sourceIdentity: WallpaperProvider.sourceIdentity(for: source)
+            ))
+        #expect(FileManager.default.fileExists(atPath: diskURL.path))
+        let decoded = try #require(Self.loadPNG(url: diskURL))
+        #expect(decoded.width == rendered.width)
+        #expect(decoded.height == rendered.height)
+    }
+
+    private func makeTemporaryDirectory() throws -> URL {
+        let url = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("T026-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+
+    private func firstWallpaperSourceURL() -> URL? {
+        // 与 WallpaperProvider.wallpaperSourceURL(for:) 同构: 尺寸最近屏优先, 兜底任意有壁纸屏
+        let screens = NSScreen.screens
+        let request = renderRequest()
+        if let index = WallpaperProvider.targetScreenIndex(
+            for: request,
+            availableFrames: screens.map(\.frame)
+        ), screens.indices.contains(index),
+           let url = NSWorkspace.shared.desktopImageURL(for: screens[index]) {
+            return url
+        }
+        for screen in screens {
+            if let url = NSWorkspace.shared.desktopImageURL(for: screen) {
+                return url
+            }
+        }
+        return nil
+    }
+
+    private static func loadPNG(url: URL) -> CGImage? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        return CGImageSourceCreateImageAtIndex(source, 0, nil)
+    }
+
     private func cacheName(
         for request: WallpaperProvider.RenderRequest,
         sourceIdentity: WallpaperProvider.SourceIdentity

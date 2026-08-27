@@ -56,6 +56,7 @@ public final class WallpaperProvider: @unchecked Sendable {
     }
 
     private let cachesURL: URL
+    private let diskWriter: WallpaperDiskWriter
     private let lock = NSLock()
     private let condition = NSCondition()
     private var cache: [CacheKey: CGImage] = [:]
@@ -77,10 +78,18 @@ public final class WallpaperProvider: @unchecked Sendable {
 
     public init(cachesURL: URL) {
         self.cachesURL = cachesURL
+        self.diskWriter = WallpaperDiskWriter()
+    }
+
+    /// 测试注入: 自定义写器(可挂起队列验证"render 返回不等待磁盘写")。
+    init(cachesURL: URL, diskWriter: WallpaperDiskWriter) {
+        self.cachesURL = cachesURL
+        self.diskWriter = diskWriter
     }
 
     /// 渲染模糊壁纸(同步, 后台线程调用)。
-    /// 路径: 内存缓存 → 磁盘缓存 → 渲染(半分辨率, in-flight 去重)+ 双缓存。
+    /// 路径: 内存缓存 → 磁盘缓存 → 渲染(半分辨率, in-flight 去重)→ 内存缓存 → 返回;
+    /// 磁盘持久化交 serial writer 异步执行(T-026), render 返回不等待 PNG encode + 写盘。
     public func blurredWallpaper(for request: RenderRequest) -> CGImage? {
         guard let wallpaper = wallpaperSourceURL(for: request) else {
             return nil
@@ -142,14 +151,8 @@ public final class WallpaperProvider: @unchecked Sendable {
             condition.lock()
             cache[cacheKey] = rendered
             condition.unlock()
-            // 磁盘缓存(失败不阻断)
-            if let data = Self.pngData(of: rendered) {
-                try? FileManager.default.createDirectory(
-                    at: diskURL.deletingLastPathComponent(),
-                    withIntermediateDirectories: true
-                )
-                try? data.write(to: diskURL, options: .atomic)
-            }
+            // 磁盘缓存(异步, 失败不阻断 UI): PNG encode + 原子写盘在 serial writer(T-026)
+            diskWriter.enqueue(image: rendered, to: diskURL)
         }
         return rendered
     }
@@ -202,18 +205,6 @@ public final class WallpaperProvider: @unchecked Sendable {
     private static func loadImage(url: URL) -> CGImage? {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
         return CGImageSourceCreateImageAtIndex(source, 0, nil)
-    }
-
-    private static func pngData(of image: CGImage) -> Data? {
-        let data = NSMutableData()
-        guard let destination = CGImageDestinationCreateWithData(
-            data, "public.png" as CFString, 1, nil
-        ) else {
-            return nil
-        }
-        CGImageDestinationAddImage(destination, image, nil)
-        guard CGImageDestinationFinalize(destination) else { return nil }
-        return data as Data
     }
 
     // MARK: - 壁纸来源
