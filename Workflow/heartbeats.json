@@ -3,25 +3,25 @@
     "role": "Main",
     "task_id": "T-024",
     "status": "ACTIVE",
-    "last_heartbeat": "2026-08-27T18:31:11+09:00"
+    "last_heartbeat": "2026-08-27T20:31:21+09:00"
   },
   "Worker": {
     "role": "Worker",
-    "task_id": "T-026",
+    "task_id": "T-024",
     "status": "IDLE",
-    "last_heartbeat": "2026-08-27T18:15:50+09:00"
+    "last_heartbeat": "2026-08-27T20:29:30+09:00"
   },
   "Reviewer": {
     "role": "Reviewer",
     "task_id": "T-024",
-    "status": "ACTIVE",
-    "last_heartbeat": "2026-08-27T18:29:39+09:00"
+    "status": "IDLE",
+    "last_heartbeat": "2026-08-27T20:31:46+09:00"
   },
   "Chief": {
     "role": "Chief",
     "task_id": "T-024",
     "status": "ACTIVE",
-    "last_heartbeat": "2026-08-27T18:31:11+09:00"
+    "last_heartbeat": "2026-08-27T20:27:11+09:00"
   },
   "T-019-worker": {
     "agent": "T-019-worker",

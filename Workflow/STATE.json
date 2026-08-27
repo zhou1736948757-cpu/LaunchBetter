@@ -183,18 +183,18 @@
       "latest_runtime_update": "2026-08-27T17:16:59+09:00"
     },
     "T-024": {
-      "status": "REOPENED",
+      "status": "PASSED",
       "worker_attempts": 1,
-      "review_attempts": 1,
-      "worker_failures": 1,
+      "review_attempts": 3,
+      "worker_failures": 2,
       "expert_worker_required": false,
-      "chief_escalation_required": true,
+      "chief_escalation_required": false,
       "plan_level_issue": false,
-      "next_route": "Chief",
+      "next_route": "Main",
       "current_worker_kind": "normal",
       "same_reviewer_policy": null,
       "subagent_sessions": {},
-      "latest_runtime_update": "2026-08-27T18:31:11+09:00"
+      "latest_runtime_update": "2026-08-27T20:31:46+09:00"
     },
     "T-025": {
       "status": "PASSED",
@@ -227,5 +227,5 @@
   },
   "active_agent_jobs": [],
   "blockers": [],
-  "latest_runtime_update": "2026-08-27T18:31:11+09:00"
+  "latest_runtime_update": "2026-08-27T20:31:46+09:00"
 }
