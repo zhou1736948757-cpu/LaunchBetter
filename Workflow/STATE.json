@@ -124,7 +124,7 @@
       "current_worker_kind": "normal",
       "same_reviewer_policy": null,
       "subagent_sessions": {},
-      "latest_runtime_update": "2026-08-27T16:44:34+09:00"
+      "latest_runtime_update": "2026-08-27T17:28:00+09:00"
     },
     "T-021": {
       "status": "PASSED",
@@ -169,21 +169,63 @@
       "latest_runtime_update": "2026-08-27T15:43:36+09:00"
     },
     "B-REBUILD": {
-      "status": "REVIEWING",
+      "status": "PASSED",
       "worker_attempts": 1,
-      "review_attempts": 0,
+      "review_attempts": 1,
       "worker_failures": 0,
       "expert_worker_required": false,
       "chief_escalation_required": false,
       "plan_level_issue": false,
-      "next_route": "Reviewer",
+      "next_route": "Main",
       "current_worker_kind": "normal",
       "same_reviewer_policy": null,
       "subagent_sessions": {},
-      "latest_runtime_update": "2026-08-27T16:39:27+09:00"
+      "latest_runtime_update": "2026-08-27T17:16:59+09:00"
+    },
+    "T-024": {
+      "status": "REOPENED",
+      "worker_attempts": 1,
+      "review_attempts": 1,
+      "worker_failures": 1,
+      "expert_worker_required": false,
+      "chief_escalation_required": true,
+      "plan_level_issue": false,
+      "next_route": "Chief",
+      "current_worker_kind": "normal",
+      "same_reviewer_policy": null,
+      "subagent_sessions": {},
+      "latest_runtime_update": "2026-08-27T18:31:11+09:00"
+    },
+    "T-025": {
+      "status": "PASSED",
+      "worker_attempts": 1,
+      "review_attempts": 1,
+      "worker_failures": 0,
+      "expert_worker_required": false,
+      "chief_escalation_required": false,
+      "plan_level_issue": false,
+      "next_route": "Main",
+      "current_worker_kind": "normal",
+      "same_reviewer_policy": null,
+      "subagent_sessions": {},
+      "latest_runtime_update": "2026-08-27T18:15:15+09:00"
+    },
+    "T-026": {
+      "status": "PASSED",
+      "worker_attempts": 1,
+      "review_attempts": 1,
+      "worker_failures": 0,
+      "expert_worker_required": false,
+      "chief_escalation_required": false,
+      "plan_level_issue": false,
+      "next_route": "Main",
+      "current_worker_kind": "normal",
+      "same_reviewer_policy": null,
+      "subagent_sessions": {},
+      "latest_runtime_update": "2026-08-27T18:19:21+09:00"
     }
   },
   "active_agent_jobs": [],
   "blockers": [],
-  "latest_runtime_update": "2026-08-27T16:44:34+09:00"
+  "latest_runtime_update": "2026-08-27T18:31:11+09:00"
 }

@@ -1,0 +1,10 @@
+{
+  "enabled": true,
+  "interval_seconds": 60,
+  "stale_after_seconds": 600,
+  "started_at": "2026-08-27T17:58:51+09:00",
+  "main_report_target": "Main current conversation",
+  "pid": 43797,
+  "last_check_at": "2026-08-27T18:58:52+09:00",
+  "open_alerts": {}
+}
